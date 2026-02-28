@@ -1,0 +1,472 @@
+use crate::config::{FailureAction, ProcessConfig};
+use crate::events::{EventBus, EventKind};
+use crate::logger::LogManager;
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::process::Command;
+use tokio::sync::{mpsc, Mutex, RwLock};
+use tracing::{error, info, warn};
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProcessState {
+    Pending,
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Failed,
+    Restarting,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProcessStatus {
+    pub name: String,
+    pub state: ProcessState,
+    pub pid: Option<u32>,
+    pub exit_code: Option<i32>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub stopped_at: Option<DateTime<Utc>>,
+    pub restarts: u32,
+    pub uptime_secs: Option<i64>,
+}
+
+struct ManagedProcess {
+    config: ProcessConfig,
+    state: ProcessState,
+    pid: Option<u32>,
+    exit_code: Option<i32>,
+    started_at: Option<DateTime<Utc>>,
+    stopped_at: Option<DateTime<Utc>>,
+    restarts: u32,
+    restart_timestamps: Vec<DateTime<Utc>>,
+    kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    stdin_tx: Option<tokio::sync::mpsc::Sender<String>>,
+}
+
+impl ManagedProcess {
+    fn status(&self) -> ProcessStatus {
+        let uptime = self.started_at.map(|s| {
+            if self.state == ProcessState::Running {
+                (Utc::now() - s).num_seconds()
+            } else {
+                self.stopped_at
+                    .map(|e| (e - s).num_seconds())
+                    .unwrap_or(0)
+            }
+        });
+        ProcessStatus {
+            name: self.config.name.clone(),
+            state: self.state.clone(),
+            pid: self.pid,
+            exit_code: self.exit_code,
+            started_at: self.started_at,
+            stopped_at: self.stopped_at,
+            restarts: self.restarts,
+            uptime_secs: uptime,
+        }
+    }
+
+    fn restart_count_in_window(&self, window_secs: u64) -> u32 {
+        let cutoff = Utc::now() - chrono::Duration::seconds(window_secs as i64);
+        self.restart_timestamps
+            .iter()
+            .filter(|t| **t > cutoff)
+            .count() as u32
+    }
+}
+
+/// Internal message for the supervisor loop to handle process exits.
+struct ExitEvent {
+    name: String,
+    exit_code: Option<i32>,
+}
+
+pub struct Supervisor {
+    processes: RwLock<HashMap<String, Arc<Mutex<ManagedProcess>>>>,
+    log_manager: Arc<LogManager>,
+    event_bus: Arc<EventBus>,
+    container_failed: RwLock<bool>,
+    exit_tx: mpsc::Sender<ExitEvent>,
+    exit_rx: Mutex<Option<mpsc::Receiver<ExitEvent>>>,
+}
+
+impl Supervisor {
+    pub fn new(log_manager: Arc<LogManager>, event_bus: Arc<EventBus>) -> Self {
+        let (exit_tx, exit_rx) = mpsc::channel(64);
+        Self {
+            processes: RwLock::new(HashMap::new()),
+            log_manager,
+            event_bus,
+            container_failed: RwLock::new(false),
+            exit_tx,
+            exit_rx: Mutex::new(Some(exit_rx)),
+        }
+    }
+
+    pub async fn has_failed(&self) -> bool {
+        *self.container_failed.read().await
+    }
+
+    /// Start the exit-handler loop. Must be called once; processes send exit
+    /// events through the channel and this loop handles restart logic.
+    pub async fn run_exit_handler(self: &Arc<Self>) {
+        let mut rx = self.exit_rx.lock().await.take().expect("exit handler already running");
+        while let Some(evt) = rx.recv().await {
+            self.handle_exit(&evt.name, evt.exit_code).await;
+        }
+    }
+
+    pub async fn start_all(self: &Arc<Self>, configs: &[ProcessConfig]) -> anyhow::Result<()> {
+        // Register all processes
+        for cfg in configs {
+            let proc = Arc::new(Mutex::new(ManagedProcess {
+                config: cfg.clone(),
+                state: ProcessState::Pending,
+                pid: None,
+                exit_code: None,
+                started_at: None,
+                stopped_at: None,
+                restarts: 0,
+                restart_timestamps: Vec::new(),
+                kill_tx: None,
+                stdin_tx: None,
+            }));
+            self.processes.write().await.insert(cfg.name.clone(), proc);
+        }
+
+        // Start processes respecting dependencies
+        for cfg in configs {
+            self.wait_for_dependencies(&cfg.depends_on).await;
+
+            if cfg.startup_delay_secs > 0 {
+                tokio::time::sleep(tokio::time::Duration::from_secs(cfg.startup_delay_secs)).await;
+            }
+
+            self.spawn_process(&cfg.name).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn wait_for_dependencies(&self, deps: &[String]) {
+        for dep in deps {
+            loop {
+                let procs = self.processes.read().await;
+                if let Some(p) = procs.get(dep) {
+                    let p = p.lock().await;
+                    if p.state == ProcessState::Running {
+                        break;
+                    }
+                }
+                drop(procs);
+                tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+            }
+        }
+    }
+
+    async fn spawn_process(&self, name: &str) -> anyhow::Result<()> {
+        let procs = self.processes.read().await;
+        let proc_arc = procs
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("process not found: {}", name))?;
+        drop(procs);
+
+        let config = {
+            let mut proc = proc_arc.lock().await;
+            proc.state = ProcessState::Starting;
+            proc.config.clone()
+        };
+
+        let mut cmd = Command::new(&config.command);
+        cmd.args(&config.args);
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        for (k, v) in &config.env {
+            cmd.env(k, v);
+        }
+        if let Some(dir) = &config.working_dir {
+            cmd.current_dir(dir);
+        }
+
+        let mut child = cmd.spawn()?;
+        let pid = child.id();
+
+        // Set up stdin channel
+        let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<String>(64);
+        if let Some(mut child_stdin) = child.stdin.take() {
+            tokio::spawn(async move {
+                use tokio::io::AsyncWriteExt;
+                while let Some(line) = stdin_rx.recv().await {
+                    if child_stdin.write_all(line.as_bytes()).await.is_err() {
+                        break;
+                    }
+                    if child_stdin.write_all(b"\n").await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        // Capture stdout/stderr
+        self.log_manager.spawn_capture(
+            config.name.clone(),
+            child.stdout.take(),
+            child.stderr.take(),
+        );
+
+        // Update state
+        {
+            let mut proc = proc_arc.lock().await;
+            proc.state = ProcessState::Running;
+            proc.pid = pid;
+            proc.exit_code = None;
+            proc.started_at = Some(Utc::now());
+            proc.stopped_at = None;
+            proc.stdin_tx = Some(stdin_tx);
+        }
+
+        info!(process = %config.name, pid = ?pid, "process started");
+        self.event_bus
+            .emit_simple(EventKind::ProcessStarted, Some(config.name.clone()))
+            .await;
+
+        // Monitor task — watches for exit, sends message through channel
+        let (kill_tx, mut kill_rx) = tokio::sync::oneshot::channel::<()>();
+        {
+            let mut proc = proc_arc.lock().await;
+            proc.kill_tx = Some(kill_tx);
+        }
+
+        let exit_tx = self.exit_tx.clone();
+        let name_owned = config.name.clone();
+        let proc_arc_clone = proc_arc.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                status = child.wait() => {
+                    let exit_code = status.ok().and_then(|s| s.code());
+                    let _ = exit_tx.send(ExitEvent { name: name_owned, exit_code }).await;
+                }
+                _ = &mut kill_rx => {
+                    let _ = child.kill().await;
+                    let mut proc = proc_arc_clone.lock().await;
+                    proc.state = ProcessState::Stopped;
+                    proc.stopped_at = Some(Utc::now());
+                    proc.pid = None;
+                    info!(process = %name_owned, "process killed by request");
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    async fn handle_exit(&self, name: &str, exit_code: Option<i32>) {
+        let procs = self.processes.read().await;
+        let proc_arc = match procs.get(name) {
+            Some(p) => p.clone(),
+            None => return,
+        };
+        drop(procs);
+
+        let (failure_action, restart_delay, max_restarts, window, restarts_in_window) = {
+            let mut proc = proc_arc.lock().await;
+            proc.exit_code = exit_code;
+            proc.stopped_at = Some(Utc::now());
+            proc.pid = None;
+
+            let in_window = proc.restart_count_in_window(proc.config.restart_window_secs);
+            (
+                proc.config.on_failure.clone(),
+                proc.config.restart_delay_secs,
+                proc.config.max_restarts,
+                proc.config.restart_window_secs,
+                in_window,
+            )
+        };
+
+        let success = exit_code == Some(0);
+
+        if success {
+            let mut proc = proc_arc.lock().await;
+            proc.state = ProcessState::Stopped;
+            info!(process = %name, code = ?exit_code, "process exited cleanly");
+            self.event_bus
+                .emit_simple(EventKind::ProcessStopped, Some(name.to_string()))
+                .await;
+            return;
+        }
+
+        warn!(process = %name, code = ?exit_code, "process exited with error");
+        self.event_bus
+            .emit_simple(EventKind::ProcessCrashed, Some(name.to_string()))
+            .await;
+
+        match failure_action {
+            FailureAction::Fail => {
+                let mut proc = proc_arc.lock().await;
+                proc.state = ProcessState::Failed;
+                error!(process = %name, "failure action is 'fail' — failing container");
+                *self.container_failed.write().await = true;
+                self.event_bus
+                    .emit_simple(EventKind::ContainerFailing, None)
+                    .await;
+            }
+            FailureAction::Restart => {
+                if restarts_in_window >= max_restarts {
+                    let mut proc = proc_arc.lock().await;
+                    proc.state = ProcessState::Failed;
+                    error!(
+                        process = %name,
+                        restarts = restarts_in_window,
+                        max = max_restarts,
+                        window_secs = window,
+                        "max restarts exceeded — failing container"
+                    );
+                    *self.container_failed.write().await = true;
+                    self.event_bus
+                        .emit_simple(EventKind::ContainerFailing, None)
+                        .await;
+                } else {
+                    {
+                        let mut proc = proc_arc.lock().await;
+                        proc.state = ProcessState::Restarting;
+                        proc.restarts += 1;
+                        proc.restart_timestamps.push(Utc::now());
+                    }
+                    info!(
+                        process = %name,
+                        delay_secs = restart_delay,
+                        "restarting process"
+                    );
+                    self.event_bus
+                        .emit_simple(EventKind::ProcessRestarting, Some(name.to_string()))
+                        .await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(restart_delay)).await;
+                    if let Err(e) = self.spawn_process(name).await {
+                        error!(process = %name, error = %e, "failed to restart process");
+                        let mut proc = proc_arc.lock().await;
+                        proc.state = ProcessState::Failed;
+                        *self.container_failed.write().await = true;
+                    }
+                }
+            }
+            FailureAction::Ignore => {
+                let mut proc = proc_arc.lock().await;
+                proc.state = ProcessState::Stopped;
+                info!(process = %name, "failure action is 'ignore' — leaving stopped");
+            }
+        }
+    }
+
+    pub async fn stop_process(&self, name: &str) -> anyhow::Result<()> {
+        let procs = self.processes.read().await;
+        let proc_arc = procs
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("process not found: {}", name))?;
+        drop(procs);
+
+        let mut proc = proc_arc.lock().await;
+        if proc.state != ProcessState::Running {
+            anyhow::bail!("process '{}' is not running (state: {:?})", name, proc.state);
+        }
+        proc.state = ProcessState::Stopping;
+        if let Some(tx) = proc.kill_tx.take() {
+            let _ = tx.send(());
+        }
+        self.event_bus
+            .emit_simple(EventKind::ProcessStopped, Some(name.to_string()))
+            .await;
+        Ok(())
+    }
+
+    pub async fn restart_process(&self, name: &str) -> anyhow::Result<()> {
+        // Stop if running
+        {
+            let procs = self.processes.read().await;
+            if let Some(proc_arc) = procs.get(name) {
+                let proc = proc_arc.lock().await;
+                if proc.state == ProcessState::Running {
+                    drop(proc);
+                    drop(procs);
+                    self.stop_process(name).await?;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+        self.spawn_process(name).await
+    }
+
+    pub async fn start_process(&self, name: &str) -> anyhow::Result<()> {
+        {
+            let procs = self.processes.read().await;
+            let proc_arc = procs
+                .get(name)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("process not found: {}", name))?;
+            let proc = proc_arc.lock().await;
+            if proc.state == ProcessState::Running {
+                anyhow::bail!("process '{}' is already running", name);
+            }
+        }
+        self.spawn_process(name).await
+    }
+
+    pub async fn send_stdin(&self, name: &str, input: &str) -> anyhow::Result<()> {
+        let procs = self.processes.read().await;
+        let proc_arc = procs
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("process not found: {}", name))?;
+        let proc = proc_arc.lock().await;
+        if let Some(tx) = &proc.stdin_tx {
+            tx.send(input.to_string())
+                .await
+                .map_err(|_| anyhow::anyhow!("stdin channel closed"))?;
+            Ok(())
+        } else {
+            anyhow::bail!("no stdin channel for process '{}'", name)
+        }
+    }
+
+    pub async fn get_status(&self, name: &str) -> anyhow::Result<ProcessStatus> {
+        let procs = self.processes.read().await;
+        let proc_arc = procs
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("process not found: {}", name))?;
+        let proc = proc_arc.lock().await;
+        Ok(proc.status())
+    }
+
+    pub async fn get_all_statuses(&self) -> Vec<ProcessStatus> {
+        let procs = self.processes.read().await;
+        let mut statuses = Vec::new();
+        for p in procs.values() {
+            let proc = p.lock().await;
+            statuses.push(proc.status());
+        }
+        statuses.sort_by(|a, b| a.name.cmp(&b.name));
+        statuses
+    }
+
+    pub async fn stop_all(&self) {
+        let procs = self.processes.read().await;
+        for (name, p) in procs.iter() {
+            let mut proc = p.lock().await;
+            if proc.state == ProcessState::Running {
+                proc.state = ProcessState::Stopping;
+                if let Some(tx) = proc.kill_tx.take() {
+                    let _ = tx.send(());
+                    info!(process = %name, "stopping process");
+                }
+            }
+        }
+    }
+}

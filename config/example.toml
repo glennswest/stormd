@@ -1,0 +1,75 @@
+# stormd — Container Init Configuration
+# Place at /etc/stormd/config.toml (or specify with --config)
+
+[general]
+name = "my-service"
+log_dir = "/var/log/stormd"
+
+[api]
+bind = "0.0.0.0:8080"
+# auth_token = "secret-token"    # Optional: require Bearer token for API
+
+[log]
+max_size_bytes = 104857600  # 100MB
+max_files = 10
+timestamps = true
+json_format = false
+
+# --- Supervised Processes ---
+
+[[process]]
+name = "main-app"
+command = "/app/server"
+args = ["--port", "3000"]
+on_failure = "restart"          # restart | fail | ignore
+restart_delay_secs = 5
+max_restarts = 10
+restart_window_secs = 3600
+# depends_on = []
+# startup_delay_secs = 0
+# working_dir = "/app"
+# env = { DATABASE_URL = "postgres://..." }
+# ready_probe = { type = "http", url = "http://localhost:3000/health", interval_secs = 2 }
+
+[[process]]
+name = "sidecar"
+command = "/app/sidecar"
+on_failure = "ignore"
+depends_on = ["main-app"]
+startup_delay_secs = 2
+
+# --- Cron Jobs ---
+
+[[cron]]
+name = "cleanup"
+schedule = "0 0 * * * *"       # Every hour (sec min hour dom month dow)
+command = "/app/cleanup"
+timeout_secs = 60
+capture_output = true
+
+# --- Events ---
+
+[events]
+enabled = false
+transport = "nats"              # nats | webhook | both | none
+# nats_url = "nats://nats:4222"
+# nats_subject = "stormd.events"
+# webhook_url = "http://monitor:9090/events"
+# webhook_headers = { "Authorization" = "Bearer token" }
+
+# --- Log Backup ---
+
+[backup]
+enabled = false
+on_failure = true               # Ship logs when container fails
+# destination_url = "http://backup:9091/upload"
+# headers = { "X-Container" = "my-service" }
+compress = true
+
+# --- Debug ---
+
+[debug]
+enabled = false
+allow_signal = false            # Allow sending signals via API
+allow_stdin = false             # Allow writing to process stdin via API
+dynamic_log_level = false

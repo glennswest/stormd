@@ -1,0 +1,27 @@
+# Build artifacts
+target/
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets and environment
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Logs and temp
+*.log
+tmp/
+temp/
