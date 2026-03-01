@@ -1,5 +1,24 @@
 # Changelog
 
+## [v0.3.0] — 2026-03-01
+
+### Added
+- **OCI image updater** — automatic image updates for supervised processes via stormpull
+- **`[updater]` config section** — enable/disable, registry, poll interval, data/rootfs directories
+- **`image` field on `[[process]]`** — OCI image reference to track (e.g. `"myapp:latest"`)
+- **Blue/green rootfs pivot** — pull new image, stop process, swap rootfs dirs, start with new binary
+- **OCI layer assembly** — multi-layer tar extraction with whiteout file handling (.wh.)
+- **CMD/ENTRYPOINT extraction** — command derived from OCI image config when not explicitly set
+- **REST API endpoints** — `GET /api/v1/updates`, `GET /api/v1/updates/{name}`, `POST /api/v1/updates/{name}/trigger`
+- **Updater events** — UpdateCheckStarted, UpdateAvailable, UpdatePulling, UpdatePivoting, UpdateCompleted, UpdateFailed
+- **`update_process_config()`** — supervisor method for hot-swapping process config
+- **`register_process()`** — supervisor method for registering processes without starting them
+
+### Changed
+- `ProcessConfig.command` is now optional (defaults to empty string) — derived from image when `image` is set
+- Process validation: either `command` or `image` must be set
+- Processes with `image` set are managed by the updater (initial pull + ongoing polling), not `start_all()`
+
 ## [v0.2.0] — 2026-02-28
 
 ### Added
@@ -41,3 +60,4 @@
 - Graceful shutdown with signal handling (SIGTERM/SIGINT)
 
 ## [Unreleased]
+

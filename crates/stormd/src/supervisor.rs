@@ -464,6 +464,40 @@ impl Supervisor {
         }
     }
 
+    /// Update a process's runtime config (command, args, env, working_dir) without
+    /// removing it from the process map. Used by the updater to change the command
+    /// derived from an OCI image config before restarting.
+    pub async fn update_process_config(&self, name: &str, config: ProcessConfig) -> anyhow::Result<()> {
+        let procs = self.processes.read().await;
+        let proc_arc = procs
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("process not found: {}", name))?;
+        drop(procs);
+
+        let mut proc = proc_arc.lock().await;
+        proc.config = config;
+        info!(process = %name, command = %proc.config.command, "process config updated");
+        Ok(())
+    }
+
+    /// Register a new process without starting it.
+    pub async fn register_process(&self, config: ProcessConfig) {
+        let proc = Arc::new(Mutex::new(ManagedProcess {
+            config: config.clone(),
+            state: ProcessState::Pending,
+            pid: None,
+            exit_code: None,
+            started_at: None,
+            stopped_at: None,
+            restarts: 0,
+            restart_timestamps: Vec::new(),
+            kill_tx: None,
+            stdin_tx: None,
+        }));
+        self.processes.write().await.insert(config.name.clone(), proc);
+    }
+
     /// Get names of all registered processes.
     pub async fn process_names(&self) -> Vec<String> {
         let procs = self.processes.read().await;

@@ -31,6 +31,12 @@ pub enum EventKind {
     BackupStarted,
     BackupCompleted,
     BackupFailed,
+    UpdateCheckStarted,
+    UpdateAvailable,
+    UpdatePulling,
+    UpdatePivoting,
+    UpdateCompleted,
+    UpdateFailed,
 }
 
 impl std::fmt::Display for EventKind {

@@ -36,6 +36,10 @@ russh-keys = "0.46"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 async-trait = "0.1"
+stormpull = { git = "https://github.com/gwest/stormbase", path = "crates/stormpull" }
+oci-spec = "0.7"
+sha2 = "0.10"
+hex = "0.4"
 
 [profile.release]
 strip = true

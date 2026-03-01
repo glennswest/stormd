@@ -8,5 +8,6 @@ pub mod shell;
 pub mod ssh;
 pub mod stats;
 pub mod supervisor;
+pub mod updater;
 pub mod web;
 pub mod ws;

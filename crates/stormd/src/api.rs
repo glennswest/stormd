@@ -3,6 +3,7 @@ use crate::cron::CronScheduler;
 use crate::debug;
 use crate::stats::StatsCollector;
 use crate::supervisor::{ProcessState, Supervisor};
+use crate::updater::Updater;
 use crate::ws;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub cron_scheduler: Arc<CronScheduler>,
     pub stats: Arc<StatsCollector>,
     pub backup: Arc<BackupManager>,
+    pub updater: Option<Arc<Updater>>,
     pub debug_enabled: bool,
     pub allow_signal: bool,
     pub allow_stdin: bool,
@@ -50,6 +52,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/cron", get(list_cron_jobs))
         // Backup
         .route("/api/v1/backup", post(trigger_backup))
+        // Updates
+        .route("/api/v1/updates", get(list_updates))
+        .route("/api/v1/updates/{name}", get(get_update))
+        .route("/api/v1/updates/{name}/trigger", post(trigger_update))
         // WebSocket
         .route("/ws/console/{process}", get(ws::ws_console))
         .route("/ws/logs", get(ws::ws_logs))
@@ -331,6 +337,52 @@ async fn send_stdin(
 ) -> Result<impl IntoResponse, AppError> {
     state.supervisor.send_stdin(&name, &body.input).await?;
     Ok(Json(serde_json::json!({ "status": "sent", "process": name })))
+}
+
+// --- Updates ---
+
+async fn list_updates(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, AppError> {
+    match &state.updater {
+        Some(updater) => {
+            let states = updater.get_all_states().await;
+            Ok(Json(serde_json::json!(states)))
+        }
+        None => Ok(Json(serde_json::json!({
+            "error": "updater not enabled"
+        }))),
+    }
+}
+
+async fn get_update(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    match &state.updater {
+        Some(updater) => match updater.get_state(&name).await {
+            Some(s) => Ok(Json(serde_json::json!(s))),
+            None => Err(AppError(anyhow::anyhow!(
+                "process '{}' not tracked by updater",
+                name
+            ))),
+        },
+        None => Err(AppError(anyhow::anyhow!("updater not enabled"))),
+    }
+}
+
+async fn trigger_update(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    match &state.updater {
+        Some(updater) => {
+            updater.trigger_update(&name).await?;
+            Ok(Json(serde_json::json!({
+                "status": "update_triggered",
+                "process": name,
+            })))
+        }
+        None => Err(AppError(anyhow::anyhow!("updater not enabled"))),
+    }
 }
 
 // --- Helpers ---

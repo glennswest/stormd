@@ -12,6 +12,7 @@ use stormd::events::{EventBus, EventKind};
 use stormd::ssh;
 use stormd::stats::StatsCollector;
 use stormd::supervisor::Supervisor;
+use stormd::updater::Updater;
 use stormlog::StormLog;
 
 #[derive(Parser)]
@@ -96,9 +97,29 @@ async fn main() {
         tokio::spawn(async move { cron.run().await });
     }
 
-    // Start supervised processes
+    // Start OCI image updater if enabled
+    let updater = if config.updater.enabled {
+        let updater = Arc::new(Updater::new(
+            config.updater.clone(),
+            supervisor.clone(),
+            event_bus.clone(),
+            config.process.clone(),
+        ));
+        let updater_loop = updater.clone();
+        tokio::spawn(async move { updater_loop.poll_loop().await });
+        Some(updater)
+    } else {
+        None
+    };
+
+    // Start supervised processes (only those without image tracking — updater handles the rest)
     let sup = supervisor.clone();
-    let process_configs = config.process.clone();
+    let process_configs: Vec<_> = config
+        .process
+        .iter()
+        .filter(|p| p.image.is_none())
+        .cloned()
+        .collect();
     let start_handle = tokio::spawn(async move {
         if let Err(e) = sup.start_all(&process_configs).await {
             error!(error = %e, "failed to start processes");
@@ -127,6 +148,7 @@ async fn main() {
         cron_scheduler: cron_scheduler.clone(),
         stats: stats.clone(),
         backup: backup.clone(),
+        updater: updater.clone(),
         debug_enabled: config.debug.enabled,
         allow_signal: config.debug.allow_signal,
         allow_stdin: config.debug.allow_stdin,
@@ -144,6 +166,7 @@ async fn main() {
         cron_scheduler: cron_scheduler.clone(),
         stats: stats.clone(),
         backup: backup.clone(),
+        updater: updater.clone(),
         debug_enabled: config.debug.enabled,
         allow_signal: config.debug.allow_signal,
         allow_stdin: config.debug.allow_stdin,

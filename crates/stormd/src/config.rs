@@ -25,6 +25,8 @@ pub struct Config {
     pub stormlog: StormLogConfig,
     #[serde(default)]
     pub ssh: SshConfig,
+    #[serde(default)]
+    pub updater: UpdaterConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -50,7 +52,10 @@ impl Default for GeneralConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProcessConfig {
     pub name: String,
+    #[serde(default)]
     pub command: String,
+    #[serde(default)]
+    pub image: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
@@ -247,6 +252,37 @@ impl Default for SshConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdaterConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_updater_registry")]
+    pub registry: String,
+    #[serde(default = "default_updater_poll_interval")]
+    pub poll_interval_secs: u64,
+    #[serde(default = "default_updater_data_dir")]
+    pub data_dir: PathBuf,
+    #[serde(default = "default_updater_rootfs_dir")]
+    pub rootfs_dir: PathBuf,
+}
+
+impl Default for UpdaterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            registry: default_updater_registry(),
+            poll_interval_secs: default_updater_poll_interval(),
+            data_dir: default_updater_data_dir(),
+            rootfs_dir: default_updater_rootfs_dir(),
+        }
+    }
+}
+
+fn default_updater_registry() -> String { "registry.gt.lo".to_string() }
+fn default_updater_poll_interval() -> u64 { 60 }
+fn default_updater_data_dir() -> PathBuf { PathBuf::from("/data/images") }
+fn default_updater_rootfs_dir() -> PathBuf { PathBuf::from("/data/rootfs") }
+
 fn default_name() -> String { "stormd".to_string() }
 fn default_log_dir() -> PathBuf { PathBuf::from("/var/log/stormd") }
 fn default_pid_file() -> PathBuf { PathBuf::from("/run/stormd.pid") }
@@ -282,8 +318,8 @@ impl Config {
             if !names.insert(&p.name) {
                 anyhow::bail!("duplicate process name: {}", p.name);
             }
-            if p.command.is_empty() {
-                anyhow::bail!("process '{}' has empty command", p.name);
+            if p.command.is_empty() && p.image.is_none() {
+                anyhow::bail!("process '{}' must have either command or image set", p.name);
             }
         }
         for dep in self.process.iter().flat_map(|p| &p.depends_on) {
