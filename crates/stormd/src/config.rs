@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use stormlog::types::StormLogConfig;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -20,6 +21,10 @@ pub struct Config {
     pub api: ApiConfig,
     #[serde(default)]
     pub debug: DebugConfig,
+    #[serde(default)]
+    pub stormlog: StormLogConfig,
+    #[serde(default)]
+    pub ssh: SshConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -217,6 +222,31 @@ pub struct DebugConfig {
     pub dynamic_log_level: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct SshConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_ssh_bind")]
+    pub bind: String,
+    #[serde(default = "default_ssh_host_key")]
+    pub host_key: PathBuf,
+    #[serde(default = "default_ssh_password")]
+    pub password: String,
+    pub authorized_keys: Option<PathBuf>,
+}
+
+impl Default for SshConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind: default_ssh_bind(),
+            host_key: default_ssh_host_key(),
+            password: default_ssh_password(),
+            authorized_keys: None,
+        }
+    }
+}
+
 fn default_name() -> String { "stormd".to_string() }
 fn default_log_dir() -> PathBuf { PathBuf::from("/var/log/stormd") }
 fn default_pid_file() -> PathBuf { PathBuf::from("/run/stormd.pid") }
@@ -227,9 +257,12 @@ fn default_restart_window_secs() -> u64 { 3600 }
 fn default_startup_delay_secs() -> u64 { 0 }
 fn default_cron_timeout_secs() -> u64 { 300 }
 fn default_nats_subject() -> String { "stormd.events".to_string() }
-fn default_max_size_bytes() -> u64 { 100 * 1024 * 1024 } // 100MB
+fn default_max_size_bytes() -> u64 { 100 * 1024 * 1024 }
 fn default_max_files() -> u32 { 10 }
 fn default_api_bind() -> String { "0.0.0.0:8080".to_string() }
+fn default_ssh_bind() -> String { "0.0.0.0:22".to_string() }
+fn default_ssh_host_key() -> PathBuf { PathBuf::from("/etc/stormd/host_key") }
+fn default_ssh_password() -> String { "stormd".to_string() }
 fn default_true() -> bool { true }
 
 impl Config {

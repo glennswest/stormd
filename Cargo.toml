@@ -1,13 +1,14 @@
-[package]
-name = "stormd"
-version = "0.1.0"
+[workspace]
+members = ["crates/stormd", "crates/stormlog", "crates/stormsh"]
+resolver = "2"
+
+[workspace.package]
 edition = "2021"
 license = "MIT"
-description = "Container init system for scratch images — process supervisor, REST API, logging, events"
 
-[dependencies]
+[workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
@@ -21,18 +22,20 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 thiserror = "2"
 anyhow = "1"
 cron = "0.13"
-async-nats = { version = "0.38", optional = true }
+async-nats = "0.38"
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
 tar = "0.4"
 tokio-util = { version = "0.7", features = ["io"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-nix = { version = "0.29", features = ["signal", "process"] }
-
-[features]
-default = ["nats"]
-nats = ["async-nats"]
+vt100 = "0.15"
+rust-s3 = { version = "0.35", default-features = false, features = ["tokio-rustls-tls"] }
+ratatui = "0.29"
+crossterm = "0.28"
+russh = "0.46"
+russh-keys = "0.46"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+async-trait = "0.1"
 
 [profile.release]
 strip = true

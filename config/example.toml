@@ -15,7 +15,45 @@ max_files = 10
 timestamps = true
 json_format = false
 
+# --- StormLog (structured logging) ---
+
+[stormlog.minio]
+enabled = true
+endpoint = "http://127.0.0.1:9000"
+bucket = "logs"
+access_key = "stormd"
+secret_key = "stormdpass"
+
+[stormlog.syslog]
+enabled = true
+udp_bind = "127.0.0.1:514"
+tcp_bind = "127.0.0.1:514"
+unix_socket = "/dev/log"
+
+[stormlog.terminal]
+rows = 24
+cols = 80
+scrollback = 1000
+
+# --- SSH Server ---
+
+[ssh]
+enabled = true
+bind = "0.0.0.0:22"
+host_key = "/etc/stormd/host_key"
+password = "stormd"
+# authorized_keys = "/etc/stormd/authorized_keys"
+
 # --- Supervised Processes ---
+
+[[process]]
+name = "miniminio"
+command = "/miniminio"
+args = ["--data-dir", "/data/minio"]
+env = { MINIO_ROOT_USER = "stormd", MINIO_ROOT_PASSWORD = "stormdpass" }
+on_failure = "restart"
+restart_delay_secs = 3
+max_restarts = 10
 
 [[process]]
 name = "main-app"
@@ -25,7 +63,7 @@ on_failure = "restart"          # restart | fail | ignore
 restart_delay_secs = 5
 max_restarts = 10
 restart_window_secs = 3600
-# depends_on = []
+depends_on = ["miniminio"]
 # startup_delay_secs = 0
 # working_dir = "/app"
 # env = { DATABASE_URL = "postgres://..." }

@@ -1,12 +1,13 @@
 use crate::config::CronJobConfig;
 use crate::events::{EventBus, EventKind};
-use crate::logger::LogManager;
 use chrono::Utc;
 use cron::Schedule;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use stormlog::types::{LogEntry, LogStream, Severity};
+use stormlog::StormLog;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
@@ -33,18 +34,18 @@ struct CronJobState {
 
 pub struct CronScheduler {
     jobs: RwLock<HashMap<String, CronJobState>>,
-    log_manager: Arc<LogManager>,
+    stormlog: Arc<StormLog>,
     event_bus: Arc<EventBus>,
     shutdown: tokio::sync::watch::Sender<bool>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
 }
 
 impl CronScheduler {
-    pub fn new(log_manager: Arc<LogManager>, event_bus: Arc<EventBus>) -> Self {
+    pub fn new(stormlog: Arc<StormLog>, event_bus: Arc<EventBus>) -> Self {
         let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
         Self {
             jobs: RwLock::new(HashMap::new()),
-            log_manager,
+            stormlog,
             event_bus,
             shutdown,
             shutdown_rx,
@@ -75,7 +76,6 @@ impl CronScheduler {
     pub async fn run(self: Arc<Self>) {
         let mut rx = self.shutdown_rx.clone();
         loop {
-            // Find the next job to run
             let now = Utc::now();
             let mut next_wake: Option<chrono::DateTime<Utc>> = None;
             let mut jobs_to_run = Vec::new();
@@ -97,12 +97,10 @@ impl CronScheduler {
                 }
             }
 
-            // Execute due jobs
             for name in jobs_to_run {
                 self.execute_job(&name).await;
             }
 
-            // Sleep until next job or 1 second poll
             let sleep_dur = next_wake
                 .map(|t| (t - Utc::now()).to_std().unwrap_or(std::time::Duration::from_secs(1)))
                 .unwrap_or(std::time::Duration::from_secs(1));
@@ -145,14 +143,18 @@ impl CronScheduler {
                 match tokio::time::timeout(timeout_dur, child.wait_with_output()).await {
                     Ok(Ok(output)) => {
                         if config.capture_output {
+                            let cron_name = format!("cron.{}", name);
                             if let Ok(s) = String::from_utf8(output.stdout) {
                                 for line in s.lines() {
-                                    let _ = self.log_manager.write_log(&format!("cron.{}", name), "stdout", line).await;
+                                    let entry = LogEntry::new(&cron_name, LogStream::Stdout, line);
+                                    self.stormlog.write_entry(entry).await;
                                 }
                             }
                             if let Ok(s) = String::from_utf8(output.stderr) {
                                 for line in s.lines() {
-                                    let _ = self.log_manager.write_log(&format!("cron.{}", name), "stderr", line).await;
+                                    let entry = LogEntry::new(&cron_name, LogStream::Stderr, line)
+                                        .with_severity(Severity::Warning);
+                                    self.stormlog.write_entry(entry).await;
                                 }
                             }
                         }

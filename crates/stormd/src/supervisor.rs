@@ -1,10 +1,10 @@
 use crate::config::{FailureAction, ProcessConfig};
 use crate::events::{EventBus, EventKind};
-use crate::logger::LogManager;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
+use stormlog::StormLog;
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{error, info, warn};
@@ -78,7 +78,6 @@ impl ManagedProcess {
     }
 }
 
-/// Internal message for the supervisor loop to handle process exits.
 struct ExitEvent {
     name: String,
     exit_code: Option<i32>,
@@ -86,7 +85,7 @@ struct ExitEvent {
 
 pub struct Supervisor {
     processes: RwLock<HashMap<String, Arc<Mutex<ManagedProcess>>>>,
-    log_manager: Arc<LogManager>,
+    stormlog: Arc<StormLog>,
     event_bus: Arc<EventBus>,
     container_failed: RwLock<bool>,
     exit_tx: mpsc::Sender<ExitEvent>,
@@ -94,11 +93,11 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
-    pub fn new(log_manager: Arc<LogManager>, event_bus: Arc<EventBus>) -> Self {
+    pub fn new(stormlog: Arc<StormLog>, event_bus: Arc<EventBus>) -> Self {
         let (exit_tx, exit_rx) = mpsc::channel(64);
         Self {
             processes: RwLock::new(HashMap::new()),
-            log_manager,
+            stormlog,
             event_bus,
             container_failed: RwLock::new(false),
             exit_tx,
@@ -110,8 +109,6 @@ impl Supervisor {
         *self.container_failed.read().await
     }
 
-    /// Start the exit-handler loop. Must be called once; processes send exit
-    /// events through the channel and this loop handles restart logic.
     pub async fn run_exit_handler(self: &Arc<Self>) {
         let mut rx = self.exit_rx.lock().await.take().expect("exit handler already running");
         while let Some(evt) = rx.recv().await {
@@ -120,7 +117,6 @@ impl Supervisor {
     }
 
     pub async fn start_all(self: &Arc<Self>, configs: &[ProcessConfig]) -> anyhow::Result<()> {
-        // Register all processes
         for cfg in configs {
             let proc = Arc::new(Mutex::new(ManagedProcess {
                 config: cfg.clone(),
@@ -137,7 +133,6 @@ impl Supervisor {
             self.processes.write().await.insert(cfg.name.clone(), proc);
         }
 
-        // Start processes respecting dependencies
         for cfg in configs {
             self.wait_for_dependencies(&cfg.depends_on).await;
 
@@ -213,8 +208,8 @@ impl Supervisor {
             });
         }
 
-        // Capture stdout/stderr
-        self.log_manager.spawn_capture(
+        // Capture stdout/stderr via stormlog
+        self.stormlog.spawn_capture(
             config.name.clone(),
             child.stdout.take(),
             child.stderr.take(),
@@ -236,7 +231,7 @@ impl Supervisor {
             .emit_simple(EventKind::ProcessStarted, Some(config.name.clone()))
             .await;
 
-        // Monitor task — watches for exit, sends message through channel
+        // Monitor task
         let (kill_tx, mut kill_rx) = tokio::sync::oneshot::channel::<()>();
         {
             let mut proc = proc_arc.lock().await;
@@ -387,7 +382,6 @@ impl Supervisor {
     }
 
     pub async fn restart_process(&self, name: &str) -> anyhow::Result<()> {
-        // Stop if running
         {
             let procs = self.processes.read().await;
             if let Some(proc_arc) = procs.get(name) {
@@ -468,5 +462,11 @@ impl Supervisor {
                 }
             }
         }
+    }
+
+    /// Get names of all registered processes.
+    pub async fn process_names(&self) -> Vec<String> {
+        let procs = self.processes.read().await;
+        procs.keys().cloned().collect()
     }
 }

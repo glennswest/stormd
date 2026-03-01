@@ -1,9 +1,9 @@
 use crate::backup::BackupManager;
 use crate::cron::CronScheduler;
 use crate::debug;
-use crate::logger::LogManager;
 use crate::stats::StatsCollector;
 use crate::supervisor::{ProcessState, Supervisor};
+use crate::ws;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -11,16 +11,19 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use stormlog::types::LogQuery as StormLogQuery;
+use stormlog::StormLog;
 
 pub struct AppState {
     pub supervisor: Arc<Supervisor>,
-    pub log_manager: Arc<LogManager>,
+    pub stormlog: Arc<StormLog>,
     pub cron_scheduler: Arc<CronScheduler>,
     pub stats: Arc<StatsCollector>,
     pub backup: Arc<BackupManager>,
     pub debug_enabled: bool,
     pub allow_signal: bool,
     pub allow_stdin: bool,
+    pub log_dir: std::path::PathBuf,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -39,10 +42,20 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/logs", get(query_logs))
         .route("/api/v1/logs/files", get(list_log_files))
         .route("/api/v1/logs/{process}", get(process_logs))
+        .route("/api/v1/logs/ingest", post(ingest_log))
+        .route("/api/v1/logs/stored", get(query_stored_logs))
+        // Terminal
+        .route("/api/v1/terminal/{process}", get(terminal_snapshot))
         // Cron
         .route("/api/v1/cron", get(list_cron_jobs))
         // Backup
-        .route("/api/v1/backup", post(trigger_backup));
+        .route("/api/v1/backup", post(trigger_backup))
+        // WebSocket
+        .route("/ws/console/{process}", get(ws::ws_console))
+        .route("/ws/logs", get(ws::ws_logs))
+        // Web UI
+        .route("/ui/terminal", get(crate::web::terminal_page))
+        .route("/ui/logs", get(crate::web::logs_page));
 
     // Debug endpoints (only if enabled)
     if state.debug_enabled {
@@ -89,7 +102,6 @@ async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 async fn stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Refresh process stats
     let statuses = state.supervisor.get_all_statuses().await;
     let total = statuses.len();
     let running = statuses.iter().filter(|s| s.state == ProcessState::Running).count();
@@ -153,10 +165,13 @@ async fn query_logs(
     State(state): State<Arc<AppState>>,
     Query(q): Query<LogQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let lines = state
-        .log_manager
-        .read_logs(q.process.as_deref(), q.tail, q.search.as_deref())
-        .await?;
+    let lines = read_log_files(
+        &state.log_dir,
+        q.process.as_deref(),
+        q.tail,
+        q.search.as_deref(),
+    )
+    .await?;
     let count = lines.len();
     Ok(Json(LogResponse { lines, count }))
 }
@@ -166,10 +181,13 @@ async fn process_logs(
     Path(process): Path<String>,
     Query(q): Query<LogTailQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let lines = state
-        .log_manager
-        .read_logs(Some(&process), q.tail, q.search.as_deref())
-        .await?;
+    let lines = read_log_files(
+        &state.log_dir,
+        Some(&process),
+        q.tail,
+        q.search.as_deref(),
+    )
+    .await?;
     let count = lines.len();
     Ok(Json(LogResponse { lines, count }))
 }
@@ -186,9 +204,71 @@ struct LogResponse {
     lines: Vec<String>,
 }
 
-async fn list_log_files(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, AppError> {
-    let files = state.log_manager.list_files().await?;
+async fn list_log_files(
+    State(state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, AppError> {
+    let mut files = Vec::new();
+    let mut entries = tokio::fs::read_dir(&state.log_dir).await?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if let Ok(meta) = tokio::fs::metadata(&path).await {
+            files.push(serde_json::json!({
+                "name": path.file_name().unwrap_or_default().to_string_lossy(),
+                "path": path.to_string_lossy(),
+                "size_bytes": meta.len(),
+            }));
+        }
+    }
     Ok(Json(files))
+}
+
+// --- Log ingest ---
+
+async fn ingest_log(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<stormlog::types::IngestRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let entry = stormlog::types::LogEntry::new(req.process, req.stream, req.line)
+        .with_severity(req.severity.unwrap_or(stormlog::types::Severity::Info));
+    state.stormlog.write_entry(entry).await;
+    Ok(Json(serde_json::json!({ "status": "ingested" })))
+}
+
+// --- Stored logs (MinIO) ---
+
+#[derive(Debug, Deserialize)]
+struct StoredLogQuery {
+    process: Option<String>,
+    stream: Option<stormlog::types::LogStream>,
+    search: Option<String>,
+    tail: Option<usize>,
+}
+
+async fn query_stored_logs(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<StoredLogQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let query = StormLogQuery {
+        process: q.process,
+        stream: q.stream,
+        search: q.search,
+        tail: q.tail,
+        ..Default::default()
+    };
+    let entries = state.stormlog.query_logs(&query).await?;
+    Ok(Json(entries))
+}
+
+// --- Terminal snapshot ---
+
+async fn terminal_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path(process): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    match state.stormlog.get_screen(&process).await {
+        Some(snap) => Ok(Json(serde_json::json!(snap))),
+        None => Err(AppError(anyhow::anyhow!("no terminal for process '{}'", process))),
+    }
 }
 
 // --- Cron ---
@@ -203,7 +283,7 @@ async fn list_cron_jobs(State(state): State<Arc<AppState>>) -> impl IntoResponse
 async fn trigger_backup(
     State(state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, AppError> {
-    state.backup.backup_logs(state.log_manager.log_dir()).await?;
+    state.backup.backup_logs(&state.log_dir).await?;
     Ok(Json(serde_json::json!({ "status": "backup_complete" })))
 }
 
@@ -214,7 +294,6 @@ async fn debug_info() -> impl IntoResponse {
 }
 
 async fn debug_config() -> impl IntoResponse {
-    // Return env vars (config is loaded from file, env vars show runtime state)
     let env: Vec<(String, String)> = std::env::vars().collect();
     Json(serde_json::json!({ "environment": env }))
 }
@@ -254,6 +333,56 @@ async fn send_stdin(
     Ok(Json(serde_json::json!({ "status": "sent", "process": name })))
 }
 
+// --- Helpers ---
+
+async fn read_log_files(
+    log_dir: &std::path::Path,
+    process: Option<&str>,
+    tail: Option<usize>,
+    search: Option<&str>,
+) -> anyhow::Result<Vec<String>> {
+    let mut all_lines = Vec::new();
+
+    let entries = tokio::fs::read_dir(log_dir).await;
+    let mut entries = match entries {
+        Ok(e) => e,
+        Err(_) => return Ok(all_lines),
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+
+        if !file_name.ends_with(".log") {
+            continue;
+        }
+
+        if let Some(proc_filter) = process {
+            if !file_name.starts_with(proc_filter) {
+                continue;
+            }
+        }
+
+        if let Ok(content) = tokio::fs::read_to_string(&path).await {
+            for line in content.lines() {
+                if let Some(pattern) = search {
+                    if !line.contains(pattern) {
+                        continue;
+                    }
+                }
+                all_lines.push(line.to_string());
+            }
+        }
+    }
+
+    if let Some(n) = tail {
+        let start = all_lines.len().saturating_sub(n);
+        all_lines = all_lines[start..].to_vec();
+    }
+
+    Ok(all_lines)
+}
+
 // --- Error handling ---
 
 struct AppError(anyhow::Error);
@@ -270,5 +399,11 @@ impl IntoResponse for AppError {
 impl From<anyhow::Error> for AppError {
     fn from(err: anyhow::Error) -> Self {
         AppError(err)
+    }
+}
+
+impl From<std::io::Error> for AppError {
+    fn from(err: std::io::Error) -> Self {
+        AppError(err.into())
     }
 }

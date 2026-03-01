@@ -9,9 +9,10 @@ use stormd::backup::BackupManager;
 use stormd::config::Config;
 use stormd::cron::CronScheduler;
 use stormd::events::{EventBus, EventKind};
-use stormd::logger::LogManager;
+use stormd::ssh;
 use stormd::stats::StatsCollector;
 use stormd::supervisor::Supervisor;
+use stormlog::StormLog;
 
 #[derive(Parser)]
 #[command(name = "stormd", version, about = "Container init system for scratch images")]
@@ -63,21 +64,21 @@ async fn main() {
         .emit_simple(EventKind::ContainerStarting, None)
         .await;
 
-    let log_manager = match LogManager::new(
-        config.general.log_dir.clone(),
-        config.log.clone(),
-    )
-    .await
-    {
-        Ok(lm) => Arc::new(lm),
-        Err(e) => {
-            error!(error = %e, "failed to initialize log manager");
-            std::process::exit(1);
-        }
-    };
+    // Initialize StormLog
+    let stormlog = Arc::new(StormLog::new(
+        config.stormlog.clone(),
+        config.general.name.clone(),
+    ));
+    stormlog.start().await;
 
-    let supervisor = Arc::new(Supervisor::new(log_manager.clone(), event_bus.clone()));
-    let cron_scheduler = Arc::new(CronScheduler::new(log_manager.clone(), event_bus.clone()));
+    // Ensure log dir exists for file-based logs
+    if let Err(e) = tokio::fs::create_dir_all(&config.general.log_dir).await {
+        error!(error = %e, "failed to create log directory");
+        std::process::exit(1);
+    }
+
+    let supervisor = Arc::new(Supervisor::new(stormlog.clone(), event_bus.clone()));
+    let cron_scheduler = Arc::new(CronScheduler::new(stormlog.clone(), event_bus.clone()));
     let stats = Arc::new(StatsCollector::new(config.general.name.clone()));
     let backup = Arc::new(BackupManager::new(config.backup.clone(), event_bus.clone()));
 
@@ -104,16 +105,49 @@ async fn main() {
         }
     });
 
-    // Build and start API server
-    let app_state = Arc::new(api::AppState {
+    // NATS output publishing: forward all log entries to NATS subjects
+    #[cfg(feature = "nats")]
+    if config.events.enabled {
+        let mut log_rx = stormlog.subscribe_all();
+        let _eb = event_bus.clone();
+        tokio::spawn(async move {
+            while let Ok(entry) = log_rx.recv().await {
+                let subject = format!("stormd.output.{}.{}", entry.process, entry.stream);
+                // Use event bus NATS client indirectly — entries are already on broadcast
+                let _ = subject; // NATS publishing would go here if direct client access was exposed
+            }
+        });
+    }
+
+    // Start SSH server
+    let ssh_config = config.ssh.clone();
+    let ssh_state = Arc::new(api::AppState {
         supervisor: supervisor.clone(),
-        log_manager: log_manager.clone(),
+        stormlog: stormlog.clone(),
         cron_scheduler: cron_scheduler.clone(),
         stats: stats.clone(),
         backup: backup.clone(),
         debug_enabled: config.debug.enabled,
         allow_signal: config.debug.allow_signal,
         allow_stdin: config.debug.allow_stdin,
+        log_dir: config.general.log_dir.clone(),
+    });
+    let ssh_container = config.general.name.clone();
+    tokio::spawn(async move {
+        ssh::start_ssh_server(ssh_config, ssh_state, ssh_container).await;
+    });
+
+    // Build and start API server
+    let app_state = Arc::new(api::AppState {
+        supervisor: supervisor.clone(),
+        stormlog: stormlog.clone(),
+        cron_scheduler: cron_scheduler.clone(),
+        stats: stats.clone(),
+        backup: backup.clone(),
+        debug_enabled: config.debug.enabled,
+        allow_signal: config.debug.allow_signal,
+        allow_stdin: config.debug.allow_stdin,
+        log_dir: config.general.log_dir.clone(),
     });
 
     let router = api::build_router(app_state);
@@ -136,6 +170,7 @@ async fn main() {
     let backup_shutdown = backup.clone();
     let log_dir = config.general.log_dir.clone();
     let backup_on_failure = config.backup.enabled && config.backup.on_failure;
+    let stormlog_shutdown = stormlog.clone();
 
     let shutdown_signal = async move {
         let ctrl_c = tokio::signal::ctrl_c();
@@ -198,6 +233,11 @@ async fn main() {
     sup_shutdown.stop_all().await;
     cron_shutdown.shutdown();
     let _ = start_handle.await;
+
+    // Flush stormlog buffers
+    if let Err(e) = stormlog_shutdown.flush().await {
+        warn!(error = %e, "failed to flush stormlog buffers");
+    }
 
     // Backup logs on failure if configured
     if supervisor.has_failed().await && backup_on_failure {
