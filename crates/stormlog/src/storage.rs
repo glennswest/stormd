@@ -7,12 +7,11 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 const FLUSH_INTERVAL_SECS: u64 = 5;
-const FLUSH_THRESHOLD: usize = 100;
 
 /// MinIO S3 log storage backend.
 pub struct LogStorage {
     config: MinioConfig,
-    bucket: Option<Bucket>,
+    bucket: Mutex<Option<Bucket>>,
     buffer: Mutex<VecDeque<LogEntry>>,
 }
 
@@ -20,13 +19,13 @@ impl LogStorage {
     pub fn new(config: MinioConfig) -> Self {
         Self {
             config,
-            bucket: None,
+            bucket: Mutex::new(None),
             buffer: Mutex::new(VecDeque::new()),
         }
     }
 
     /// Initialize connection to MinIO and ensure the bucket exists.
-    pub async fn init(&mut self) -> anyhow::Result<()> {
+    pub async fn init(&self) -> anyhow::Result<()> {
         if !self.config.enabled {
             return Ok(());
         }
@@ -70,7 +69,7 @@ impl LogStorage {
             }
         }
 
-        self.bucket = Some(*bucket);
+        *self.bucket.lock().await = Some(*bucket);
         info!(endpoint = %self.config.endpoint, bucket = %self.config.bucket, "MinIO storage initialized");
         Ok(())
     }
@@ -83,7 +82,8 @@ impl LogStorage {
 
     /// Flush buffered entries to MinIO.
     pub async fn flush(&self) -> anyhow::Result<usize> {
-        let bucket = match &self.bucket {
+        let bucket_guard = self.bucket.lock().await;
+        let bucket = match bucket_guard.as_ref() {
             Some(b) => b,
             None => return Ok(0),
         };
@@ -97,23 +97,27 @@ impl LogStorage {
             return Ok(0);
         }
 
-        // Group entries by date/process/stream
+        // Group entries by date/process/run_id/stream
         let mut groups: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
         for entry in &entries {
             let date = entry.timestamp.format("%Y-%m-%d").to_string();
-            let key = format!("{}/{}/{}.jsonl", date, entry.process, entry.stream);
+            let run_part = entry
+                .run_id
+                .as_deref()
+                .unwrap_or("default");
+            let key = format!("{}/{}/{}/{}.jsonl", date, entry.process, run_part, entry.stream);
             let line = serde_json::to_string(&entry).unwrap_or_default();
             groups.entry(key).or_default().push(line);
         }
 
         let count = entries.len();
 
-        for (key, lines) in groups {
+        for (key, lines) in &groups {
             let content = lines.join("\n") + "\n";
 
             // Append to existing object (read + append + write)
-            let existing = match bucket.get_object(&key).await {
+            let existing = match bucket.get_object(key).await {
                 Ok(resp) => {
                     let bytes = resp.bytes();
                     String::from_utf8_lossy(bytes).to_string()
@@ -123,7 +127,7 @@ impl LogStorage {
 
             let full_content = existing + &content;
             if let Err(e) = bucket
-                .put_object(&key, full_content.as_bytes())
+                .put_object(key, full_content.as_bytes())
                 .await
             {
                 error!(key = %key, error = %e, "failed to write log object");
@@ -141,22 +145,27 @@ impl LogStorage {
 
     /// Query stored logs from MinIO.
     pub async fn query(&self, query: &LogQuery) -> anyhow::Result<Vec<LogEntry>> {
-        let bucket = match &self.bucket {
+        let bucket_guard = self.bucket.lock().await;
+        let bucket = match bucket_guard.as_ref() {
             Some(b) => b,
             None => return Ok(Vec::new()),
         };
 
-        // List objects with optional prefix filter
-        let prefix = match &query.process {
-            Some(p) => format!("/{}", p),
-            None => String::new(),
+        // Build prefix for listing
+        let prefix = match (&query.process, &query.run_id) {
+            (Some(p), Some(r)) => format!("/{}/{}", p, r),
+            (Some(p), None) => format!("/{}", p),
+            _ => String::new(),
         };
 
-        let results = bucket.list(prefix, Some("/".to_string())).await?;
+        let results = bucket.list(prefix, None).await?;
         let mut entries = Vec::new();
 
         for list in results {
             for object in list.contents {
+                if !object.key.ends_with(".jsonl") {
+                    continue;
+                }
                 let resp = match bucket.get_object(&object.key).await {
                     Ok(r) => r,
                     Err(_) => continue,
@@ -212,13 +221,52 @@ impl LogStorage {
         Ok(entries)
     }
 
+    /// List all run IDs for a process, newest first.
+    pub async fn list_runs(&self, process: &str) -> anyhow::Result<Vec<RunInfo>> {
+        let bucket_guard = self.bucket.lock().await;
+        let bucket = match bucket_guard.as_ref() {
+            Some(b) => b,
+            None => return Ok(Vec::new()),
+        };
+
+        let prefix = format!("/{}", process);
+        let results = bucket.list(prefix, None).await?;
+
+        let mut runs: std::collections::HashMap<String, RunInfo> =
+            std::collections::HashMap::new();
+
+        for list in results {
+            for object in list.contents {
+                // Key format: {date}/{process}/{run_id}/{stream}.jsonl
+                let parts: Vec<&str> = object.key.split('/').collect();
+                if parts.len() >= 4 {
+                    let run_id = parts[parts.len() - 2].to_string();
+                    let date = parts[0].to_string();
+                    let entry = runs.entry(run_id.clone()).or_insert_with(|| RunInfo {
+                        run_id,
+                        process: process.to_string(),
+                        date,
+                        size_bytes: 0,
+                        object_count: 0,
+                    });
+                    entry.size_bytes += object.size as u64;
+                    entry.object_count += 1;
+                }
+            }
+        }
+
+        let mut runs: Vec<RunInfo> = runs.into_values().collect();
+        runs.sort_by(|a, b| b.run_id.cmp(&a.run_id)); // newest first
+        Ok(runs)
+    }
+
     /// Run the periodic flush loop.
     pub async fn run_flush_loop(&self) {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(FLUSH_INTERVAL_SECS)).await;
             let should_flush = {
                 let buf = self.buffer.lock().await;
-                buf.len() >= FLUSH_THRESHOLD || !buf.is_empty()
+                !buf.is_empty()
             };
             if should_flush {
                 if let Err(e) = self.flush().await {
@@ -231,4 +279,14 @@ impl LogStorage {
     pub fn is_enabled(&self) -> bool {
         self.config.enabled
     }
+}
+
+/// Metadata about a process run stored in MinIO.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RunInfo {
+    pub run_id: String,
+    pub process: String,
+    pub date: String,
+    pub size_bytes: u64,
+    pub object_count: u32,
 }

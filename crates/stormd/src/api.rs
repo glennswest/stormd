@@ -46,6 +46,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/logs/{process}", get(process_logs))
         .route("/api/v1/logs/ingest", post(ingest_log))
         .route("/api/v1/logs/stored", get(query_stored_logs))
+        .route("/api/v1/logs/{process}/runs", get(list_runs))
         // Terminal
         .route("/api/v1/terminal/{process}", get(terminal_snapshot))
         // Cron
@@ -252,6 +253,7 @@ struct StoredLogQuery {
     stream: Option<stormlog::types::LogStream>,
     search: Option<String>,
     tail: Option<usize>,
+    run_id: Option<String>,
 }
 
 async fn query_stored_logs(
@@ -263,10 +265,25 @@ async fn query_stored_logs(
         stream: q.stream,
         search: q.search,
         tail: q.tail,
+        run_id: q.run_id,
         ..Default::default()
     };
     let entries = state.stormlog.query_logs(&query).await?;
     Ok(Json(entries))
+}
+
+/// List all runs for a process (newest first).
+async fn list_runs(
+    State(state): State<Arc<AppState>>,
+    Path(process): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let runs = state.stormlog.list_runs(&process).await?;
+    let current = state.stormlog.current_run_id(&process).await;
+    Ok(Json(serde_json::json!({
+        "process": process,
+        "current_run_id": current,
+        "runs": runs,
+    })))
 }
 
 // --- Terminal snapshot ---

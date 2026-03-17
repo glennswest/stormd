@@ -5,9 +5,10 @@ pub mod syslog;
 pub mod terminal;
 pub mod types;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, BufReader};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info};
 
 use crate::storage::LogStorage;
@@ -27,7 +28,9 @@ pub struct StormLog {
     stream_manager: StreamManager,
     storage: Arc<LogStorage>,
     ingest_tx: mpsc::Sender<LogEntry>,
-    ingest_rx: tokio::sync::Mutex<Option<mpsc::Receiver<LogEntry>>>,
+    ingest_rx: Mutex<Option<mpsc::Receiver<LogEntry>>>,
+    /// Active run IDs per process — set when spawn_capture is called.
+    run_ids: Mutex<HashMap<String, String>>,
 }
 
 impl StormLog {
@@ -45,16 +48,16 @@ impl StormLog {
             stream_manager,
             storage,
             ingest_tx,
-            ingest_rx: tokio::sync::Mutex::new(Some(ingest_rx)),
+            ingest_rx: Mutex::new(Some(ingest_rx)),
+            run_ids: Mutex::new(HashMap::new()),
         }
     }
 
     /// Start all subsystems: syslog listeners, storage flush loop, ingest receiver.
     pub async fn start(self: &Arc<Self>) {
-        // Initialize MinIO storage
+        // Initialize MinIO storage on the actual storage instance
         if self.config.minio.enabled {
-            let mut storage = LogStorage::new(self.config.minio.clone());
-            if let Err(e) = storage.init().await {
+            if let Err(e) = self.storage.init().await {
                 error!(error = %e, "failed to initialize MinIO storage");
             }
         }
@@ -86,19 +89,42 @@ impl StormLog {
         info!(container = %self.container_name, "stormlog started");
     }
 
+    /// Generate a run ID for a process start. Called each time a process spawns.
+    fn make_run_id() -> String {
+        chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string()
+    }
+
     /// Capture stdout/stderr from a child process.
     ///
-    /// Raw bytes flow through VT100 terminal emulation, then get split into
-    /// lines and published to broadcast streams + storage.
+    /// Each call creates a new run — when the process restarts, logs are
+    /// stored under a new run_id so you can distinguish between runs.
     pub fn spawn_capture(
         self: &Arc<Self>,
         process: String,
         stdout: Option<tokio::process::ChildStdout>,
         stderr: Option<tokio::process::ChildStderr>,
     ) {
+        let run_id = Self::make_run_id();
+        info!(process = %process, run_id = %run_id, "starting log capture");
+
+        // Store the run_id for this process
+        {
+            let mut ids = self.run_ids.blocking_lock();
+            ids.insert(process.clone(), run_id.clone());
+        }
+
+        // Emit a marker entry for the run start
+        let marker = LogEntry::new(&process, LogStream::Stdout, "--- process started ---")
+            .with_run_id(&run_id);
+        let this_marker = self.clone();
+        tokio::spawn(async move {
+            this_marker.write_entry(marker).await;
+        });
+
         if let Some(stdout) = stdout {
             let this = self.clone();
             let name = process.clone();
+            let rid = run_id.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
                 let mut buf = [0u8; 4096];
@@ -113,7 +139,8 @@ impl StormLog {
                             let text = String::from_utf8_lossy(bytes);
                             for line in text.lines() {
                                 if !line.is_empty() {
-                                    let entry = LogEntry::new(&name, LogStream::Stdout, line);
+                                    let entry = LogEntry::new(&name, LogStream::Stdout, line)
+                                        .with_run_id(&rid);
                                     this.write_entry(entry).await;
                                 }
                             }
@@ -124,12 +151,17 @@ impl StormLog {
                         }
                     }
                 }
+                // Emit end marker
+                let end = LogEntry::new(&name, LogStream::Stdout, "--- process exited ---")
+                    .with_run_id(&rid);
+                this.write_entry(end).await;
             });
         }
 
         if let Some(stderr) = stderr {
             let this = self.clone();
             let name = process;
+            let rid = run_id;
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr);
                 let mut buf = [0u8; 4096];
@@ -144,7 +176,8 @@ impl StormLog {
                             for line in text.lines() {
                                 if !line.is_empty() {
                                     let entry = LogEntry::new(&name, LogStream::Stderr, line)
-                                        .with_severity(Severity::Warning);
+                                        .with_severity(Severity::Warning)
+                                        .with_run_id(&rid);
                                     this.write_entry(entry).await;
                                 }
                             }
@@ -173,6 +206,17 @@ impl StormLog {
     /// Query logs from MinIO storage.
     pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogEntry>> {
         self.storage.query(query).await
+    }
+
+    /// List all runs for a process.
+    pub async fn list_runs(&self, process: &str) -> anyhow::Result<Vec<storage::RunInfo>> {
+        self.storage.list_runs(process).await
+    }
+
+    /// Get the current run_id for a process (if capturing).
+    pub async fn current_run_id(&self, process: &str) -> Option<String> {
+        let ids = self.run_ids.lock().await;
+        ids.get(process).cloned()
     }
 
     /// Get a VT100 screen snapshot for a process.

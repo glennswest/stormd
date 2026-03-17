@@ -10,6 +10,10 @@ pub struct LogEntry {
     pub stream: LogStream,
     pub line: String,
     pub severity: Severity,
+    /// Run identifier — groups log entries by process lifecycle.
+    /// Each time a process starts (or restarts), a new run_id is assigned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 impl LogEntry {
@@ -21,11 +25,17 @@ impl LogEntry {
             stream,
             line: line.into(),
             severity: Severity::Info,
+            run_id: None,
         }
     }
 
     pub fn with_severity(mut self, severity: Severity) -> Self {
         self.severity = severity;
+        self
+    }
+
+    pub fn with_run_id(mut self, run_id: impl Into<String>) -> Self {
+        self.run_id = Some(run_id.into());
         self
     }
 }
@@ -105,6 +115,8 @@ pub struct LogQuery {
     pub until: Option<DateTime<Utc>>,
     pub search: Option<String>,
     pub tail: Option<usize>,
+    /// Filter to a specific run. If None, returns logs from all runs.
+    pub run_id: Option<String>,
 }
 
 /// Snapshot of a process's VT100 terminal screen.

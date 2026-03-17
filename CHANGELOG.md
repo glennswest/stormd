@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### 2026-03-17
+- **fix:** MinIO storage init was called on a throwaway instance — logs never reached MinIO (bucket was always None)
+- **feat:** Run segmentation — each process start/restart creates a new run_id, logs are stored per-run in MinIO
+- **feat:** `GET /api/v1/logs/{process}/runs` endpoint to list all historical runs for a process
+- **feat:** `run_id` query parameter on `GET /api/v1/logs/stored` to filter logs by specific run
+- **feat:** Process start/exit markers in log stream for clear run boundaries
 - **feat:** Web UI dashboard at `/ui/` with process management, status overview, and controls
 - **feat:** ANSI escape code to HTML conversion — terminal and log output renders colors properly
 - **feat:** Disk/mount usage display with human-readable sizes and usage bars (`/api/v1/mounts`)
