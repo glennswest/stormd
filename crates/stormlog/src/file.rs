@@ -1,9 +1,9 @@
 use crate::types::{FileConfig, LogEntry};
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// File-based log writer with per-process files and rotation.
 pub struct FileLogger {
@@ -73,6 +73,56 @@ impl FileLogger {
                 error!(error = %e, path = %writer.path.display(), "failed to open log file");
             }
         }
+    }
+
+    /// Take the current log file for a process off the hot path.
+    ///
+    /// Renames `{process}.log` to a run-specific archive name and resets the
+    /// writer so the next write creates a fresh file. Returns the path to the
+    /// renamed file (ready for upload to MinIO), or None if there's no file.
+    pub async fn take_file(&self, process: &str, run_id: &str, failed: bool) -> Option<PathBuf> {
+        let mut writers = self.writers.lock().await;
+        writers.remove(process);
+
+        let src = self.config.log_dir.join(format!("{}.log", process));
+        if !src.exists() || std::fs::metadata(&src).map(|m| m.len()).unwrap_or(0) == 0 {
+            // No file or empty — nothing to archive
+            let _ = std::fs::remove_file(&src);
+            return None;
+        }
+
+        let tag = if failed { "failed" } else { "exited" };
+        let dest = self.config.log_dir.join(format!("{}.{}.{}.log", process, run_id, tag));
+        match std::fs::rename(&src, &dest) {
+            Ok(_) => {
+                info!(
+                    process = %process, run_id = %run_id, tag = %tag,
+                    path = %dest.display(), "log file ready for archive"
+                );
+                Some(dest)
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to rename log file for archive");
+                // Return original path — caller can still try to upload it
+                Some(src)
+            }
+        }
+    }
+
+    /// Remove any old rotated files for a process to free disk space.
+    /// Called after a successful archive to MinIO.
+    pub fn cleanup_rotated(&self, process: &str) {
+        let dir = &self.config.log_dir;
+        for i in 1..=self.config.max_files {
+            let path = dir.join(format!("{}.{}.log", process, i));
+            if path.exists() {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+
+    pub fn log_dir(&self) -> &Path {
+        &self.config.log_dir
     }
 
     /// Rotate log files: .log -> .1.log -> .2.log -> ... -> .N.log (deleted)

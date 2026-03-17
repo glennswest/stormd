@@ -18,6 +18,8 @@
 - **feat:** Local file logging — all stdout/stderr written to `{log_dir}/{process}.log` with size-based rotation
 - **feat:** `on_exit` config option — controls behavior on clean exit (exit code 0): `restart` (default) or `stop`
 - **change:** `restart_delay_secs` default changed from 5 to 1
+- **feat:** Log archival to MinIO on process exit — local log file uploaded as `archive/{process}/{run_id}/{failed|exited}.log`, then removed from local disk
+- **feat:** Failed vs clean exit logs distinguished in MinIO archive path (`failed.log` vs `exited.log`)
 
 ## [v0.3.0] — 2026-03-01
 

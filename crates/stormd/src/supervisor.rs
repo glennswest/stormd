@@ -289,6 +289,10 @@ impl Supervisor {
         };
 
         let success = exit_code == Some(0);
+        let failed = !success;
+
+        // Archive this run's logs to MinIO and free local disk space
+        self.stormlog.archive_run(name, failed).await;
 
         if success {
             match exit_action {

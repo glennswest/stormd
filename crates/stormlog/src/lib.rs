@@ -216,6 +216,64 @@ impl StormLog {
         }
     }
 
+    /// Archive a process run's logs to MinIO and clean up local disk.
+    ///
+    /// Called by the supervisor when a process exits. Flushes buffered entries,
+    /// takes the local log file, uploads it to MinIO, and removes local files.
+    pub async fn archive_run(&self, process: &str, failed: bool) {
+        // Get the run_id for this process
+        let run_id = {
+            let ids = self.run_ids.lock().await;
+            ids.get(process).cloned()
+        };
+        let run_id = match run_id {
+            Some(id) => id,
+            None => {
+                info!(process = %process, "no run_id to archive");
+                return;
+            }
+        };
+
+        // Flush any buffered MinIO entries first
+        if self.storage.is_enabled() {
+            if let Err(e) = self.storage.flush().await {
+                error!(error = %e, "failed to flush buffer before archive");
+            }
+        }
+
+        // Take the local log file (renames it out of the hot path)
+        let file_path = self.file_logger.take_file(process, &run_id, failed).await;
+
+        // Upload to MinIO if enabled and there's a file
+        if self.storage.is_enabled() {
+            if let Some(ref path) = file_path {
+                match self.storage.archive_file(process, &run_id, failed, path).await {
+                    Ok(_) => {
+                        // Clean up any rotated files too
+                        self.file_logger.cleanup_rotated(process);
+                        info!(
+                            process = %process, run_id = %run_id,
+                            failed = failed, "run archived to MinIO"
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e, process = %process,
+                            "failed to archive to MinIO — local file preserved"
+                        );
+                    }
+                }
+            }
+        } else if let Some(ref path) = file_path {
+            // MinIO not enabled — keep the local archive file but log it
+            info!(
+                process = %process, run_id = %run_id,
+                path = %path.display(),
+                "MinIO not enabled — archived log kept locally"
+            );
+        }
+    }
+
     /// Query logs from MinIO storage.
     pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogEntry>> {
         self.storage.query(query).await

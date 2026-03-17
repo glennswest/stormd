@@ -260,6 +260,46 @@ impl LogStorage {
         Ok(runs)
     }
 
+    /// Upload a local log file to MinIO as an archived run.
+    ///
+    /// Key format: `archive/{process}/{run_id}/{tag}.log`
+    /// where tag is "failed" or "exited".
+    pub async fn archive_file(
+        &self,
+        process: &str,
+        run_id: &str,
+        failed: bool,
+        file_path: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        let bucket_guard = self.bucket.lock().await;
+        let bucket = match bucket_guard.as_ref() {
+            Some(b) => b,
+            None => {
+                warn!("MinIO not initialized — cannot archive log file");
+                return Ok(());
+            }
+        };
+
+        let content = tokio::fs::read(file_path).await?;
+        let tag = if failed { "failed" } else { "exited" };
+        let key = format!("archive/{}/{}/{}.log", process, run_id, tag);
+
+        bucket.put_object(&key, &content).await?;
+
+        info!(
+            key = %key,
+            size = content.len(),
+            "archived log file to MinIO"
+        );
+
+        // Remove local file after successful upload
+        if let Err(e) = tokio::fs::remove_file(file_path).await {
+            warn!(error = %e, path = %file_path.display(), "failed to remove archived local file");
+        }
+
+        Ok(())
+    }
+
     /// Run the periodic flush loop.
     pub async fn run_flush_loop(&self) {
         loop {
