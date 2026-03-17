@@ -1,3 +1,4 @@
+pub mod file;
 pub mod ingest;
 pub mod storage;
 pub mod stream;
@@ -11,6 +12,7 @@ use tokio::io::{AsyncReadExt, BufReader};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info};
 
+use crate::file::FileLogger;
 use crate::storage::LogStorage;
 use crate::stream::StreamManager;
 use crate::syslog::SyslogReceiver;
@@ -27,6 +29,7 @@ pub struct StormLog {
     terminal_manager: TerminalManager,
     stream_manager: StreamManager,
     storage: Arc<LogStorage>,
+    file_logger: FileLogger,
     ingest_tx: mpsc::Sender<LogEntry>,
     ingest_rx: Mutex<Option<mpsc::Receiver<LogEntry>>>,
     /// Active run IDs per process — set when spawn_capture is called.
@@ -39,6 +42,7 @@ impl StormLog {
         let terminal_manager = TerminalManager::new(config.terminal.rows, config.terminal.cols);
         let stream_manager = StreamManager::new();
         let storage = Arc::new(LogStorage::new(config.minio.clone()));
+        let file_logger = FileLogger::new(config.file.clone());
         let (ingest_tx, ingest_rx) = mpsc::channel(1024);
 
         Self {
@@ -47,14 +51,20 @@ impl StormLog {
             terminal_manager,
             stream_manager,
             storage,
+            file_logger,
             ingest_tx,
             ingest_rx: Mutex::new(Some(ingest_rx)),
             run_ids: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Start all subsystems: syslog listeners, storage flush loop, ingest receiver.
+    /// Start all subsystems: file logger, syslog listeners, storage flush loop, ingest receiver.
     pub async fn start(self: &Arc<Self>) {
+        // Initialize file logger (local disk)
+        if let Err(e) = self.file_logger.init() {
+            error!(error = %e, "failed to initialize file logger");
+        }
+
         // Initialize MinIO storage on the actual storage instance
         if self.config.minio.enabled {
             if let Err(e) = self.storage.init().await {
@@ -192,8 +202,11 @@ impl StormLog {
         }
     }
 
-    /// Write a log entry to all outputs: broadcast stream + storage.
+    /// Write a log entry to all outputs: file, broadcast stream, storage.
     pub async fn write_entry(&self, entry: LogEntry) {
+        // Write to local file
+        self.file_logger.write(&entry).await;
+
         // Publish to broadcast streams
         self.stream_manager.publish(entry.clone()).await;
 

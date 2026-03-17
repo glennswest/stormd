@@ -65,9 +65,11 @@ async fn main() {
         .emit_simple(EventKind::ContainerStarting, None)
         .await;
 
-    // Initialize StormLog
+    // Initialize StormLog — sync file logger's log_dir with general.log_dir
+    let mut stormlog_config = config.stormlog.clone();
+    stormlog_config.file.log_dir = config.general.log_dir.clone();
     let stormlog = Arc::new(StormLog::new(
-        config.stormlog.clone(),
+        stormlog_config,
         config.general.name.clone(),
     ));
     stormlog.start().await;

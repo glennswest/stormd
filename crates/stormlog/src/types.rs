@@ -130,9 +130,45 @@ pub struct ScreenSnapshot {
     pub cursor_col: u16,
 }
 
+/// File-based log storage configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileConfig {
+    /// Directory to write log files. Each process gets `{process}.log`.
+    #[serde(default = "default_log_dir")]
+    pub log_dir: std::path::PathBuf,
+    /// Maximum size of a single log file before rotation.
+    #[serde(default = "default_max_size_bytes")]
+    pub max_size_bytes: u64,
+    /// Maximum number of rotated files to keep per process.
+    #[serde(default = "default_max_files")]
+    pub max_files: u32,
+}
+
+impl Default for FileConfig {
+    fn default() -> Self {
+        Self {
+            log_dir: default_log_dir(),
+            max_size_bytes: default_max_size_bytes(),
+            max_files: default_max_files(),
+        }
+    }
+}
+
+fn default_log_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from("/var/log/stormd")
+}
+fn default_max_size_bytes() -> u64 {
+    100 * 1024 * 1024 // 100 MiB
+}
+fn default_max_files() -> u32 {
+    10
+}
+
 /// Configuration for StormLog.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StormLogConfig {
+    #[serde(default)]
+    pub file: FileConfig,
     #[serde(default)]
     pub minio: MinioConfig,
     #[serde(default)]
@@ -144,6 +180,7 @@ pub struct StormLogConfig {
 impl Default for StormLogConfig {
     fn default() -> Self {
         Self {
+            file: FileConfig::default(),
             minio: MinioConfig::default(),
             syslog: SyslogConfig::default(),
             terminal: TerminalConfig::default(),

@@ -15,6 +15,7 @@
 - **feat:** Restart timestamps exposed in process status API and dashboard
 - **feat:** Navigation bar across all UI pages (Dashboard, Terminal, Logs)
 - **fix:** Control characters no longer displayed as raw escape sequences in web UI
+- **feat:** Local file logging — all stdout/stderr written to `{log_dir}/{process}.log` with size-based rotation
 
 ## [v0.3.0] — 2026-03-01
 
