@@ -306,7 +306,7 @@ fn default_cron_timeout_secs() -> u64 { 300 }
 fn default_nats_subject() -> String { "stormd.events".to_string() }
 fn default_max_size_bytes() -> u64 { 100 * 1024 * 1024 }
 fn default_max_files() -> u32 { 10 }
-fn default_api_bind() -> String { "0.0.0.0:8080".to_string() }
+fn default_api_bind() -> String { "0.0.0.0:9080".to_string() }
 fn default_ssh_bind() -> String { "0.0.0.0:22".to_string() }
 fn default_ssh_host_key() -> PathBuf { PathBuf::from("/etc/stormd/host_key") }
 fn default_ssh_password() -> String { "stormd".to_string() }

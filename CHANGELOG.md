@@ -20,6 +20,7 @@
 - **change:** `restart_delay_secs` default changed from 5 to 1
 - **feat:** Log archival to MinIO on process exit — local log file uploaded as `archive/{process}/{run_id}/{failed|exited}.log`, then removed from local disk
 - **feat:** Failed vs clean exit logs distinguished in MinIO archive path (`failed.log` vs `exited.log`)
+- **change:** Default API port changed from 8080 to 9080 to avoid conflicts
 
 ## [v0.3.0] — 2026-03-01
 
