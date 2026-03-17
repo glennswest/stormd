@@ -16,6 +16,8 @@
 - **feat:** Navigation bar across all UI pages (Dashboard, Terminal, Logs)
 - **fix:** Control characters no longer displayed as raw escape sequences in web UI
 - **feat:** Local file logging — all stdout/stderr written to `{log_dir}/{process}.log` with size-based rotation
+- **feat:** `on_exit` config option — controls behavior on clean exit (exit code 0): `restart` (default) or `stop`
+- **change:** `restart_delay_secs` default changed from 5 to 1
 
 ## [v0.3.0] — 2026-03-01
 

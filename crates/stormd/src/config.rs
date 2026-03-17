@@ -64,6 +64,8 @@ pub struct ProcessConfig {
     pub working_dir: Option<PathBuf>,
     #[serde(default = "default_on_failure")]
     pub on_failure: FailureAction,
+    #[serde(default = "default_on_exit")]
+    pub on_exit: ExitAction,
     #[serde(default = "default_restart_delay_secs")]
     pub restart_delay_secs: u64,
     #[serde(default = "default_max_restarts")]
@@ -88,6 +90,14 @@ pub enum FailureAction {
     Restart,
     Fail,
     Ignore,
+}
+
+/// What to do when a process exits cleanly (exit code 0).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExitAction {
+    Restart,
+    Stop,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -287,7 +297,8 @@ fn default_name() -> String { "stormd".to_string() }
 fn default_log_dir() -> PathBuf { PathBuf::from("/var/log/stormd") }
 fn default_pid_file() -> PathBuf { PathBuf::from("/run/stormd.pid") }
 fn default_on_failure() -> FailureAction { FailureAction::Restart }
-fn default_restart_delay_secs() -> u64 { 5 }
+fn default_on_exit() -> ExitAction { ExitAction::Restart }
+fn default_restart_delay_secs() -> u64 { 1 }
 fn default_max_restarts() -> u32 { 10 }
 fn default_restart_window_secs() -> u64 { 3600 }
 fn default_startup_delay_secs() -> u64 { 0 }

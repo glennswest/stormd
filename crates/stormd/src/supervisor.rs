@@ -271,7 +271,7 @@ impl Supervisor {
         };
         drop(procs);
 
-        let (failure_action, restart_delay, max_restarts, window, restarts_in_window) = {
+        let (failure_action, exit_action, restart_delay, max_restarts, window, restarts_in_window) = {
             let mut proc = proc_arc.lock().await;
             proc.exit_code = exit_code;
             proc.stopped_at = Some(Utc::now());
@@ -280,6 +280,7 @@ impl Supervisor {
             let in_window = proc.restart_count_in_window(proc.config.restart_window_secs);
             (
                 proc.config.on_failure.clone(),
+                proc.config.on_exit.clone(),
                 proc.config.restart_delay_secs,
                 proc.config.max_restarts,
                 proc.config.restart_window_secs,
@@ -290,19 +291,62 @@ impl Supervisor {
         let success = exit_code == Some(0);
 
         if success {
-            let mut proc = proc_arc.lock().await;
-            proc.state = ProcessState::Stopped;
-            info!(process = %name, code = ?exit_code, "process exited cleanly");
+            match exit_action {
+                crate::config::ExitAction::Restart => {
+                    info!(process = %name, "process exited cleanly — restarting (on_exit=restart)");
+                    self.event_bus
+                        .emit_simple(EventKind::ProcessStopped, Some(name.to_string()))
+                        .await;
+                    // Fall through to restart logic below
+                }
+                crate::config::ExitAction::Stop => {
+                    let mut proc = proc_arc.lock().await;
+                    proc.state = ProcessState::Stopped;
+                    info!(process = %name, "process exited cleanly — stopping (on_exit=stop)");
+                    self.event_bus
+                        .emit_simple(EventKind::ProcessStopped, Some(name.to_string()))
+                        .await;
+                    return;
+                }
+            }
+        } else {
+            warn!(process = %name, code = ?exit_code, "process exited with error");
             self.event_bus
-                .emit_simple(EventKind::ProcessStopped, Some(name.to_string()))
+                .emit_simple(EventKind::ProcessCrashed, Some(name.to_string()))
                 .await;
-            return;
         }
 
-        warn!(process = %name, code = ?exit_code, "process exited with error");
-        self.event_bus
-            .emit_simple(EventKind::ProcessCrashed, Some(name.to_string()))
-            .await;
+        // For clean exits with on_exit=restart, we use the restart logic
+        // but skip the on_failure check (it already exited cleanly).
+        if success {
+            if restarts_in_window >= max_restarts {
+                let mut proc = proc_arc.lock().await;
+                proc.state = ProcessState::Stopped;
+                warn!(
+                    process = %name,
+                    restarts = restarts_in_window,
+                    max = max_restarts,
+                    "max restarts exceeded for clean exit — stopping"
+                );
+                return;
+            }
+            {
+                let mut proc = proc_arc.lock().await;
+                proc.state = ProcessState::Restarting;
+                proc.restarts += 1;
+                proc.restart_timestamps.push(Utc::now());
+            }
+            self.event_bus
+                .emit_simple(EventKind::ProcessRestarting, Some(name.to_string()))
+                .await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(restart_delay)).await;
+            if let Err(e) = self.spawn_process(name).await {
+                error!(process = %name, error = %e, "failed to restart process after clean exit");
+                let mut proc = proc_arc.lock().await;
+                proc.state = ProcessState::Failed;
+            }
+            return;
+        }
 
         match failure_action {
             FailureAction::Fail => {
