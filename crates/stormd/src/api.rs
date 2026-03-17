@@ -56,10 +56,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/updates", get(list_updates))
         .route("/api/v1/updates/{name}", get(get_update))
         .route("/api/v1/updates/{name}/trigger", post(trigger_update))
+        // System info
+        .route("/api/v1/mounts", get(list_mounts))
+        .route("/api/v1/memory/history", get(memory_history))
         // WebSocket
         .route("/ws/console/{process}", get(ws::ws_console))
         .route("/ws/logs", get(ws::ws_logs))
         // Web UI
+        .route("/ui/", get(crate::web::dashboard_page))
         .route("/ui/terminal", get(crate::web::terminal_page))
         .route("/ui/logs", get(crate::web::logs_page));
 
@@ -383,6 +387,18 @@ async fn trigger_update(
         }
         None => Err(AppError(anyhow::anyhow!("updater not enabled"))),
     }
+}
+
+// --- System info ---
+
+async fn list_mounts() -> impl IntoResponse {
+    let mounts = crate::stats::StatsCollector::get_mounts();
+    Json(mounts)
+}
+
+async fn memory_history(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let history = state.stats.get_memory_history().await;
+    Json(history)
 }
 
 // --- Helpers ---

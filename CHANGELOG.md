@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### 2026-03-17
+- **feat:** Web UI dashboard at `/ui/` with process management, status overview, and controls
+- **feat:** ANSI escape code to HTML conversion — terminal and log output renders colors properly
+- **feat:** Disk/mount usage display with human-readable sizes and usage bars (`/api/v1/mounts`)
+- **feat:** Memory usage monitoring with RSS/VMS history chart (`/api/v1/memory/history`)
+- **feat:** Restart timestamps exposed in process status API and dashboard
+- **feat:** Navigation bar across all UI pages (Dashboard, Terminal, Logs)
+- **fix:** Control characters no longer displayed as raw escape sequences in web UI
+
 ## [v0.3.0] — 2026-03-01
 
 ### Added

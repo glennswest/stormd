@@ -81,6 +81,7 @@ async fn main() {
     let supervisor = Arc::new(Supervisor::new(stormlog.clone(), event_bus.clone()));
     let cron_scheduler = Arc::new(CronScheduler::new(stormlog.clone(), event_bus.clone()));
     let stats = Arc::new(StatsCollector::new(config.general.name.clone()));
+    stats.start_memory_monitor();
     let backup = Arc::new(BackupManager::new(config.backup.clone(), event_bus.clone()));
 
     // Start the supervisor exit handler loop

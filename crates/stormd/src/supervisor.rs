@@ -30,6 +30,7 @@ pub struct ProcessStatus {
     pub started_at: Option<DateTime<Utc>>,
     pub stopped_at: Option<DateTime<Utc>>,
     pub restarts: u32,
+    pub restart_timestamps: Vec<DateTime<Utc>>,
     pub uptime_secs: Option<i64>,
 }
 
@@ -65,6 +66,7 @@ impl ManagedProcess {
             started_at: self.started_at,
             stopped_at: self.stopped_at,
             restarts: self.restarts,
+            restart_timestamps: self.restart_timestamps.clone(),
             uptime_secs: uptime,
         }
     }

@@ -36,6 +36,7 @@ oci-spec.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.29", features = ["signal", "process"] }
+libc = "0.2"
 
 [features]
 default = ["nats"]
