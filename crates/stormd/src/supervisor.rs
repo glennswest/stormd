@@ -215,7 +215,7 @@ impl Supervisor {
             config.name.clone(),
             child.stdout.take(),
             child.stderr.take(),
-        );
+        ).await;
 
         // Update state
         {

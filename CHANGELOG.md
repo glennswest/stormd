@@ -21,6 +21,8 @@
 - **feat:** Log archival to MinIO on process exit — local log file uploaded as `archive/{process}/{run_id}/{failed|exited}.log`, then removed from local disk
 - **feat:** Failed vs clean exit logs distinguished in MinIO archive path (`failed.log` vs `exited.log`)
 - **change:** Default API port changed from 8080 to 9080 to avoid conflicts
+- **fix:** Enable ICMP echo replies and network sysctls at startup for veth-based container networking
+- **fix:** Segfault/panic — `blocking_lock()` called from async context in `spawn_capture` caused tokio runtime panic; changed to async `lock().await`
 
 ## [v0.3.0] — 2026-03-01
 

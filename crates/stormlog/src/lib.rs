@@ -108,7 +108,7 @@ impl StormLog {
     ///
     /// Each call creates a new run — when the process restarts, logs are
     /// stored under a new run_id so you can distinguish between runs.
-    pub fn spawn_capture(
+    pub async fn spawn_capture(
         self: &Arc<Self>,
         process: String,
         stdout: Option<tokio::process::ChildStdout>,
@@ -119,17 +119,14 @@ impl StormLog {
 
         // Store the run_id for this process
         {
-            let mut ids = self.run_ids.blocking_lock();
+            let mut ids = self.run_ids.lock().await;
             ids.insert(process.clone(), run_id.clone());
         }
 
         // Emit a marker entry for the run start
         let marker = LogEntry::new(&process, LogStream::Stdout, "--- process started ---")
             .with_run_id(&run_id);
-        let this_marker = self.clone();
-        tokio::spawn(async move {
-            this_marker.write_entry(marker).await;
-        });
+        self.write_entry(marker).await;
 
         if let Some(stdout) = stdout {
             let this = self.clone();

@@ -224,6 +224,10 @@ async fn main() {
         reap_zombies().await;
     });
 
+    // Network init — set sysctls for container networking (Linux only)
+    #[cfg(target_os = "linux")]
+    init_network_sysctls();
+
     // Monitor loop — check for container failure
     let sup_monitor = supervisor.clone();
     let monitor_handle = tokio::spawn(async move {
@@ -298,4 +302,41 @@ async fn reap_zombies() {
             }
         }
     }
+}
+
+/// Set network sysctls for container networking.
+///
+/// In scratch containers, there's no sysctl command. We write directly to
+/// /proc/sys to enable ICMP echo replies, proper ARP handling, and IP
+/// forwarding so that veth-based networking works correctly.
+#[cfg(target_os = "linux")]
+fn init_network_sysctls() {
+    let sysctls = [
+        // Allow ping — respond to ICMP echo requests
+        ("/proc/sys/net/ipv4/icmp_echo_ignore_all", "0"),
+        // Accept packets with local source addresses
+        ("/proc/sys/net/ipv4/conf/all/accept_local", "1"),
+        // Enable IP forwarding
+        ("/proc/sys/net/ipv4/ip_forward", "1"),
+        // ARP: reply only if target IP is local address on the interface
+        ("/proc/sys/net/ipv4/conf/all/arp_ignore", "0"),
+        // ARP: use best local address for ARP requests
+        ("/proc/sys/net/ipv4/conf/all/arp_announce", "0"),
+        // Accept ICMP redirects (useful for multi-hop veth setups)
+        ("/proc/sys/net/ipv4/conf/all/accept_redirects", "1"),
+        // Enable IPv6 if available
+        ("/proc/sys/net/ipv6/conf/all/disable_ipv6", "0"),
+    ];
+
+    for (path, value) in &sysctls {
+        match std::fs::write(path, value) {
+            Ok(_) => tracing::debug!(path = %path, value = %value, "sysctl set"),
+            Err(e) => {
+                // Not fatal — /proc/sys may not exist or may be read-only
+                tracing::debug!(path = %path, error = %e, "sysctl not available");
+            }
+        }
+    }
+
+    info!("network sysctls initialized");
 }
