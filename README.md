@@ -2,6 +2,32 @@
 
 Container init system for scratch images. A single static binary that replaces shell, systemd, and cron inside minimal containers. SSH in, manage processes, tail logs, view a web dashboard — like a real Linux server, in 9 MB.
 
+## Using stormdbase as a base image
+
+The easiest way to use stormd is to build FROM `stormdbase` — a 12.7 MB scratch image that includes stormd, stormsh, and 63 busybox-style command symlinks pre-installed in `/bin`, `/usr/bin`, `/sbin`, and `/usr/sbin`.
+
+```dockerfile
+FROM stormdbase:latest
+COPY my-app /app/server
+COPY config.toml /etc/stormd/config.toml
+EXPOSE 9080 8080 22
+ENTRYPOINT ["/stormd"]
+```
+
+That's it. Your final image has a process supervisor, SSH server, web dashboard, REST API, health checks, and a full set of Unix commands — all from a single static binary.
+
+### Building stormdbase
+
+```bash
+# ARM64 (Apple Silicon, Raspberry Pi, MikroTik)
+cargo build --release --target aarch64-unknown-linux-musl
+podman build --format docker -t stormdbase -f Containerfile .
+
+# x86_64
+cargo build --release --target x86_64-unknown-linux-musl
+podman build --format docker -t stormdbase -f Containerfile.x86_64 .
+```
+
 ## What it does
 
 - **Process supervisor** — launches and monitors one or more binaries with configurable restart policies
@@ -15,6 +41,9 @@ Container init system for scratch images. A single static binary that replaces s
 - **OCI image updater** — automatic image updates with blue/green rootfs pivot via stormpull
 - **REST API** — full control plane for status, process management, logs, terminals, and debug
 - **Event system** — push events to NATS or webhooks when processes start/stop/crash
+- **Liveness probes** — HTTP and TCP health checks with automatic restart on failure (SIGUSR1 grace, then SIGKILL)
+- **Busybox commands** — 63 built-in Unix commands (ls, cat, grep, curl, ping, etc.) via argv[0] symlinks
+- **Docker HEALTHCHECK** — `stormd --healthcheck` probes the running instance for use in scratch containers
 - **PID 1** — proper zombie reaping, signal handling, and network sysctl init for scratch containers
 
 ## Workspace structure
@@ -230,7 +259,7 @@ ENTRYPOINT ["/stormd"]
 ## SSH shell commands
 
 ```
-ps              — list supervised processes (colored status)
+ps              — list supervised processes (colored status, liveness column)
 start <name>    — start a process
 stop <name>     — stop a process
 restart <name>  — restart a process
@@ -238,19 +267,22 @@ attach <name>   — attach to process VT100 terminal
 logs [name]     — show recent logs
 logs -f [name]  — follow logs realtime
 grep <pattern>  — search logs
+liveness [name] — show liveness probe status and config
 cron            — list cron jobs
-status          — full system status
+status          — full system status (includes liveness health summary)
 uptime          — container uptime
 env             — environment variables
 whoami          — current user (root)
 hostname        — container name
 df              — storage usage
 free            — memory info
+dmesg           — query all process logs from stormlog
+systemctl       — systemd emulation (start/stop/restart/status/list-units)
 help            — list commands
 exit            — close SSH session
 ```
 
-Shell features: tab completion, command history, colorized output, piping (`logs | grep error`).
+Shell features: tab completion, command history, colorized output, piping (`logs | grep error`), redirection (`cmd > file`, `cmd >> file`).
 
 ## Web UI
 
@@ -329,11 +361,94 @@ restart_window_secs = 3600             # restart counting window
 depends_on = ["other-process"]         # start after these processes
 # image = "myapp:latest"              # OCI image (for updater)
 
+# Liveness probe — restarts process if health check fails
+[process.liveness]
+type = "http"                          # http | tcp
+url = "http://localhost:8080/health"   # HTTP probe URL
+# port = 5432                          # TCP probe port (for type = "tcp")
+interval_secs = 10                     # check interval (default: 10)
+timeout_secs = 5                       # probe timeout (default: 5)
+failure_threshold = 1                  # failures before restart (default: 1)
+initial_delay_secs = 5                 # delay before first check (default: 5)
+
 [[cron]]
 name = "cleanup"                       # job name
 schedule = "0 0 * * * *"              # cron expression (6-field with seconds)
 command = "/app/cleanup"               # command to run
 args = []                              # arguments
+```
+
+## Liveness probes
+
+Liveness probes detect hung processes that haven't exited but have stopped responding. When the failure threshold is reached, stormd sends SIGUSR1 (grace period), waits 5 seconds, then SIGKILL if still running. The normal restart policy then takes over.
+
+### HTTP probe
+
+```toml
+[[process]]
+name = "web"
+command = "/app/server"
+
+[process.liveness]
+type = "http"
+url = "http://localhost:8080/health"
+interval_secs = 10
+failure_threshold = 3
+initial_delay_secs = 15
+```
+
+### TCP probe
+
+```toml
+[[process]]
+name = "postgres"
+command = "/usr/bin/postgres"
+
+[process.liveness]
+type = "tcp"
+port = 5432
+interval_secs = 5
+```
+
+Check liveness status via SSH shell:
+
+```
+liveness              # show all probe status
+liveness web          # show specific process probe
+ps                    # LIVENESS column shows ok/FAIL(n)
+status                # summary shows N/M healthy
+systemctl status web  # includes liveness details
+```
+
+## Busybox commands
+
+stormd acts as a busybox-style multi-call binary. When invoked via a symlink (e.g., `/bin/ls -> /stormd`), it runs the corresponding command directly. The `stormdbase` image has all 63 commands pre-linked in `/bin`, `/usr/bin`, `/sbin`, and `/usr/sbin`.
+
+### Available commands
+
+| Category | Commands |
+|----------|----------|
+| **File** | `ls`, `dir`, `cat`, `head`, `tail`, `cp`, `mv`, `rm`, `mkdir`, `touch`, `chmod`, `chown`, `find`, `ln`, `stat`, `pwd`, `wc`, `du`, `readlink`, `file`, `sha256sum`, `md5sum`, `tee` |
+| **Network** | `ifconfig`, `ip`, `ping`, `curl`, `wget`, `netstat`, `ss`, `nslookup`, `dig`, `hostname`, `route` |
+| **System** | `mount`, `df`, `free`, `uname`, `date`, `id`, `kill`, `printenv`, `export`, `unset`, `sleep`, `echo`, `env`, `whoami`, `which`, `type`, `lsof`, `true`, `false`, `clear` |
+| **Text** | `sort`, `uniq`, `cut`, `tr`, `sed`, `rev`, `base64`, `xxd`, `grep` |
+
+### Install symlinks manually
+
+```bash
+# Install all commands to /bin
+stormd --install /bin
+
+# List all available commands
+stormd --list-commands
+```
+
+Piping and redirection work between commands:
+
+```bash
+ls -la /app | grep server
+cat /etc/stormd/config.toml | grep process
+curl http://localhost:8080/health > /tmp/health.txt
 ```
 
 ## REST API
@@ -398,7 +513,7 @@ Process crashes emit a `*** PROCESS CRASHED ***` entry at Emergency severity.
 Events are emitted for process lifecycle changes and can be sent to NATS or webhooks:
 
 - `container_starting`, `container_stopping`, `container_failing`
-- `process_started`, `process_stopped`, `process_crashed`, `process_restarting`
+- `process_started`, `process_stopped`, `process_crashed`, `process_restarting`, `liveness_check_failed`
 - `update_check_started`, `update_available`, `update_pulling`, `update_pivoting`, `update_completed`, `update_failed`
 - `cron_executed`, `cron_failed`
 - `backup_started`, `backup_completed`, `backup_failed`
