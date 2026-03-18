@@ -20,6 +20,43 @@ use crate::syslog::SyslogReceiver;
 use crate::terminal::TerminalManager;
 use crate::types::{LogEntry, LogQuery, LogStream, ScreenSnapshot, Severity, StormLogConfig};
 
+/// Detect severity from a log line's content.
+///
+/// Scans for common severity keywords that applications emit (e.g. ERROR, FATAL,
+/// WARN, panic, etc.) and returns an appropriate severity level.
+fn detect_severity(line: &str, base: Severity) -> Severity {
+    // Case-insensitive scan for severity keywords
+    let upper = line.to_uppercase();
+    // Check for the most severe patterns first
+    if upper.contains("PANIC") || upper.contains("FATAL") || upper.contains("SEGFAULT")
+        || upper.contains("SIGSEGV") || upper.contains("SIGABRT")
+        || upper.contains("CORE DUMPED")
+    {
+        return Severity::Emergency;
+    }
+    if upper.contains("CRITICAL") {
+        return Severity::Critical;
+    }
+    // Common structured log patterns: level=error, "level":"error", [ERROR], ERROR:
+    if upper.contains("\"LEVEL\":\"ERROR\"")
+        || upper.contains("LEVEL=ERROR")
+        || upper.contains("[ERROR]")
+        || upper.contains("ERROR:")
+        || upper.contains(" ERROR ")
+    {
+        return Severity::Error;
+    }
+    if upper.contains("\"LEVEL\":\"WARN\"")
+        || upper.contains("LEVEL=WARN")
+        || upper.contains("[WARN")
+        || upper.contains("WARNING:")
+        || upper.contains(" WARN ")
+    {
+        return Severity::Warning;
+    }
+    base
+}
+
 /// StormLog — unified logging facade.
 ///
 /// Handles VT100 terminal emulation, broadcast streams, MinIO storage,
@@ -152,7 +189,9 @@ impl StormLog {
                             let text = String::from_utf8_lossy(bytes);
                             for line in text.lines() {
                                 if !line.is_empty() {
+                                    let sev = detect_severity(line, Severity::Info);
                                     let entry = LogEntry::new(&name, LogStream::Stdout, line)
+                                        .with_severity(sev)
                                         .with_run_id(&rid);
                                     this.write_entry(entry).await;
                                 }
@@ -189,8 +228,9 @@ impl StormLog {
                             let text = String::from_utf8_lossy(bytes);
                             for line in text.lines() {
                                 if !line.is_empty() {
+                                    let sev = detect_severity(line, Severity::Warning);
                                     let entry = LogEntry::new(&name, LogStream::Stderr, line)
-                                        .with_severity(Severity::Warning)
+                                        .with_severity(sev)
                                         .with_run_id(&rid);
                                     this.write_entry(entry).await;
                                 }
@@ -225,6 +265,24 @@ impl StormLog {
         if self.storage.is_enabled() {
             self.storage.buffer_entry(entry).await;
         }
+    }
+
+    /// Emit a process crash/failure entry at Emergency severity.
+    pub async fn emit_crash(&self, process: &str, exit_code: Option<i32>) {
+        let run_id = {
+            let ids = self.run_ids.lock().await;
+            ids.get(process).cloned()
+        };
+        let msg = match exit_code {
+            Some(code) => format!("*** PROCESS CRASHED *** exit code {}", code),
+            None => "*** PROCESS CRASHED *** killed by signal".to_string(),
+        };
+        let mut entry = LogEntry::new(process, LogStream::Stderr, msg)
+            .with_severity(Severity::Emergency);
+        if let Some(rid) = run_id {
+            entry = entry.with_run_id(rid);
+        }
+        self.write_entry(entry).await;
     }
 
     /// Archive a process run's logs to MinIO and clean up local disk.

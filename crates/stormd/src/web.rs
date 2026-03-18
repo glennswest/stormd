@@ -182,7 +182,7 @@ fn nav_html(active: &str, container_name: &str) -> String {
         })
         .collect();
     format!(
-        "<nav><span class=\"brand\">{}</span><div class=\"links\">{}</div><span style=\"margin-left:auto;font-size:12px;color:#555\">stormd</span></nav>",
+        "<nav><span class=\"brand\">{}</span><div class=\"links\">{}</div><span style=\"margin-left:auto;font-size:12px;color:#888;font-weight:500\">stormd</span></nav>",
         container_name, links.join("")
     )
 }

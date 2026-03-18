@@ -291,6 +291,11 @@ impl Supervisor {
         let success = exit_code == Some(0);
         let failed = !success;
 
+        // Emit crash entry at Emergency severity BEFORE archiving
+        if failed {
+            self.stormlog.emit_crash(name, exit_code).await;
+        }
+
         // Archive this run's logs to MinIO and free local disk space
         self.stormlog.archive_run(name, failed).await;
 
