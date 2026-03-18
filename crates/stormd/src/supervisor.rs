@@ -30,6 +30,7 @@ pub struct ProcessStatus {
     pub started_at: Option<DateTime<Utc>>,
     pub stopped_at: Option<DateTime<Utc>>,
     pub restarts: u32,
+    pub crashes: u32,
     pub restart_timestamps: Vec<DateTime<Utc>>,
     pub uptime_secs: Option<i64>,
 }
@@ -42,6 +43,7 @@ struct ManagedProcess {
     started_at: Option<DateTime<Utc>>,
     stopped_at: Option<DateTime<Utc>>,
     restarts: u32,
+    crashes: u32,
     restart_timestamps: Vec<DateTime<Utc>>,
     kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
     stdin_tx: Option<tokio::sync::mpsc::Sender<String>>,
@@ -66,6 +68,7 @@ impl ManagedProcess {
             started_at: self.started_at,
             stopped_at: self.stopped_at,
             restarts: self.restarts,
+            crashes: self.crashes,
             restart_timestamps: self.restart_timestamps.clone(),
             uptime_secs: uptime,
         }
@@ -128,6 +131,7 @@ impl Supervisor {
                 started_at: None,
                 stopped_at: None,
                 restarts: 0,
+                crashes: 0,
                 restart_timestamps: Vec::new(),
                 kill_tx: None,
                 stdin_tx: None,
@@ -291,8 +295,12 @@ impl Supervisor {
         let success = exit_code == Some(0);
         let failed = !success;
 
-        // Emit crash entry at Emergency severity BEFORE archiving
+        // Increment crash counter and emit crash entry at Emergency severity BEFORE archiving
         if failed {
+            {
+                let mut proc = proc_arc.lock().await;
+                proc.crashes += 1;
+            }
             self.stormlog.emit_crash(name, exit_code).await;
         }
 
@@ -546,6 +554,7 @@ impl Supervisor {
             started_at: None,
             stopped_at: None,
             restarts: 0,
+            crashes: 0,
             restart_timestamps: Vec::new(),
             kill_tx: None,
             stdin_tx: None,

@@ -226,6 +226,7 @@ fn build_dashboard(name: &str) -> String {
                         <th>State</th>
                         <th>PID</th>
                         <th>Exit Code</th>
+                        <th>Crashes</th>
                         <th>Restarts</th>
                         <th>Last Restart</th>
                         <th>Uptime</th>
@@ -463,14 +464,14 @@ fn build_dashboard(name: &str) -> String {
 
             const total = procs.length;
             const running = procs.filter(p => (p.state || '').toLowerCase() === 'running').length;
-            const failed = procs.filter(p => (p.state || '').toLowerCase() === 'failed').length;
+            const crashes = procs.reduce((sum, p) => sum + (p.crashes || 0), 0);
             const restarts = procs.reduce((sum, p) => sum + (p.restarts || 0), 0);
             const mem = status.stats && status.stats.memory;
 
             document.getElementById('stats').innerHTML = `
                 <div class="stat-card"><div class="label">Processes</div><div class="value cyan">${{total}}</div></div>
                 <div class="stat-card"><div class="label">Running</div><div class="value green">${{running}}</div></div>
-                <div class="stat-card"><div class="label">Failed</div><div class="value ${{failed > 0 ? 'red' : 'green'}}">${{failed}}</div></div>
+                <div class="stat-card"><div class="label">Crashes</div><div class="value ${{crashes > 0 ? 'red' : 'green'}}">${{crashes}}</div></div>
                 <div class="stat-card"><div class="label">Total Restarts</div><div class="value yellow">${{restarts}}</div></div>
                 <div class="stat-card"><div class="label">Memory (RSS)</div><div class="value green">${{mem ? formatBytes(mem.rss_bytes) : '-'}}</div></div>
                 <div class="stat-card"><div class="label">Container</div><div class="value ${{status.container_failed ? 'red' : 'green'}}">${{status.container_failed ? 'FAILED' : 'HEALTHY'}}</div></div>
@@ -485,6 +486,7 @@ fn build_dashboard(name: &str) -> String {
                     <td>${{stateBadge(p.state)}}</td>
                     <td class="mono">${{p.pid || '-'}}</td>
                     <td class="mono">${{p.exit_code != null ? p.exit_code : '-'}}</td>
+                    <td style="color:${{(p.crashes || 0) > 0 ? '#e94560' : '#50fa7b'}}">${{p.crashes || 0}}</td>
                     <td>${{p.restarts || 0}}</td>
                     <td style="font-size:12px;color:#888">${{lastRestart}}</td>
                     <td>${{formatDuration(p.uptime_secs)}}</td>
@@ -508,7 +510,8 @@ fn build_dashboard(name: &str) -> String {
                 const histDiv = document.getElementById('restart-history');
                 histDiv.innerHTML = '<div class="restart-list">' + allRestarts.slice(0, 50).map(r => {{
                     const dt = new Date(r.timestamp);
-                    return `<div><span style="color:#8be9fd">${{escapeHtml(r.process)}}</span> <span style="color:#555">${{dt.toLocaleString()}}</span> <span style="color:#666">(${{timeAgo(r.timestamp)}})</span></div>`;
+                    const logsUrl = '/ui/logs?process=' + encodeURIComponent(r.process);
+                    return `<div><a href="${{logsUrl}}" style="color:#8be9fd" title="View logs">${{escapeHtml(r.process)}}</a> <span style="color:#555">${{dt.toLocaleString()}}</span> <span style="color:#666">(${{timeAgo(r.timestamp)}})</span></div>`;
                 }}).join('') + '</div>';
             }}
 
@@ -973,9 +976,21 @@ fn build_logs(name: &str) -> String {
         }}
     }}
 
-    loadProcesses();
-    connectWs();
-    loadRecentLines();
+    // Check for ?process= query param (linked from dashboard restart history)
+    const urlParams = new URLSearchParams(window.location.search);
+    const preselect = urlParams.get('process');
+
+    loadProcesses().then(() => {{
+        if (preselect) {{
+            const sel = document.getElementById('process');
+            for (const opt of sel.options) {{
+                if (opt.value === preselect) {{ opt.selected = true; break; }}
+            }}
+            loadRuns();
+        }}
+        connectWs();
+        loadRecentLines();
+    }});
 
     document.getElementById('process').onchange = () => {{
         loadRuns();
