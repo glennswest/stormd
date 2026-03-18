@@ -13,6 +13,8 @@
 - **feat:** HEALTHCHECK instruction added to Containerfile (uses `/stormd --healthcheck`)
 - **feat:** Containerfile.x86_64 for x86_64-unknown-linux-musl builds
 - **feat:** OCI image labels (title, description, source, vendor) on container images
+- **feat:** Multi-stage Containerfile — busybox symlinks baked into image at build time (63 commands in /bin, /usr/bin, /sbin, /usr/sbin)
+- **feat:** `stormdbase` container image — 12.7 MB scratch image with all busybox commands pre-linked
 - **feat:** Web UI dashboard: liveness column in process table + liveness stat card
 - **feat:** Busybox multi-call binary — stormd serves as ls, cat, grep, ping, curl, etc. via argv[0] symlinks
 - **feat:** 63 standalone commands available: file ops, network, system, text processing
