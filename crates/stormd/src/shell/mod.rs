@@ -358,6 +358,146 @@ fn cmd_help() -> ShellOutput {
     )
 }
 
+/// Commands that can run standalone (no AppState / supervisor).
+pub const STANDALONE_COMMANDS: &[&str] = &[
+    // File operations
+    "ls", "dir", "cat", "head", "tail", "cp", "mv", "rm", "mkdir", "touch", "chmod", "chown",
+    "find", "ln", "stat", "pwd", "wc", "du", "readlink", "file", "sha256sum", "tee", "md5sum",
+    // Network
+    "ifconfig", "ip", "ping", "curl", "wget", "netstat", "ss", "nslookup", "dig", "hostname",
+    "route",
+    // System
+    "mount", "df", "free", "uname", "date", "id", "kill", "printenv", "export", "unset",
+    "sleep", "echo", "env", "whoami", "which", "type", "lsof", "true", "false", "clear",
+    // Text processing
+    "sort", "uniq", "cut", "tr", "sed", "rev", "base64", "xxd", "grep",
+];
+
+/// Execute a command in standalone mode (busybox multi-call binary).
+/// Returns exit code (0 = success).
+pub async fn execute_standalone(cmd: &str, args: &[String]) -> i32 {
+    use std::io::{IsTerminal, Read};
+
+    // Read piped stdin if not a terminal
+    let piped_input = if !std::io::stdin().is_terminal() {
+        let mut input = String::new();
+        if std::io::stdin().read_to_string(&mut input).is_ok() && !input.is_empty() {
+            Some(input)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let container_name = std::env::var("HOSTNAME").unwrap_or_else(|_| "stormd".into());
+
+    let output = match cmd {
+        // File operations
+        "ls" | "dir" => file::cmd_ls(&args_str).await,
+        "cat" => file::cmd_cat(&args_str, piped_input.as_deref()).await,
+        "head" => file::cmd_head(&args_str, piped_input.as_deref()).await,
+        "tail" => file::cmd_tail(&args_str, piped_input.as_deref()).await,
+        "cp" => file::cmd_cp(&args_str).await,
+        "mv" => file::cmd_mv(&args_str).await,
+        "rm" => file::cmd_rm(&args_str).await,
+        "mkdir" => file::cmd_mkdir(&args_str).await,
+        "touch" => file::cmd_touch(&args_str).await,
+        "chmod" => file::cmd_chmod(&args_str).await,
+        "chown" => file::cmd_chown(&args_str).await,
+        "find" => file::cmd_find(&args_str).await,
+        "ln" => file::cmd_ln(&args_str).await,
+        "stat" => file::cmd_stat(&args_str).await,
+        "pwd" => file::cmd_pwd(),
+        "wc" => file::cmd_wc(&args_str, piped_input.as_deref()).await,
+        "du" => file::cmd_du(&args_str).await,
+        "readlink" => file::cmd_readlink(&args_str).await,
+        "file" => file::cmd_file_type(&args_str).await,
+        "sha256sum" | "md5sum" => file::cmd_sha256sum(&args_str, piped_input.as_deref()).await,
+        "tee" => file::cmd_tee(&args_str, piped_input.as_deref()).await,
+
+        // Network
+        "ifconfig" => net::cmd_ifconfig(&args_str).await,
+        "ip" => net::cmd_ip(&args_str).await,
+        "ping" => net::cmd_ping(&args_str).await,
+        "curl" | "wget" => net::cmd_curl(&args_str).await,
+        "netstat" => net::cmd_netstat(&args_str).await,
+        "ss" => net::cmd_ss(&args_str).await,
+        "nslookup" | "dig" => net::cmd_nslookup(&args_str).await,
+        "hostname" => net::cmd_hostname(&container_name, &args_str),
+        "route" => net::cmd_route(&args_str).await,
+
+        // System
+        "mount" => sys::cmd_mount(),
+        "df" => sys::cmd_df(&args_str),
+        "free" => sys::cmd_free(&args_str),
+        "uname" => sys::cmd_uname(&args_str),
+        "date" => sys::cmd_date(),
+        "id" => sys::cmd_id(),
+        "kill" => sys::cmd_kill(&args_str),
+        "printenv" => sys::cmd_printenv(&args_str),
+        "export" => sys::cmd_export(&args_str),
+        "unset" => sys::cmd_unset(&args_str),
+        "sleep" => sys::cmd_sleep(&args_str).await,
+        "echo" => sys::cmd_echo(&args_str),
+        "env" => sys::cmd_env(),
+        "whoami" => sys::cmd_whoami(),
+        "which" => sys::cmd_which(&args_str),
+        "type" => sys::cmd_type(&args_str),
+        "lsof" => sys::cmd_lsof(),
+        "true" => ShellOutput::text(""),
+        "false" => { print!(""); return 1; }
+        "clear" => ShellOutput::text("\x1b[2J\x1b[H"),
+
+        // Text processing
+        "sort" => text::cmd_sort(&args_str, piped_input.as_deref()).await,
+        "uniq" => text::cmd_uniq(&args_str, piped_input.as_deref()).await,
+        "cut" => text::cmd_cut(&args_str, piped_input.as_deref()).await,
+        "tr" => text::cmd_tr(&args_str, piped_input.as_deref()).await,
+        "sed" => text::cmd_sed(&args_str, piped_input.as_deref()).await,
+        "rev" => text::cmd_rev(piped_input.as_deref()),
+        "base64" => text::cmd_base64(&args_str, piped_input.as_deref()),
+        "xxd" => text::cmd_xxd(piped_input.as_deref()),
+        "grep" => text::cmd_grep(&args_str, piped_input.as_deref()).await,
+
+        _ => {
+            eprintln!("{}: not available in standalone mode (use stormd shell)", cmd);
+            return 127;
+        }
+    };
+
+    // Convert \r\n to \n for real terminal output
+    let text = output.text.replace("\r\n", "\n");
+    print!("{}", text);
+    0
+}
+
+/// Install symlinks for all standalone commands into the given directory.
+/// Creates the directory if it doesn't exist. Returns number of links created.
+pub fn install_symlinks(dir: &std::path::Path, binary_path: &std::path::Path) -> std::io::Result<usize> {
+    std::fs::create_dir_all(dir)?;
+    let mut count = 0;
+    for cmd in STANDALONE_COMMANDS {
+        let link_path = dir.join(cmd);
+        // Skip if already exists
+        if link_path.exists() || link_path.symlink_metadata().is_ok() {
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(binary_path, &link_path)?;
+            count += 1;
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = link_path;
+            let _ = binary_path;
+        }
+    }
+    Ok(count)
+}
+
 pub(crate) fn format_duration(secs: i64) -> String {
     let days = secs / 86400;
     let hours = (secs % 86400) / 3600;

@@ -30,10 +30,34 @@ struct Cli {
     /// Port to check for healthcheck (default: 9080)
     #[arg(long, default_value = "9080")]
     healthcheck_port: u16,
+
+    /// Install symlinks for busybox-style commands into the given directory.
+    /// Example: stormd --install /bin
+    #[arg(long, value_name = "DIR")]
+    install: Option<PathBuf>,
+
+    /// List all available standalone commands
+    #[arg(long)]
+    list_commands: bool,
 }
 
 #[tokio::main]
 async fn main() {
+    // --- Busybox multi-call dispatch ---
+    // Check argv[0] BEFORE clap parsing. If invoked as a known command
+    // (via symlink), run it directly and exit.
+    let argv0 = std::env::args().next().unwrap_or_default();
+    let cmd_name = std::path::Path::new(&argv0)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    if cmd_name != "stormd" && stormd::shell::STANDALONE_COMMANDS.contains(&cmd_name.as_str()) {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let exit_code = stormd::shell::execute_standalone(&cmd_name, &args).await;
+        std::process::exit(exit_code);
+    }
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -44,6 +68,29 @@ async fn main() {
         .init();
 
     let cli = Cli::parse();
+
+    // --list-commands: print all standalone commands and exit
+    if cli.list_commands {
+        for cmd in stormd::shell::STANDALONE_COMMANDS {
+            println!("{}", cmd);
+        }
+        std::process::exit(0);
+    }
+
+    // --install DIR: create symlinks for all standalone commands
+    if let Some(ref dir) = cli.install {
+        let binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("/stormd"));
+        match stormd::shell::install_symlinks(dir, &binary) {
+            Ok(n) => {
+                eprintln!("stormd: installed {} command symlinks in {}", n, dir.display());
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("stormd: failed to install symlinks: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     // Healthcheck mode — probe the running instance and exit
     if cli.healthcheck {
@@ -66,6 +113,16 @@ async fn main() {
     }
 
     info!(config = %cli.config.display(), "stormd starting");
+
+    // Auto-install busybox symlinks on startup (idempotent, non-fatal)
+    let binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("/stormd"));
+    for dir in &["/bin", "/usr/bin", "/sbin", "/usr/sbin"] {
+        let dir_path = std::path::Path::new(dir);
+        if let Err(e) = stormd::shell::install_symlinks(dir_path, &binary) {
+            tracing::debug!(dir = %dir, error = %e, "skipped symlink install");
+        }
+    }
+    info!("busybox symlinks installed");
 
     // Load configuration
     let config = match Config::load(&cli.config) {

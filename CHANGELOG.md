@@ -14,6 +14,12 @@
 - **feat:** Containerfile.x86_64 for x86_64-unknown-linux-musl builds
 - **feat:** OCI image labels (title, description, source, vendor) on container images
 - **feat:** Web UI dashboard: liveness column in process table + liveness stat card
+- **feat:** Busybox multi-call binary — stormd serves as ls, cat, grep, ping, curl, etc. via argv[0] symlinks
+- **feat:** 63 standalone commands available: file ops, network, system, text processing
+- **feat:** `--install /bin` flag creates symlinks for all standalone commands
+- **feat:** `--list-commands` flag prints all available standalone commands
+- **feat:** Auto-installs busybox symlinks into /bin, /usr/bin, /sbin, /usr/sbin on daemon startup
+- **feat:** Piped stdin supported in standalone mode (e.g., `echo foo | /bin/sort`)
 - **feat:** Busybox-style shell — 80+ built-in commands for scratch containers
 - **feat:** File operations: ls, cat, head, tail, cp, mv, rm, mkdir, touch, chmod, chown, find, ln, stat, pwd, wc, du, readlink, file, sha256sum, tee
 - **feat:** Network commands: ifconfig, ip addr/link/route, ping, curl/wget, netstat/ss, nslookup, hostname, route
