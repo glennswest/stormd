@@ -78,6 +78,8 @@ pub struct ProcessConfig {
     pub startup_delay_secs: u64,
     #[serde(default)]
     pub ready_probe: Option<ReadyProbe>,
+    #[serde(default)]
+    pub liveness: Option<LivenessProbe>,
     #[serde(default = "default_true")]
     pub capture_stdout: bool,
     #[serde(default = "default_true")]
@@ -106,6 +108,27 @@ pub enum ReadyProbe {
     Http { url: String, interval_secs: u64 },
     Tcp { port: u16, interval_secs: u64 },
     Exec { command: String, interval_secs: u64 },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ProbeType {
+    Http { url: String },
+    Tcp { port: u16 },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LivenessProbe {
+    #[serde(flatten)]
+    pub probe: ProbeType,
+    #[serde(default = "default_liveness_interval")]
+    pub interval_secs: u64,
+    #[serde(default = "default_liveness_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_failure_threshold")]
+    pub failure_threshold: u32,
+    #[serde(default = "default_initial_delay")]
+    pub initial_delay_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -310,6 +333,10 @@ fn default_api_bind() -> String { "0.0.0.0:9080".to_string() }
 fn default_ssh_bind() -> String { "0.0.0.0:22".to_string() }
 fn default_ssh_host_key() -> PathBuf { PathBuf::from("/etc/stormd/host_key") }
 fn default_ssh_password() -> String { "stormd".to_string() }
+fn default_liveness_interval() -> u64 { 10 }
+fn default_liveness_timeout() -> u64 { 5 }
+fn default_failure_threshold() -> u32 { 1 }
+fn default_initial_delay() -> u64 { 5 }
 fn default_true() -> bool { true }
 
 impl Config {

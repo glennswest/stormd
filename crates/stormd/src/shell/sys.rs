@@ -458,6 +458,14 @@ pub async fn cmd_systemctl(state: &Arc<AppState>, args: &[&str]) -> ShellOutput 
                         if s.restarts > 0 {
                             out.push_str(&format!("  Restarts: {}\r\n", s.restarts));
                         }
+                        if s.has_liveness {
+                            let liveness_str = if s.liveness_failures == 0 {
+                                "\x1b[32mhealthy\x1b[0m".to_string()
+                            } else {
+                                format!("\x1b[31m{} consecutive failure(s)\x1b[0m", s.liveness_failures)
+                            };
+                            out.push_str(&format!("  Liveness: {}\r\n", liveness_str));
+                        }
                         ShellOutput::text(out)
                     }
                     Err(e) => ShellOutput::text(format!(

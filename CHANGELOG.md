@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### 2026-03-18
+- **feat:** Liveness probe for process health checking — HTTP and TCP probes with configurable interval, timeout, failure threshold, and initial delay
+- **feat:** Automatic restart on liveness failure — SIGUSR1 grace period, then SIGKILL if still hung
+- **feat:** LivenessCheckFailed event emitted on probe failure threshold breach
+- **feat:** `ps` and `systemctl status` show liveness probe status and failure count
 - **feat:** Busybox-style shell — 80+ built-in commands for scratch containers
 - **feat:** File operations: ls, cat, head, tail, cp, mv, rm, mkdir, touch, chmod, chown, find, ln, stat, pwd, wc, du, readlink, file, sha256sum, tee
 - **feat:** Network commands: ifconfig, ip addr/link/route, ping, curl/wget, netstat/ss, nslookup, hostname, route

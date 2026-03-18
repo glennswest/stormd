@@ -37,6 +37,7 @@ pub enum EventKind {
     UpdatePivoting,
     UpdateCompleted,
     UpdateFailed,
+    LivenessCheckFailed,
 }
 
 impl std::fmt::Display for EventKind {

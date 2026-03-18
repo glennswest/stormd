@@ -6,11 +6,19 @@ use std::sync::Arc;
 
 pub async fn cmd_ps(state: &Arc<AppState>) -> ShellOutput {
     let statuses = state.supervisor.get_all_statuses().await;
+    let any_liveness = statuses.iter().any(|s| s.has_liveness);
     let mut out = String::new();
-    out.push_str(&format!(
-        "\x1b[1m{:<20} {:<12} {:<8} {:<8} {:<12} {}\x1b[0m\r\n",
-        "PROCESS", "STATE", "PID", "EXIT", "RESTARTS", "UPTIME"
-    ));
+    if any_liveness {
+        out.push_str(&format!(
+            "\x1b[1m{:<20} {:<12} {:<8} {:<8} {:<12} {:<10} {}\x1b[0m\r\n",
+            "PROCESS", "STATE", "PID", "EXIT", "RESTARTS", "LIVENESS", "UPTIME"
+        ));
+    } else {
+        out.push_str(&format!(
+            "\x1b[1m{:<20} {:<12} {:<8} {:<8} {:<12} {}\x1b[0m\r\n",
+            "PROCESS", "STATE", "PID", "EXIT", "RESTARTS", "UPTIME"
+        ));
+    }
     for s in &statuses {
         let state_color = match s.state {
             ProcessState::Running => "\x1b[32m",
@@ -31,16 +39,39 @@ pub async fn cmd_ps(state: &Arc<AppState>) -> ShellOutput {
             .uptime_secs
             .map(super::format_duration)
             .unwrap_or_else(|| "-".into());
-        out.push_str(&format!(
-            "{:<20} {}{:<12}\x1b[0m {:<8} {:<8} {:<12} {}\r\n",
-            s.name,
-            state_color,
-            format!("{:?}", s.state).to_lowercase(),
-            pid,
-            exit,
-            s.restarts,
-            uptime
-        ));
+        if any_liveness {
+            let liveness = if s.has_liveness {
+                if s.liveness_failures == 0 {
+                    "\x1b[32mok\x1b[0m".to_string()
+                } else {
+                    format!("\x1b[31mfail:{}\x1b[0m", s.liveness_failures)
+                }
+            } else {
+                "-".to_string()
+            };
+            out.push_str(&format!(
+                "{:<20} {}{:<12}\x1b[0m {:<8} {:<8} {:<12} {:<10} {}\r\n",
+                s.name,
+                state_color,
+                format!("{:?}", s.state).to_lowercase(),
+                pid,
+                exit,
+                s.restarts,
+                liveness,
+                uptime
+            ));
+        } else {
+            out.push_str(&format!(
+                "{:<20} {}{:<12}\x1b[0m {:<8} {:<8} {:<12} {}\r\n",
+                s.name,
+                state_color,
+                format!("{:?}", s.state).to_lowercase(),
+                pid,
+                exit,
+                s.restarts,
+                uptime
+            ));
+        }
     }
     ShellOutput::text(out)
 }

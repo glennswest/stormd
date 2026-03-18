@@ -342,6 +342,7 @@ impl Updater {
                 depends_on: Vec::new(),
                 startup_delay_secs: 0,
                 ready_probe: None,
+                liveness: None,
                 capture_stdout: true,
                 capture_stderr: true,
             }

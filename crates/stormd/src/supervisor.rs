@@ -1,9 +1,10 @@
-use crate::config::{FailureAction, ProcessConfig};
+use crate::config::{FailureAction, LivenessProbe, ProbeType, ProcessConfig};
 use crate::events::{EventBus, EventKind};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use stormlog::StormLog;
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex, RwLock};
@@ -33,6 +34,8 @@ pub struct ProcessStatus {
     pub crashes: u32,
     pub restart_timestamps: Vec<DateTime<Utc>>,
     pub uptime_secs: Option<i64>,
+    pub liveness_failures: u32,
+    pub has_liveness: bool,
 }
 
 struct ManagedProcess {
@@ -47,6 +50,7 @@ struct ManagedProcess {
     restart_timestamps: Vec<DateTime<Utc>>,
     kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
     stdin_tx: Option<tokio::sync::mpsc::Sender<String>>,
+    liveness_failures: u32,
 }
 
 impl ManagedProcess {
@@ -71,6 +75,8 @@ impl ManagedProcess {
             crashes: self.crashes,
             restart_timestamps: self.restart_timestamps.clone(),
             uptime_secs: uptime,
+            liveness_failures: self.liveness_failures,
+            has_liveness: self.config.liveness.is_some(),
         }
     }
 
@@ -135,6 +141,7 @@ impl Supervisor {
                 restart_timestamps: Vec::new(),
                 kill_tx: None,
                 stdin_tx: None,
+                liveness_failures: 0,
             }));
             self.processes.write().await.insert(cfg.name.clone(), proc);
         }
@@ -168,7 +175,7 @@ impl Supervisor {
         }
     }
 
-    async fn spawn_process(&self, name: &str) -> anyhow::Result<()> {
+    async fn spawn_process(self: &Arc<Self>, name: &str) -> anyhow::Result<()> {
         let procs = self.processes.read().await;
         let proc_arc = procs
             .get(name)
@@ -264,10 +271,70 @@ impl Supervisor {
             }
         });
 
+        // Spawn liveness monitor if configured
+        if let Some(liveness) = &config.liveness {
+            let supervisor = Arc::clone(self);
+            let name = config.name.clone();
+            let liveness = liveness.clone();
+            let proc_arc_liveness = proc_arc.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(liveness.initial_delay_secs)).await;
+                loop {
+                    tokio::time::sleep(Duration::from_secs(liveness.interval_secs)).await;
+
+                    // Check if process is still running
+                    let state = {
+                        let proc = proc_arc_liveness.lock().await;
+                        proc.state.clone()
+                    };
+                    if state != ProcessState::Running {
+                        break;
+                    }
+
+                    let ok = execute_probe(&liveness).await;
+                    if ok {
+                        // Reset failure counter
+                        let mut proc = proc_arc_liveness.lock().await;
+                        proc.liveness_failures = 0;
+                    } else {
+                        let failures = {
+                            let mut proc = proc_arc_liveness.lock().await;
+                            proc.liveness_failures += 1;
+                            proc.liveness_failures
+                        };
+                        warn!(process=%name, failures, "liveness check failed");
+
+                        if failures >= liveness.failure_threshold {
+                            error!(process=%name, "liveness threshold exceeded — sending SIGUSR1");
+                            let _ = supervisor.signal_process(&name, "SIGUSR1").await;
+                            supervisor.event_bus.emit_simple(
+                                EventKind::LivenessCheckFailed,
+                                Some(name.clone()),
+                            ).await;
+
+                            // Wait 5 seconds for graceful death
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+
+                            // Check if still running
+                            let still_running = {
+                                let proc = proc_arc_liveness.lock().await;
+                                proc.state == ProcessState::Running
+                            };
+                            if still_running {
+                                error!(process=%name, "still running after SIGUSR1 — SIGKILL");
+                                let _ = supervisor.signal_process(&name, "SIGKILL").await;
+                            }
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+
         Ok(())
     }
 
-    async fn handle_exit(&self, name: &str, exit_code: Option<i32>) {
+    async fn handle_exit(self: &Arc<Self>, name: &str, exit_code: Option<i32>) {
         let procs = self.processes.read().await;
         let proc_arc = match procs.get(name) {
             Some(p) => p.clone(),
@@ -444,7 +511,7 @@ impl Supervisor {
         Ok(())
     }
 
-    pub async fn restart_process(&self, name: &str) -> anyhow::Result<()> {
+    pub async fn restart_process(self: &Arc<Self>, name: &str) -> anyhow::Result<()> {
         {
             let procs = self.processes.read().await;
             if let Some(proc_arc) = procs.get(name) {
@@ -460,7 +527,7 @@ impl Supervisor {
         self.spawn_process(name).await
     }
 
-    pub async fn start_process(&self, name: &str) -> anyhow::Result<()> {
+    pub async fn start_process(self: &Arc<Self>, name: &str) -> anyhow::Result<()> {
         {
             let procs = self.processes.read().await;
             let proc_arc = procs
@@ -558,6 +625,7 @@ impl Supervisor {
             restart_timestamps: Vec::new(),
             kill_tx: None,
             stdin_tx: None,
+            liveness_failures: 0,
         }));
         self.processes.write().await.insert(config.name.clone(), proc);
     }
@@ -566,5 +634,56 @@ impl Supervisor {
     pub async fn process_names(&self) -> Vec<String> {
         let procs = self.processes.read().await;
         procs.keys().cloned().collect()
+    }
+
+    /// Send a signal to a running process by name.
+    pub async fn signal_process(&self, name: &str, signal: &str) -> anyhow::Result<()> {
+        let procs = self.processes.read().await;
+        let proc_arc = procs
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("process not found: {}", name))?;
+        drop(procs);
+
+        let proc = proc_arc.lock().await;
+        let pid = proc.pid.ok_or_else(|| anyhow::anyhow!("process has no pid"))?;
+
+        #[cfg(target_os = "linux")]
+        {
+            use nix::sys::signal::Signal;
+            let sig = match signal {
+                "SIGUSR1" | "USR1" => Signal::SIGUSR1,
+                "SIGKILL" | "KILL" => Signal::SIGKILL,
+                "SIGTERM" | "TERM" => Signal::SIGTERM,
+                _ => anyhow::bail!("unsupported signal: {}", signal),
+            };
+            nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), sig)?;
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (pid, signal);
+        }
+
+        Ok(())
+    }
+}
+
+async fn execute_probe(probe: &LivenessProbe) -> bool {
+    let timeout = Duration::from_secs(probe.timeout_secs);
+    match &probe.probe {
+        ProbeType::Http { url } => {
+            match tokio::time::timeout(timeout, reqwest::get(url)).await {
+                Ok(Ok(resp)) => resp.status().is_success() || resp.status().is_redirection(),
+                _ => false,
+            }
+        }
+        ProbeType::Tcp { port } => {
+            let addr = format!("127.0.0.1:{}", port);
+            matches!(
+                tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr)).await,
+                Ok(Ok(_))
+            )
+        }
     }
 }
