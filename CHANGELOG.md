@@ -7,6 +7,13 @@
 - **feat:** Automatic restart on liveness failure — SIGUSR1 grace period, then SIGKILL if still hung
 - **feat:** LivenessCheckFailed event emitted on probe failure threshold breach
 - **feat:** `ps` and `systemctl status` show liveness probe status and failure count
+- **feat:** `liveness [name]` shell command — shows probe config, status, and failure counts
+- **feat:** `status` command shows liveness health summary (N/M healthy)
+- **feat:** `--healthcheck` CLI flag — probes running instance, exits 0/1 for Docker HEALTHCHECK in scratch
+- **feat:** HEALTHCHECK instruction added to Containerfile (uses `/stormd --healthcheck`)
+- **feat:** Containerfile.x86_64 for x86_64-unknown-linux-musl builds
+- **feat:** OCI image labels (title, description, source, vendor) on container images
+- **feat:** Web UI dashboard: liveness column in process table + liveness stat card
 - **feat:** Busybox-style shell — 80+ built-in commands for scratch containers
 - **feat:** File operations: ls, cat, head, tail, cp, mv, rm, mkdir, touch, chmod, chown, find, ln, stat, pwd, wc, du, readlink, file, sha256sum, tee
 - **feat:** Network commands: ifconfig, ip addr/link/route, ping, curl/wget, netstat/ss, nslookup, hostname, route
