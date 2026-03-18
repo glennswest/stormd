@@ -227,6 +227,7 @@ fn build_dashboard(name: &str) -> String {
                         <th>PID</th>
                         <th>Exit Code</th>
                         <th>Restarts</th>
+                        <th>Liveness</th>
                         <th>Last Restart</th>
                         <th>Uptime</th>
                         <th>Actions</th>
@@ -480,10 +481,12 @@ fn build_dashboard(name: &str) -> String {
             const restarts = procs.reduce((sum, p) => sum + (p.restarts || 0), 0);
             const mem = status.stats && status.stats.memory;
             const uptimeSecs = status.stats ? status.stats.uptime_secs : null;
+            const livenessProbes = procs.filter(p => p.has_liveness).length;
+            const livenessHealthy = procs.filter(p => p.has_liveness && p.liveness_failures === 0 && (p.state || '').toLowerCase() === 'running').length;
 
             const avgUptime = (uptimeSecs != null && total > 0) ? Math.floor(uptimeSecs / (restarts + total)) : null;
 
-            document.getElementById('stats').innerHTML = `
+            let statsHtml = `
                 <div class="stat-card"><div class="label">Processes</div><div class="value cyan">${{total}}</div></div>
                 <div class="stat-card"><div class="label">Running</div><div class="value green">${{running}}</div></div>
                 <div class="stat-card"><div class="label">Uptime</div><div class="value green">${{formatUptime(uptimeSecs)}}</div></div>
@@ -492,17 +495,26 @@ fn build_dashboard(name: &str) -> String {
                 <div class="stat-card"><div class="label">Memory (RSS)</div><div class="value green">${{mem ? formatBytes(mem.rss_bytes) : '-'}}</div></div>
                 <div class="stat-card"><div class="label">Container</div><div class="value ${{status.container_failed ? 'red' : 'green'}}">${{status.container_failed ? 'FAILED' : 'HEALTHY'}}</div></div>
             `;
+            if (livenessProbes > 0) {{
+                const lvColor = livenessHealthy === livenessProbes ? 'green' : 'red';
+                statsHtml += `<div class="stat-card"><div class="label">Liveness</div><div class="value ${{lvColor}}">${{livenessHealthy}}/${{livenessProbes}}</div></div>`;
+            }}
+            document.getElementById('stats').innerHTML = statsHtml;
 
             const tbody = document.getElementById('procs');
             tbody.innerHTML = procs.map(p => {{
                 const rts = p.restart_timestamps || [];
                 const lastRestart = rts.length > 0 ? timeAgo(rts[rts.length - 1]) : '-';
+                const liveness = !p.has_liveness ? '<span style="color:#555">-</span>' :
+                    p.liveness_failures === 0 ? '<span class="badge badge-green">healthy</span>' :
+                    '<span class="badge badge-red">fail:' + p.liveness_failures + '</span>';
                 return `<tr>
                     <td class="mono">${{escapeHtml(p.name)}}</td>
                     <td>${{stateBadge(p.state)}}</td>
                     <td class="mono">${{p.pid || '-'}}</td>
                     <td class="mono">${{p.exit_code != null ? p.exit_code : '-'}}</td>
                     <td>${{p.restarts || 0}}</td>
+                    <td>${{liveness}}</td>
                     <td style="font-size:12px;color:#888">${{lastRestart}}</td>
                     <td>${{formatDuration(p.uptime_secs)}}</td>
                     <td class="process-actions">

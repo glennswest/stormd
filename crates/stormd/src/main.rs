@@ -21,6 +21,15 @@ struct Cli {
     /// Path to configuration file
     #[arg(short, long, default_value = "/etc/stormd/config.toml")]
     config: PathBuf,
+
+    /// Run a health check against the running stormd instance and exit.
+    /// Exits 0 if healthy, 1 if unhealthy. For use with Docker HEALTHCHECK.
+    #[arg(long)]
+    healthcheck: bool,
+
+    /// Port to check for healthcheck (default: 9080)
+    #[arg(long, default_value = "9080")]
+    healthcheck_port: u16,
 }
 
 #[tokio::main]
@@ -35,6 +44,26 @@ async fn main() {
         .init();
 
     let cli = Cli::parse();
+
+    // Healthcheck mode — probe the running instance and exit
+    if cli.healthcheck {
+        let url = format!("http://127.0.0.1:{}/api/v1/health", cli.healthcheck_port);
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
+        match client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => std::process::exit(0),
+            Ok(resp) => {
+                eprintln!("healthcheck failed: HTTP {}", resp.status());
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("healthcheck failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     info!(config = %cli.config.display(), "stormd starting");
 
@@ -156,6 +185,7 @@ async fn main() {
         allow_signal: config.debug.allow_signal,
         allow_stdin: config.debug.allow_stdin,
         log_dir: config.general.log_dir.clone(),
+        container_name: config.general.name.clone(),
     });
     let ssh_container = config.general.name.clone();
     tokio::spawn(async move {
@@ -174,6 +204,7 @@ async fn main() {
         allow_signal: config.debug.allow_signal,
         allow_stdin: config.debug.allow_stdin,
         log_dir: config.general.log_dir.clone(),
+        container_name: config.general.name.clone(),
     });
 
     let router = api::build_router(app_state);

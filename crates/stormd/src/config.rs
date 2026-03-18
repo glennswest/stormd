@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use stormlog::types::StormLogConfig;
@@ -110,14 +110,14 @@ pub enum ReadyProbe {
     Exec { command: String, interval_secs: u64 },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ProbeType {
     Http { url: String },
     Tcp { port: u16 },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LivenessProbe {
     #[serde(flatten)]
     pub probe: ProbeType,

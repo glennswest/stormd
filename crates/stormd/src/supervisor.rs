@@ -36,6 +36,7 @@ pub struct ProcessStatus {
     pub uptime_secs: Option<i64>,
     pub liveness_failures: u32,
     pub has_liveness: bool,
+    pub liveness_config: Option<crate::config::LivenessProbe>,
 }
 
 struct ManagedProcess {
@@ -77,6 +78,7 @@ impl ManagedProcess {
             uptime_secs: uptime,
             liveness_failures: self.liveness_failures,
             has_liveness: self.config.liveness.is_some(),
+            liveness_config: self.config.liveness.clone(),
         }
     }
 

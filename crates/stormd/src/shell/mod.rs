@@ -181,6 +181,7 @@ pub(crate) async fn execute_single(
             }
         }
         "cron" => proc::cmd_cron(state).await,
+        "liveness" => proc::cmd_liveness(state, args).await,
         "status" => proc::cmd_status(state, container_name).await,
         "uptime" => proc::cmd_uptime(container_name, started_at),
 
@@ -281,7 +282,7 @@ pub(crate) fn is_builtin(cmd: &str) -> bool {
 }
 
 const ALL_COMMANDS: &[&str] = &[
-    "ps", "top", "start", "stop", "restart", "attach", "logs", "grep", "dmesg", "cron", "status",
+    "ps", "top", "start", "stop", "restart", "attach", "logs", "grep", "dmesg", "cron", "liveness", "status",
     "uptime", "ls", "dir", "cat", "head", "tail", "cp", "mv", "rm", "mkdir", "touch", "chmod",
     "chown", "find", "ln", "stat", "pwd", "wc", "du", "readlink", "file", "sha256sum", "tee",
     "ifconfig", "ip", "ping", "curl", "wget", "netstat", "ss", "nslookup", "dig", "hostname",
@@ -301,6 +302,7 @@ fn cmd_help() -> ShellOutput {
          \x20 stop <name>           Stop a process\r\n\
          \x20 restart <name>        Restart a process\r\n\
          \x20 attach <name>         Attach to process terminal\r\n\
+         \x20 liveness [name]       Show liveness probe config/status\r\n\
          \x20 systemctl <cmd>       Systemd-style process control\r\n\
          \r\n\
          \x1b[1mLogs:\x1b[0m\r\n\
@@ -411,7 +413,7 @@ pub async fn complete(partial: &str, state: &Arc<AppState>) -> Vec<String> {
     // Process name completion for supervisor commands
     if matches!(
         cmd,
-        "start" | "stop" | "restart" | "attach" | "logs"
+        "start" | "stop" | "restart" | "attach" | "logs" | "liveness"
     ) || (cmd == "systemctl" && parts.len() >= 3)
     {
         let prefix = parts.last().copied().unwrap_or("");
