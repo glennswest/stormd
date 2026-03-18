@@ -226,7 +226,6 @@ fn build_dashboard(name: &str) -> String {
                         <th>State</th>
                         <th>PID</th>
                         <th>Exit Code</th>
-                        <th>Crashes</th>
                         <th>Restarts</th>
                         <th>Last Restart</th>
                         <th>Uptime</th>
@@ -316,6 +315,20 @@ fn build_dashboard(name: &str) -> String {
         if (h > 0) return `${{h}}h ${{m}}m ${{s}}s`;
         if (m > 0) return `${{m}}m ${{s}}s`;
         return `${{s}}s`;
+    }}
+
+    function formatUptime(secs) {{
+        if (secs == null) return '-';
+        const y = Math.floor(secs / 31536000);
+        const d = Math.floor((secs % 31536000) / 86400);
+        const h = Math.floor((secs % 86400) / 3600);
+        const m = Math.floor((secs % 3600) / 60);
+        const parts = [];
+        if (y > 0) parts.push(y + (y === 1 ? ' year' : ' years'));
+        if (d > 0) parts.push(d + (d === 1 ? ' day' : ' days'));
+        if (h > 0) parts.push(h + (h === 1 ? ' hour' : ' hours'));
+        if (parts.length === 0) parts.push(m + (m === 1 ? ' min' : ' mins'));
+        return parts.join(', ');
     }}
 
     function timeAgo(ts) {{
@@ -464,14 +477,14 @@ fn build_dashboard(name: &str) -> String {
 
             const total = procs.length;
             const running = procs.filter(p => (p.state || '').toLowerCase() === 'running').length;
-            const crashes = procs.reduce((sum, p) => sum + (p.crashes || 0), 0);
             const restarts = procs.reduce((sum, p) => sum + (p.restarts || 0), 0);
             const mem = status.stats && status.stats.memory;
+            const uptimeSecs = status.stats ? status.stats.uptime_secs : null;
 
             document.getElementById('stats').innerHTML = `
                 <div class="stat-card"><div class="label">Processes</div><div class="value cyan">${{total}}</div></div>
                 <div class="stat-card"><div class="label">Running</div><div class="value green">${{running}}</div></div>
-                <div class="stat-card"><div class="label">Crashes</div><div class="value ${{crashes > 0 ? 'red' : 'green'}}">${{crashes}}</div></div>
+                <div class="stat-card"><div class="label">Uptime</div><div class="value green">${{formatUptime(uptimeSecs)}}</div></div>
                 <div class="stat-card"><div class="label">Total Restarts</div><div class="value yellow">${{restarts}}</div></div>
                 <div class="stat-card"><div class="label">Memory (RSS)</div><div class="value green">${{mem ? formatBytes(mem.rss_bytes) : '-'}}</div></div>
                 <div class="stat-card"><div class="label">Container</div><div class="value ${{status.container_failed ? 'red' : 'green'}}">${{status.container_failed ? 'FAILED' : 'HEALTHY'}}</div></div>
@@ -486,7 +499,6 @@ fn build_dashboard(name: &str) -> String {
                     <td>${{stateBadge(p.state)}}</td>
                     <td class="mono">${{p.pid || '-'}}</td>
                     <td class="mono">${{p.exit_code != null ? p.exit_code : '-'}}</td>
-                    <td style="color:${{(p.crashes || 0) > 0 ? '#e94560' : '#50fa7b'}}">${{p.crashes || 0}}</td>
                     <td>${{p.restarts || 0}}</td>
                     <td style="font-size:12px;color:#888">${{lastRestart}}</td>
                     <td>${{formatDuration(p.uptime_secs)}}</td>
