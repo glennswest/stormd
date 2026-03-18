@@ -1,3 +1,21 @@
+# Stage 1: Create busybox-style symlinks
+FROM busybox:musl AS symlinks
+COPY target/aarch64-unknown-linux-musl/release/stormd /stormd
+RUN mkdir -p /out/bin /out/usr/bin /out/sbin /out/usr/sbin && \
+    for cmd in \
+      ls dir cat head tail cp mv rm mkdir touch chmod chown \
+      find ln stat pwd wc du readlink file sha256sum tee md5sum \
+      ifconfig ip ping curl wget netstat ss nslookup dig hostname route \
+      mount df free uname date id kill printenv export unset \
+      sleep echo env whoami which type lsof true false clear \
+      sort uniq cut tr sed rev base64 xxd grep; do \
+    ln -s /stormd /out/bin/$cmd; \
+    ln -s /stormd /out/usr/bin/$cmd; \
+    ln -s /stormd /out/sbin/$cmd; \
+    ln -s /stormd /out/usr/sbin/$cmd; \
+    done
+
+# Stage 2: Scratch image with stormd + symlinks
 FROM scratch
 
 LABEL org.opencontainers.image.title="stormd"
@@ -7,6 +25,10 @@ LABEL org.opencontainers.image.vendor="stormd"
 
 COPY target/aarch64-unknown-linux-musl/release/stormd /stormd
 COPY target/aarch64-unknown-linux-musl/release/stormsh /stormsh
+COPY --from=symlinks /out/bin/ /bin/
+COPY --from=symlinks /out/usr/bin/ /usr/bin/
+COPY --from=symlinks /out/sbin/ /sbin/
+COPY --from=symlinks /out/usr/sbin/ /usr/sbin/
 
 VOLUME /data/minio
 VOLUME /var/log/stormd
