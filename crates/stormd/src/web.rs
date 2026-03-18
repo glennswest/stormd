@@ -719,6 +719,12 @@ fn build_logs(name: &str) -> String {
             <option value="info" selected>Info+</option>
             <option value="debug">Debug</option>
         </select>
+        <label style="font-size:13px;color:#888">Stream:</label>
+        <select id="stream">
+            <option value="">All</option>
+            <option value="stdout">stdout</option>
+            <option value="stderr">stderr</option>
+        </select>
         <input id="search" type="search" placeholder="Search..." style="width:200px">
         <label class="cb"><input type="checkbox" id="follow" checked> Follow</label>
         <button onclick="clearLogs()">Clear</button>
@@ -939,7 +945,9 @@ fn build_logs(name: &str) -> String {
                 }});
                 logsDiv.insertAdjacentHTML('beforeend', '<div style="color:#666;border-top:1px solid #2a2d45;padding:4px 0;margin:4px 0;font-size:11px">--- recent history above, live stream below ---</div>');
                 countEl.textContent = entryCount + ' lines';
-                logsDiv.scrollTop = logsDiv.scrollHeight;
+                if (document.getElementById('follow').checked) {{
+                    logsDiv.scrollTop = logsDiv.scrollHeight;
+                }}
             }}
         }} catch (_) {{}}
     }}
@@ -973,6 +981,12 @@ fn build_logs(name: &str) -> String {
         const search = searchInput.value;
         if (search && !(entry.line || '').includes(search)) return;
 
+        const streamFilter = document.getElementById('stream').value;
+        if (streamFilter && (entry.stream || '') !== streamFilter) return;
+
+        const follow = document.getElementById('follow').checked;
+        const scrollBefore = logsDiv.scrollTop;
+
         const ts = new Date(entry.timestamp).toLocaleTimeString();
         const sc = sevColor(entry.severity);
         const html = '<div class="log-entry" style="' + sc + '"><span style="color:#666">' + escapeHtml(ts) + '</span> <span style="color:#8be9fd">' + escapeHtml(entry.process || '') + '</span> <span style="color:#555">[' + escapeHtml(entry.stream || '') + ']</span> ' + ansiToHtml(entry.line || '') + '</div>';
@@ -981,8 +995,10 @@ fn build_logs(name: &str) -> String {
         entryCount++;
         countEl.textContent = entryCount + ' entries';
 
-        if (document.getElementById('follow').checked) {{
+        if (follow) {{
             logsDiv.scrollTop = logsDiv.scrollHeight;
+        }} else {{
+            logsDiv.scrollTop = scrollBefore;
         }}
 
         while (logsDiv.children.length > 5000) {{
@@ -1061,6 +1077,10 @@ fn build_logs(name: &str) -> String {
     runSelect.onchange = () => {{ switchMode(); }};
     document.getElementById('severity').onchange = () => {{
         if (currentMode === 'live') {{ clearLogs(); connectWs(); }}
+    }};
+    document.getElementById('stream').onchange = () => {{
+        if (currentMode === 'live') {{ clearLogs(); connectWs(); loadRecentLines(); }}
+        else {{ switchMode(); }}
     }};
     searchInput.addEventListener('keyup', (e) => {{
         if (e.key === 'Enter') {{
