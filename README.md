@@ -4,28 +4,87 @@ Container init system for scratch images. A single static binary that replaces s
 
 ## Using stormdbase as a base image
 
-The easiest way to use stormd is to build FROM `stormdbase` — a 12.7 MB scratch image that includes stormd, stormsh, and 63 busybox-style command symlinks pre-installed in `/bin`, `/usr/bin`, `/sbin`, and `/usr/sbin`.
+The easiest way to use stormd is to build `FROM stormdbase` — a multi-arch scratch image (arm64 + amd64) that includes stormd, stormsh, and 63 busybox-style command symlinks pre-installed in `/bin`, `/usr/bin`, `/sbin`, and `/usr/sbin`. The container runtime picks the right architecture automatically.
+
+**Registry:** `registry.gt.lo:5000/stormdbase:latest`
+
+### Example: web service with liveness probe
 
 ```dockerfile
-FROM stormdbase:latest
+FROM registry.gt.lo:5000/stormdbase:latest
 COPY my-app /app/server
 COPY config.toml /etc/stormd/config.toml
 EXPOSE 9080 8080 22
 ENTRYPOINT ["/stormd"]
 ```
 
-That's it. Your final image has a process supervisor, SSH server, web dashboard, REST API, health checks, and a full set of Unix commands — all from a single static binary.
+`config.toml`:
+
+```toml
+[general]
+name = "my-service"
+log_dir = "/var/stormd/logs"
+
+[api]
+bind = "0.0.0.0:9080"
+
+[ssh]
+enabled = true
+bind = "0.0.0.0:22"
+password = "changeme"
+
+[stormlog.terminal]
+rows = 50
+cols = 120
+
+[[process]]
+name = "web"
+command = "/app/server"
+args = ["--port", "8080"]
+on_failure = "restart"
+on_exit = "restart"
+restart_delay_secs = 2
+
+[process.liveness]
+type = "http"
+url = "http://localhost:8080/health"
+interval_secs = 10
+initial_delay_secs = 10
+```
+
+Build and run:
+
+```bash
+podman build --format docker -t my-service .
+podman run -d --name my-service \
+  -p 9080:9080 -p 8080:8080 -p 2222:22 \
+  my-service
+
+# Open dashboard
+open http://localhost:9080/ui/
+
+# SSH in — full shell with ls, cat, grep, curl, ping, etc.
+ssh root@localhost -p 2222
+```
+
+That's it. Your final image has a process supervisor, SSH server, web dashboard, REST API, liveness health checks, and 63 Unix commands — all from a single static binary.
 
 ### Building stormdbase
 
 ```bash
 # ARM64 (Apple Silicon, Raspberry Pi, MikroTik)
 cargo build --release --target aarch64-unknown-linux-musl
-podman build --format docker -t stormdbase -f Containerfile .
+podman build --format docker --platform linux/arm64 -t stormdbase-arm64 -f Containerfile .
 
 # x86_64
 cargo build --release --target x86_64-unknown-linux-musl
-podman build --format docker -t stormdbase -f Containerfile.x86_64 .
+podman build --format docker --platform linux/amd64 -t stormdbase-amd64 -f Containerfile.x86_64 .
+
+# Create multi-arch manifest and push
+podman manifest create stormdbase:latest
+podman manifest add stormdbase:latest localhost/stormdbase-arm64:latest --arch arm64
+podman manifest add stormdbase:latest localhost/stormdbase-amd64:latest --arch amd64
+podman manifest push --all --tls-verify=false stormdbase:latest registry.gt.lo:5000/stormdbase:latest
 ```
 
 ## What it does
