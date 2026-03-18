@@ -28,6 +28,7 @@
 - **feat:** `/api/v1/logs/files/{filename}` endpoint to read specific archived log files
 - **fix:** Mount display filtered to real filesystems only (no pseudo-fs, cgroups, overlays deduplicated)
 - **fix:** Mount display reformatted as table with columns for mount, device, type, used, total, free, usage bar
+- **fix:** Reader tasks awaited (5s timeout) before archiving logs on process exit — no more lost stderr on crash
 
 ## [v0.3.0] — 2026-03-01
 

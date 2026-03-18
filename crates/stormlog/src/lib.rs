@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::sync::{mpsc, Mutex};
-use tracing::{error, info};
+use tokio::task::JoinHandle;
+use tracing::{error, info, warn};
 
 use crate::file::FileLogger;
 use crate::storage::LogStorage;
@@ -34,6 +35,8 @@ pub struct StormLog {
     ingest_rx: Mutex<Option<mpsc::Receiver<LogEntry>>>,
     /// Active run IDs per process — set when spawn_capture is called.
     run_ids: Mutex<HashMap<String, String>>,
+    /// Reader task handles per process — awaited before archiving to ensure all output is captured.
+    reader_tasks: Mutex<HashMap<String, Vec<JoinHandle<()>>>>,
 }
 
 impl StormLog {
@@ -55,6 +58,7 @@ impl StormLog {
             ingest_tx,
             ingest_rx: Mutex::new(Some(ingest_rx)),
             run_ids: Mutex::new(HashMap::new()),
+            reader_tasks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -128,11 +132,13 @@ impl StormLog {
             .with_run_id(&run_id);
         self.write_entry(marker).await;
 
+        let mut handles: Vec<JoinHandle<()>> = Vec::new();
+
         if let Some(stdout) = stdout {
             let this = self.clone();
             let name = process.clone();
             let rid = run_id.clone();
-            tokio::spawn(async move {
+            let h = tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
                 let mut buf = [0u8; 4096];
                 loop {
@@ -163,13 +169,14 @@ impl StormLog {
                     .with_run_id(&rid);
                 this.write_entry(end).await;
             });
+            handles.push(h);
         }
 
         if let Some(stderr) = stderr {
             let this = self.clone();
-            let name = process;
-            let rid = run_id;
-            tokio::spawn(async move {
+            let name = process.clone();
+            let rid = run_id.clone();
+            let h = tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr);
                 let mut buf = [0u8; 4096];
                 loop {
@@ -196,6 +203,13 @@ impl StormLog {
                     }
                 }
             });
+            handles.push(h);
+        }
+
+        // Store handles so archive_run can await them
+        {
+            let mut tasks = self.reader_tasks.lock().await;
+            tasks.insert(process, handles);
         }
     }
 
@@ -230,6 +244,24 @@ impl StormLog {
                 return;
             }
         };
+
+        // Wait for stdout/stderr reader tasks to finish draining pipe buffers.
+        // This ensures all output (especially final stderr on crash) is captured.
+        let handles = {
+            let mut tasks = self.reader_tasks.lock().await;
+            tasks.remove(process).unwrap_or_default()
+        };
+        if !handles.is_empty() {
+            info!(process = %process, tasks = handles.len(), "waiting for reader tasks to drain");
+            for h in handles {
+                if let Err(e) = tokio::time::timeout(
+                    tokio::time::Duration::from_secs(5),
+                    h,
+                ).await {
+                    warn!(process = %process, error = %e, "reader task drain timed out");
+                }
+            }
+        }
 
         // Flush any buffered MinIO entries first
         if self.storage.is_enabled() {
