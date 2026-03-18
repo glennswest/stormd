@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### 2026-03-17
+- **feat:** Log severity auto-detection — PANIC/FATAL/SEGFAULT → Emergency, CRITICAL → Critical, ERROR → Error, WARN → Warning
+- **feat:** Process crash emits `*** PROCESS CRASHED ***` at Emergency severity — visible with severity filter
+- **fix:** Nav "stormd" text made more visible (was too faded)
 - **fix:** Mount dedup changed from device to mount_point — PVC mounts now visible in Kubernetes
 - **feat:** Nav bar shows container name as brand on left, "stormd" on right
 - **fix:** MinIO storage init was called on a throwaway instance — logs never reached MinIO (bucket was always None)
