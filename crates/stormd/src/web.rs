@@ -510,7 +510,7 @@ fn build_dashboard(name: &str) -> String {
                 const histDiv = document.getElementById('restart-history');
                 histDiv.innerHTML = '<div class="restart-list">' + allRestarts.slice(0, 50).map(r => {{
                     const dt = new Date(r.timestamp);
-                    const logsUrl = '/ui/logs?process=' + encodeURIComponent(r.process) + '&show=crash';
+                    const logsUrl = '/ui/logs?process=' + encodeURIComponent(r.process) + '&show=crash&ts=' + encodeURIComponent(r.timestamp);
                     return `<div><a href="${{logsUrl}}" style="color:#8be9fd" title="View logs">${{escapeHtml(r.process)}}</a> <span style="color:#555">${{dt.toLocaleString()}}</span> <span style="color:#666">(${{timeAgo(r.timestamp)}})</span></div>`;
                 }}).join('') + '</div>';
             }}
@@ -980,6 +980,7 @@ fn build_logs(name: &str) -> String {
     const urlParams = new URLSearchParams(window.location.search);
     const preselect = urlParams.get('process');
     const showCrash = urlParams.get('show') === 'crash';
+    const crashTs = urlParams.get('ts');
 
     loadProcesses().then(async () => {{
         if (preselect) {{
@@ -990,16 +991,42 @@ fn build_logs(name: &str) -> String {
             await loadRuns();
 
             if (showCrash) {{
-                // Auto-select the most recent failed run
-                let found = false;
+                // Find the failed run closest to (but before) the restart timestamp.
+                // The restart timestamp is when the new run started; the crash run
+                // is the one that ran before that restart.
+                const restartTime = crashTs ? new Date(crashTs).getTime() : 0;
+                let bestOpt = null;
+                let bestDist = Infinity;
+
                 for (const opt of runSelect.options) {{
-                    if (opt.textContent.includes('failed') || opt.textContent.includes('FAILED')) {{
-                        opt.selected = true;
-                        found = true;
-                        break;
+                    if (!opt.value || opt.value === '') continue;
+                    const text = opt.textContent || '';
+                    const isFailed = text.includes('failed') || text.includes('FAILED');
+                    if (!isFailed) continue;
+
+                    // Extract run_id timestamp — format YYYYMMDDTHHMMSS
+                    const rv = opt.value.replace('local:', '');
+                    const m = rv.match(/(\d{{8}}T\d{{6}})/);
+                    if (m) {{
+                        const rid = m[1];
+                        const runDate = new Date(
+                            rid.substring(0,4) + '-' + rid.substring(4,6) + '-' + rid.substring(6,8) +
+                            'T' + rid.substring(9,11) + ':' + rid.substring(11,13) + ':' + rid.substring(13,15) + 'Z'
+                        );
+                        const dist = restartTime - runDate.getTime();
+                        // The crash run started before the restart (dist > 0) and is the closest one
+                        if (dist >= 0 && dist < bestDist) {{
+                            bestDist = dist;
+                            bestOpt = opt;
+                        }}
                     }}
+
+                    // Fallback: if no timestamp match, take the first failed run
+                    if (!bestOpt) bestOpt = opt;
                 }}
-                if (found) {{
+
+                if (bestOpt) {{
+                    bestOpt.selected = true;
                     switchMode();
                     return;
                 }}
