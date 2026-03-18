@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### 2026-03-17
+- **feat:** Nav bar shows container name as brand on left, "stormd" on right
 - **fix:** MinIO storage init was called on a throwaway instance — logs never reached MinIO (bucket was always None)
 - **feat:** Run segmentation — each process start/restart creates a new run_id, logs are stored per-run in MinIO
 - **feat:** `GET /api/v1/logs/{process}/runs` endpoint to list all historical runs for a process
