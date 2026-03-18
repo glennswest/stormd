@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### 2026-03-18
+- **feat:** Busybox-style shell — 80+ built-in commands for scratch containers
+- **feat:** File operations: ls, cat, head, tail, cp, mv, rm, mkdir, touch, chmod, chown, find, ln, stat, pwd, wc, du, readlink, file, sha256sum, tee
+- **feat:** Network commands: ifconfig, ip addr/link/route, ping, curl/wget, netstat/ss, nslookup, hostname, route
+- **feat:** System commands: mount, df, free, uname, date, id, kill, printenv, export, unset, sleep, echo, which, type, lsof
+- **feat:** systemctl emulation — maps start/stop/restart/status/list-units/is-active/is-failed to supervisor
+- **feat:** Text processing: grep (files), sort, uniq, cut, tr, sed, rev, base64, xxd, xargs
+- **feat:** dmesg command — queries all process logs from stormlog
+- **feat:** General piping — `cmd1 | cmd2 | cmd3` chains any commands (not just `| grep`)
+- **feat:** Output redirection — `cmd > file` and `cmd >> file`
+- **feat:** Tab completion for file paths and systemctl subcommands
+- **refactor:** Shell module split into categorized submodules (proc, log, file, net, sys, text)
+- **fix:** Follow checkbox in logs UI now properly stops auto-scroll when unchecked
+- **feat:** Stream filter dropdown (All/stdout/stderr) in logs UI toolbar
+
 ### 2026-03-17
 - **feat:** `crashes` counter on process status — counts non-zero exits separately from restarts
 - **feat:** Dashboard "Failed" stat renamed to "Crashes" showing total crash count, not just current state
