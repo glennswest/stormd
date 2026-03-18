@@ -1,18 +1,21 @@
+use crate::api::AppState;
+use axum::extract::State;
 use axum::response::Html;
+use std::sync::Arc;
 
 /// Serve the main dashboard page.
-pub async fn dashboard_page() -> Html<String> {
-    Html(build_dashboard())
+pub async fn dashboard_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    Html(build_dashboard(&state.container_name))
 }
 
 /// Serve the web terminal page.
-pub async fn terminal_page() -> Html<String> {
-    Html(build_terminal())
+pub async fn terminal_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    Html(build_terminal(&state.container_name))
 }
 
 /// Serve the log viewer page.
-pub async fn logs_page() -> Html<String> {
-    Html(build_logs())
+pub async fn logs_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    Html(build_logs(&state.container_name))
 }
 
 // --- Shared CSS + JS ---
@@ -169,7 +172,7 @@ function ansiToHtml(text) {
 "#
 }
 
-fn nav_html(active: &str) -> String {
+fn nav_html(active: &str, container_name: &str) -> String {
     let pages = [("Dashboard", "/ui/"), ("Terminal", "/ui/terminal"), ("Logs", "/ui/logs")];
     let links: Vec<String> = pages
         .iter()
@@ -179,14 +182,14 @@ fn nav_html(active: &str) -> String {
         })
         .collect();
     format!(
-        "<nav><span class=\"brand\">stormd</span><div class=\"links\">{}</div></nav>",
-        links.join("")
+        "<nav><span class=\"brand\">{}</span><div class=\"links\">{}</div><span style=\"margin-left:auto;font-size:12px;color:#555\">stormd</span></nav>",
+        container_name, links.join("")
     )
 }
 
 // --- Dashboard ---
 
-fn build_dashboard() -> String {
+fn build_dashboard(name: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html>
@@ -550,14 +553,14 @@ fn build_dashboard() -> String {
 </body>
 </html>"#,
         css = nav_css(),
-        nav = nav_html("Dashboard"),
+        nav = nav_html("Dashboard", name),
         ansi_js = ansi_js(),
     )
 }
 
 // --- Terminal page ---
 
-fn build_terminal() -> String {
+fn build_terminal(name: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html>
@@ -653,14 +656,14 @@ fn build_terminal() -> String {
 </body>
 </html>"#,
         css = nav_css(),
-        nav = nav_html("Terminal"),
+        nav = nav_html("Terminal", name),
         ansi_js = ansi_js(),
     )
 }
 
 // --- Logs page ---
 
-fn build_logs() -> String {
+fn build_logs(name: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html>
@@ -995,7 +998,7 @@ fn build_logs() -> String {
 </body>
 </html>"#,
         css = nav_css(),
-        nav = nav_html("Logs"),
+        nav = nav_html("Logs", name),
         ansi_js = ansi_js(),
     )
 }
