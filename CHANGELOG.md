@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### 2026-03-17
+- **feat:** `crashes` counter on process status — counts non-zero exits separately from restarts
+- **feat:** Dashboard "Failed" stat renamed to "Crashes" showing total crash count, not just current state
+- **feat:** Restart history entries link to logs page filtered by process
+- **feat:** Logs page accepts `?process=` query param for deep linking from dashboard
 - **feat:** Log severity auto-detection — PANIC/FATAL/SEGFAULT → Emergency, CRITICAL → Critical, ERROR → Error, WARN → Warning
 - **feat:** Process crash emits `*** PROCESS CRASHED ***` at Emergency severity — visible with severity filter
 - **fix:** Nav "stormd" text made more visible (was too faded)
