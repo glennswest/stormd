@@ -140,7 +140,7 @@ fn get_interface_ipv4(ifname: &str) -> Option<String> {
             copy_len,
         );
     }
-    let ret = unsafe { libc::ioctl(sock, libc::SIOCGIFADDR as libc::c_ulong, &mut ifr) };
+    let ret = unsafe { libc::ioctl(sock, libc::SIOCGIFADDR as _, &mut ifr) };
     unsafe {
         libc::close(sock);
     }
@@ -174,7 +174,7 @@ fn get_interface_netmask(ifname: &str) -> Option<String> {
             copy_len,
         );
     }
-    let ret = unsafe { libc::ioctl(sock, libc::SIOCGIFNETMASK as libc::c_ulong, &mut ifr) };
+    let ret = unsafe { libc::ioctl(sock, libc::SIOCGIFNETMASK as _, &mut ifr) };
     unsafe {
         libc::close(sock);
     }

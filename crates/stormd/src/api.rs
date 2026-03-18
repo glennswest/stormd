@@ -26,6 +26,7 @@ pub struct AppState {
     pub allow_signal: bool,
     pub allow_stdin: bool,
     pub log_dir: std::path::PathBuf,
+    pub container_name: String,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
