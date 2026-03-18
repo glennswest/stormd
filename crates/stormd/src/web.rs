@@ -481,10 +481,13 @@ fn build_dashboard(name: &str) -> String {
             const mem = status.stats && status.stats.memory;
             const uptimeSecs = status.stats ? status.stats.uptime_secs : null;
 
+            const avgUptime = (uptimeSecs != null && total > 0) ? Math.floor(uptimeSecs / (restarts + total)) : null;
+
             document.getElementById('stats').innerHTML = `
                 <div class="stat-card"><div class="label">Processes</div><div class="value cyan">${{total}}</div></div>
                 <div class="stat-card"><div class="label">Running</div><div class="value green">${{running}}</div></div>
                 <div class="stat-card"><div class="label">Uptime</div><div class="value green">${{formatUptime(uptimeSecs)}}</div></div>
+                <div class="stat-card"><div class="label">Avg Uptime</div><div class="value cyan">${{formatUptime(avgUptime)}}</div></div>
                 <div class="stat-card"><div class="label">Total Restarts</div><div class="value yellow">${{restarts}}</div></div>
                 <div class="stat-card"><div class="label">Memory (RSS)</div><div class="value green">${{mem ? formatBytes(mem.rss_bytes) : '-'}}</div></div>
                 <div class="stat-card"><div class="label">Container</div><div class="value ${{status.container_failed ? 'red' : 'green'}}">${{status.container_failed ? 'FAILED' : 'HEALTHY'}}</div></div>
