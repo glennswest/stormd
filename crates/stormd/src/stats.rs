@@ -187,8 +187,19 @@ fn read_mount_info() -> Vec<MountInfo> {
                 continue;
             }
 
-            // Deduplicate: skip if we already have a mount for the same device
-            if mounts.iter().any(|m: &MountInfo| m.device == device) {
+            // Skip k8s internal mounts that aren't interesting
+            if mount_point.starts_with("/dev/termination-log")
+                || mount_point.starts_with("/etc/hosts")
+                || mount_point.starts_with("/etc/hostname")
+                || mount_point.starts_with("/etc/resolv.conf")
+                || mount_point.starts_with("/proc/")
+                || mount_point.starts_with("/sys/")
+            {
+                continue;
+            }
+
+            // Deduplicate: skip if we already have a mount for the same mount_point
+            if mounts.iter().any(|m: &MountInfo| m.mount_point == mount_point) {
                 continue;
             }
 
