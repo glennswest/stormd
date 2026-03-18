@@ -171,19 +171,24 @@ fn read_mount_info() -> Vec<MountInfo> {
             let mount_point = parts[1];
             let fs_type = parts[2];
 
-            // Skip pseudo-filesystems
-            if matches!(
-                fs_type,
-                "proc" | "sysfs" | "devpts" | "tmpfs" | "cgroup" | "cgroup2"
-                    | "securityfs" | "debugfs" | "pstore" | "bpf" | "tracefs"
-                    | "hugetlbfs" | "mqueue" | "fusectl" | "configfs"
-            ) && !mount_point.starts_with("/dev/shm")
-            {
+            // Only show real filesystems — block devices and named mounts
+            // that people actually care about in a container context
+            let dominated = device.starts_with("/dev/")
+                || fs_type == "ext4"
+                || fs_type == "xfs"
+                || fs_type == "btrfs"
+                || fs_type == "zfs"
+                || fs_type == "nfs"
+                || fs_type == "nfs4"
+                || fs_type == "cifs"
+                || fs_type == "fuse"
+                || fs_type == "overlay";
+            if !dominated {
                 continue;
             }
 
-            // Skip kernel virtual mounts
-            if device == "none" || device == "proc" || device == "sysfs" {
+            // Deduplicate: skip if we already have a mount for the same device
+            if mounts.iter().any(|m: &MountInfo| m.device == device) {
                 continue;
             }
 

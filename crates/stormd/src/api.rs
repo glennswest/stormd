@@ -47,6 +47,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/logs/ingest", post(ingest_log))
         .route("/api/v1/logs/stored", get(query_stored_logs))
         .route("/api/v1/logs/{process}/runs", get(list_runs))
+        .route("/api/v1/logs/files/{filename}", get(read_log_file))
         // Terminal
         .route("/api/v1/terminal/{process}", get(terminal_snapshot))
         // Cron
@@ -231,6 +232,36 @@ async fn list_log_files(
         }
     }
     Ok(Json(files))
+}
+
+/// Read a specific log file by name (with optional tail).
+async fn read_log_file(
+    State(state): State<Arc<AppState>>,
+    Path(filename): Path<String>,
+    Query(q): Query<LogTailQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    // Sanitize filename — no path traversal
+    if filename.contains('/') || filename.contains("..") {
+        return Err(AppError(anyhow::anyhow!("invalid filename")));
+    }
+    let path = state.log_dir.join(&filename);
+    if !path.exists() {
+        return Err(AppError(anyhow::anyhow!("file not found: {}", filename)));
+    }
+    let content = tokio::fs::read_to_string(&path).await?;
+    let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+
+    if let Some(pattern) = q.search.as_deref() {
+        lines.retain(|l| l.contains(pattern));
+    }
+
+    if let Some(n) = q.tail {
+        let start = lines.len().saturating_sub(n);
+        lines = lines[start..].to_vec();
+    }
+
+    let count = lines.len();
+    Ok(Json(LogResponse { lines, count }))
 }
 
 // --- Log ingest ---

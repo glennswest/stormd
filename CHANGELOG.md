@@ -23,6 +23,11 @@
 - **change:** Default API port changed from 8080 to 9080 to avoid conflicts
 - **fix:** Enable ICMP echo replies and network sysctls at startup for veth-based container networking
 - **fix:** Segfault/panic — `blocking_lock()` called from async context in `spawn_capture` caused tokio runtime panic; changed to async `lock().await`
+- **feat:** Run selector in Logs UI — browse historical runs from MinIO or local archives, with failed/exited tags
+- **feat:** Last 100 lines of recent logs loaded on page open in Logs UI
+- **feat:** `/api/v1/logs/files/{filename}` endpoint to read specific archived log files
+- **fix:** Mount display filtered to real filesystems only (no pseudo-fs, cgroups, overlays deduplicated)
+- **fix:** Mount display reformatted as table with columns for mount, device, type, used, total, free, usage bar
 
 ## [v0.3.0] — 2026-03-01
 

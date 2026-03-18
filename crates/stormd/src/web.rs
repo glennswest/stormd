@@ -427,20 +427,25 @@ fn build_dashboard() -> String {
                 div.innerHTML = '<span style="color:#666;font-size:13px">No mount info available (non-Linux or no block mounts)</span>';
                 return;
             }}
-            div.innerHTML = mounts.map(m => {{
-                const pct = m.use_percent || 0;
-                const color = pct > 90 ? '#e94560' : pct > 75 ? '#f0a030' : '#50fa7b';
-                return `<div style="margin-bottom:10px">
-                    <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
-                        <span class="mono">${{escapeHtml(m.mount_point)}}</span>
-                        <span style="color:#666">${{escapeHtml(m.device)}} (${{escapeHtml(m.fs_type)}})</span>
-                    </div>
-                    <div class="usage-bar">
-                        <div class="usage-bar-fill" style="width:${{pct}}%;background:${{color}}"></div>
-                        <div class="usage-bar-text">${{formatBytes(m.used_bytes)}} / ${{formatBytes(m.total_bytes)}} (${{pct}}%) &mdash; ${{formatBytes(m.avail_bytes)}} free</div>
-                    </div>
-                </div>`;
-            }}).join('');
+            div.innerHTML = '<table style="width:100%"><thead><tr>' +
+                '<th>Mount</th><th>Device</th><th>Type</th><th>Used</th><th>Total</th><th>Free</th><th style="width:30%">Usage</th>' +
+                '</tr></thead><tbody>' +
+                mounts.map(m => {{
+                    const pct = Math.round(m.use_percent || 0);
+                    const color = pct > 90 ? '#e94560' : pct > 75 ? '#f0a030' : '#50fa7b';
+                    return '<tr>' +
+                        '<td class="mono">' + escapeHtml(m.mount_point) + '</td>' +
+                        '<td class="mono" style="color:#666;font-size:12px">' + escapeHtml(m.device) + '</td>' +
+                        '<td style="color:#555;font-size:12px">' + escapeHtml(m.fs_type) + '</td>' +
+                        '<td>' + formatBytes(m.used_bytes) + '</td>' +
+                        '<td>' + formatBytes(m.total_bytes) + '</td>' +
+                        '<td style="color:#50fa7b">' + formatBytes(m.avail_bytes) + '</td>' +
+                        '<td><div class="usage-bar">' +
+                            '<div class="usage-bar-fill" style="width:' + pct + '%;background:' + color + '"></div>' +
+                            '<div class="usage-bar-text">' + pct + '%</div>' +
+                        '</div></td></tr>';
+                }}).join('') +
+                '</tbody></table>';
         }} catch (_) {{}}
     }}
 
@@ -669,6 +674,11 @@ fn build_logs() -> String {
     .log-count {{ font-size: 12px; color: #666; margin-left: auto; }}
     label.cb {{ display: flex; align-items: center; gap: 4px; font-size: 13px; color: #888; cursor: pointer; }}
     label.cb input {{ accent-color: #50fa7b; }}
+    .run-tag {{ font-size: 10px; padding: 1px 6px; border-radius: 8px; margin-left: 4px; }}
+    .run-tag.failed {{ background: #4a1a2a; color: #e94560; }}
+    .run-tag.exited {{ background: #1a3a2a; color: #50fa7b; }}
+    .run-tag.current {{ background: #1a3a4a; color: #8be9fd; }}
+    .run-info {{ font-size: 11px; color: #666; padding: 8px 20px; border-bottom: 1px solid #1a1d32; }}
     </style>
 </head>
 <body>
@@ -676,6 +686,8 @@ fn build_logs() -> String {
     <div class="toolbar controls">
         <label style="font-size:13px;color:#888">Process:</label>
         <select id="process"><option value="">All</option></select>
+        <label style="font-size:13px;color:#888">Run:</label>
+        <select id="run"><option value="">Live</option></select>
         <label style="font-size:13px;color:#888">Severity:</label>
         <select id="severity">
             <option value="">All</option>
@@ -691,6 +703,7 @@ fn build_logs() -> String {
         <button onclick="clearLogs()">Clear</button>
         <span class="log-count" id="count">0 entries</span>
     </div>
+    <div id="run-info" class="run-info" style="display:none"></div>
     <div class="content" style="padding-top:8px">
         <div id="logs" class="term-output"></div>
     </div>
@@ -699,14 +712,24 @@ fn build_logs() -> String {
 
     let ws = null;
     let entryCount = 0;
+    let currentMode = 'live'; // 'live' or 'stored'
     const logsDiv = document.getElementById('logs');
     const countEl = document.getElementById('count');
     const searchInput = document.getElementById('search');
+    const runSelect = document.getElementById('run');
+    const runInfoDiv = document.getElementById('run-info');
 
     function clearLogs() {{
         logsDiv.innerHTML = '';
         entryCount = 0;
         countEl.textContent = '0 entries';
+    }}
+
+    function formatBytes(bytes) {{
+        if (bytes == null || bytes === 0) return '0 B';
+        const units = ['B', 'KiB', 'MiB', 'GiB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(1024));
+        return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
     }}
 
     async function loadProcesses() {{
@@ -726,14 +749,189 @@ fn build_logs() -> String {
         }} catch (_) {{}}
     }}
 
+    async function loadRuns() {{
+        const process = document.getElementById('process').value;
+        const currentRun = runSelect.value;
+        runSelect.innerHTML = '<option value="">Live (streaming)</option>';
+
+        if (!process) {{
+            runSelect.disabled = true;
+            return;
+        }}
+
+        runSelect.disabled = false;
+
+        try {{
+            const resp = await fetch('/api/v1/logs/' + encodeURIComponent(process) + '/runs');
+            const data = await resp.json();
+            const runs = data.runs || [];
+            const currentRunId = data.current_run_id;
+
+            if (currentRunId) {{
+                const opt = document.createElement('option');
+                opt.value = currentRunId;
+                opt.textContent = formatRunId(currentRunId) + ' (current)';
+                opt.dataset.current = 'true';
+                runSelect.appendChild(opt);
+            }}
+
+            runs.forEach(r => {{
+                if (r.run_id === currentRunId) return;
+                const opt = document.createElement('option');
+                opt.value = r.run_id;
+                const size = formatBytes(r.size_bytes);
+                opt.textContent = formatRunId(r.run_id) + ' — ' + r.date + ' (' + size + ')';
+                runSelect.appendChild(opt);
+            }});
+
+            // Also load local archived files
+            try {{
+                const filesResp = await fetch('/api/v1/logs/files');
+                const files = await filesResp.json();
+                files.forEach(f => {{
+                    const name = f.name || '';
+                    // Match pattern: process.RUNID.(failed or exited).log
+                    const m = name.match(new RegExp('^' + escapeRegex(process) + '\\.(\\d{{8}}T\\d{{6}})\\.(failed|exited)\\.log$'));
+                    if (m) {{
+                        const runId = m[1];
+                        const tag = m[2];
+                        // Skip if already listed from MinIO
+                        const exists = Array.from(runSelect.options).some(o => o.value === runId);
+                        if (!exists) {{
+                            const opt = document.createElement('option');
+                            opt.value = 'local:' + name;
+                            opt.textContent = formatRunId(runId) + ' [' + tag + '] (local, ' + formatBytes(f.size_bytes) + ')';
+                            if (tag === 'failed') opt.style.color = '#e94560';
+                            runSelect.appendChild(opt);
+                        }}
+                    }}
+                }});
+            }} catch (_) {{}}
+
+            if (currentRun) {{
+                for (const opt of runSelect.options) {{
+                    if (opt.value === currentRun) {{ opt.selected = true; break; }}
+                }}
+            }}
+        }} catch (_) {{}}
+    }}
+
+    function escapeRegex(s) {{
+        return s.replace(/[.*+?^$|[\]\\]/g, '\\$&').replace(/\{{/g, '\\{{').replace(/\}}/g, '\\}}');
+    }}
+
+    function formatRunId(rid) {{
+        // 20260318T000854 -> 2026-03-18 00:08:54
+        if (rid && rid.length === 15) {{
+            return rid.substring(0,4) + '-' + rid.substring(4,6) + '-' + rid.substring(6,8) +
+                   ' ' + rid.substring(9,11) + ':' + rid.substring(11,13) + ':' + rid.substring(13,15);
+        }}
+        return rid || '';
+    }}
+
+    function switchMode() {{
+        const runVal = runSelect.value;
+        clearLogs();
+
+        if (!runVal) {{
+            // Live mode
+            currentMode = 'live';
+            runInfoDiv.style.display = 'none';
+            document.getElementById('follow').parentElement.style.display = '';
+            connectWs();
+        }} else if (runVal.startsWith('local:')) {{
+            // Local archived file
+            currentMode = 'stored';
+            if (ws) {{ ws.close(); ws = null; }}
+            document.getElementById('follow').parentElement.style.display = 'none';
+            loadLocalFile(runVal.substring(6));
+        }} else {{
+            // Stored run from MinIO
+            currentMode = 'stored';
+            if (ws) {{ ws.close(); ws = null; }}
+            document.getElementById('follow').parentElement.style.display = 'none';
+            loadStoredRun(runVal);
+        }}
+    }}
+
+    async function loadStoredRun(runId) {{
+        const process = document.getElementById('process').value;
+        runInfoDiv.style.display = '';
+        runInfoDiv.innerHTML = 'Loading run <span style="color:#8be9fd">' + escapeHtml(formatRunId(runId)) + '</span> ...';
+
+        try {{
+            let url = '/api/v1/logs/stored?process=' + encodeURIComponent(process) + '&run_id=' + encodeURIComponent(runId);
+            const search = searchInput.value;
+            if (search) url += '&search=' + encodeURIComponent(search);
+
+            const resp = await fetch(url);
+            const entries = await resp.json();
+
+            clearLogs();
+            entries.forEach(e => appendLog(e));
+
+            const failed = entries.some(e => (e.line || '').includes('--- process exited ---'));
+            runInfoDiv.innerHTML = 'Run <span style="color:#8be9fd">' + escapeHtml(formatRunId(runId)) + '</span> — ' +
+                entries.length + ' entries' +
+                (entries.length > 0 ? ' — ' + new Date(entries[0].timestamp).toLocaleString() + ' to ' + new Date(entries[entries.length-1].timestamp).toLocaleString() : '');
+        }} catch (e) {{
+            runInfoDiv.innerHTML = '<span style="color:#e94560">Failed to load run: ' + escapeHtml(e.message) + '</span>';
+        }}
+    }}
+
+    async function loadLocalFile(filename) {{
+        runInfoDiv.style.display = '';
+        runInfoDiv.innerHTML = 'Loading local archive <span style="color:#f1fa8c">' + escapeHtml(filename) + '</span> ...';
+
+        try {{
+            const resp = await fetch('/api/v1/logs/files/' + encodeURIComponent(filename) + '?tail=10000');
+            const data = await resp.json();
+            clearLogs();
+
+            (data.lines || []).forEach(line => {{
+                const html = '<div class="log-entry">' + ansiToHtml(line) + '</div>';
+                logsDiv.insertAdjacentHTML('beforeend', html);
+                entryCount++;
+            }});
+            countEl.textContent = entryCount + ' lines';
+
+            const isFailed = filename.includes('.failed.');
+            const tag = isFailed ? '<span class="run-tag failed">FAILED</span>' : '<span class="run-tag exited">EXITED</span>';
+            runInfoDiv.innerHTML = 'Local archive: <span style="color:#f1fa8c">' + escapeHtml(filename) + '</span> ' + tag + ' — ' + entryCount + ' lines';
+        }} catch (e) {{
+            runInfoDiv.innerHTML = '<span style="color:#e94560">Failed to load: ' + escapeHtml(e.message) + '</span>';
+        }}
+    }}
+
+    async function loadRecentLines() {{
+        const process = document.getElementById('process').value;
+        if (!process) return;
+
+        try {{
+            const resp = await fetch('/api/v1/logs/' + encodeURIComponent(process) + '?tail=100');
+            const data = await resp.json();
+            if (data.lines && data.lines.length > 0) {{
+                data.lines.forEach(line => {{
+                    const html = '<div class="log-entry" style="color:#555">' + ansiToHtml(line) + '</div>';
+                    logsDiv.insertAdjacentHTML('beforeend', html);
+                    entryCount++;
+                }});
+                logsDiv.insertAdjacentHTML('beforeend', '<div style="color:#666;border-top:1px solid #2a2d45;padding:4px 0;margin:4px 0;font-size:11px">--- recent history above, live stream below ---</div>');
+                countEl.textContent = entryCount + ' lines';
+                logsDiv.scrollTop = logsDiv.scrollHeight;
+            }}
+        }} catch (_) {{}}
+    }}
+
     function connectWs() {{
         if (ws) ws.close();
+        runInfoDiv.style.display = 'none';
         const process = document.getElementById('process').value;
         const severity = document.getElementById('severity').value;
 
-        let url = `${{location.protocol === 'https:' ? 'wss:' : 'ws:'}}//` + location.host + `/ws/logs?`;
-        if (process) url += `process=${{encodeURIComponent(process)}}&`;
-        if (severity) url += `severity=${{encodeURIComponent(severity)}}&`;
+        let url = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws/logs?';
+        if (process) url += 'process=' + encodeURIComponent(process) + '&';
+        if (severity) url += 'severity=' + encodeURIComponent(severity) + '&';
 
         ws = new WebSocket(url);
         ws.onmessage = (e) => {{
@@ -756,7 +954,7 @@ fn build_logs() -> String {
 
         const ts = new Date(entry.timestamp).toLocaleTimeString();
         const sc = sevColor(entry.severity);
-        const html = `<div class="log-entry" style="${{sc}}"><span style="color:#666">${{escapeHtml(ts)}}</span> <span style="color:#8be9fd">${{escapeHtml(entry.process || '')}}</span> <span style="color:#555">[${{escapeHtml(entry.stream || '')}}]</span> ${{ansiToHtml(entry.line || '')}}</div>`;
+        const html = '<div class="log-entry" style="' + sc + '"><span style="color:#666">' + escapeHtml(ts) + '</span> <span style="color:#8be9fd">' + escapeHtml(entry.process || '') + '</span> <span style="color:#555">[' + escapeHtml(entry.stream || '') + ']</span> ' + ansiToHtml(entry.line || '') + '</div>';
         logsDiv.insertAdjacentHTML('beforeend', html);
 
         entryCount++;
@@ -774,10 +972,25 @@ fn build_logs() -> String {
 
     loadProcesses();
     connectWs();
+    loadRecentLines();
 
-    document.getElementById('process').onchange = () => {{ clearLogs(); connectWs(); }};
-    document.getElementById('severity').onchange = () => {{ clearLogs(); connectWs(); }};
-    searchInput.addEventListener('keyup', (e) => {{ if (e.key === 'Enter') {{ clearLogs(); connectWs(); }} }});
+    document.getElementById('process').onchange = () => {{
+        loadRuns();
+        runSelect.value = '';
+        clearLogs();
+        connectWs();
+        loadRecentLines();
+    }};
+    runSelect.onchange = () => {{ switchMode(); }};
+    document.getElementById('severity').onchange = () => {{
+        if (currentMode === 'live') {{ clearLogs(); connectWs(); }}
+    }};
+    searchInput.addEventListener('keyup', (e) => {{
+        if (e.key === 'Enter') {{
+            if (currentMode === 'live') {{ clearLogs(); connectWs(); }}
+            else {{ switchMode(); }}
+        }}
+    }});
     </script>
 </body>
 </html>"#,
