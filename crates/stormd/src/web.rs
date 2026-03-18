@@ -510,7 +510,7 @@ fn build_dashboard(name: &str) -> String {
                 const histDiv = document.getElementById('restart-history');
                 histDiv.innerHTML = '<div class="restart-list">' + allRestarts.slice(0, 50).map(r => {{
                     const dt = new Date(r.timestamp);
-                    const logsUrl = '/ui/logs?process=' + encodeURIComponent(r.process);
+                    const logsUrl = '/ui/logs?process=' + encodeURIComponent(r.process) + '&show=crash';
                     return `<div><a href="${{logsUrl}}" style="color:#8be9fd" title="View logs">${{escapeHtml(r.process)}}</a> <span style="color:#555">${{dt.toLocaleString()}}</span> <span style="color:#666">(${{timeAgo(r.timestamp)}})</span></div>`;
                 }}).join('') + '</div>';
             }}
@@ -976,17 +976,34 @@ fn build_logs(name: &str) -> String {
         }}
     }}
 
-    // Check for ?process= query param (linked from dashboard restart history)
+    // Check for ?process= and ?show=crash query params (linked from dashboard restart history)
     const urlParams = new URLSearchParams(window.location.search);
     const preselect = urlParams.get('process');
+    const showCrash = urlParams.get('show') === 'crash';
 
-    loadProcesses().then(() => {{
+    loadProcesses().then(async () => {{
         if (preselect) {{
             const sel = document.getElementById('process');
             for (const opt of sel.options) {{
                 if (opt.value === preselect) {{ opt.selected = true; break; }}
             }}
-            loadRuns();
+            await loadRuns();
+
+            if (showCrash) {{
+                // Auto-select the most recent failed run
+                let found = false;
+                for (const opt of runSelect.options) {{
+                    if (opt.textContent.includes('failed') || opt.textContent.includes('FAILED')) {{
+                        opt.selected = true;
+                        found = true;
+                        break;
+                    }}
+                }}
+                if (found) {{
+                    switchMode();
+                    return;
+                }}
+            }}
         }}
         connectWs();
         loadRecentLines();
