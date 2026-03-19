@@ -69,6 +69,73 @@ ssh root@localhost -p 2222
 
 That's it. Your final image has a process supervisor, SSH server, web dashboard, REST API, liveness health checks, and 63 Unix commands — all from a single static binary.
 
+### Example: multi-process with per-process logging
+
+Each `[[process]]` gets its own log stream, VT100 terminal, log archive, and liveness probe.
+
+```dockerfile
+FROM registry.gt.lo:5000/stormdbase:latest
+COPY api-server /app/api
+COPY worker /app/worker
+COPY config.toml /etc/stormd/config.toml
+EXPOSE 9080 8080 22
+ENTRYPOINT ["/stormd"]
+```
+
+```toml
+[general]
+name = "my-stack"
+log_dir = "/var/stormd/logs"
+
+[api]
+bind = "0.0.0.0:9080"
+
+[ssh]
+enabled = true
+bind = "0.0.0.0:22"
+password = "changeme"
+
+[stormlog.terminal]
+rows = 50
+cols = 120
+
+[[process]]
+name = "api"
+command = "/app/api"
+args = ["--port", "8080"]
+on_failure = "restart"
+on_exit = "restart"
+
+[process.liveness]
+type = "http"
+url = "http://localhost:8080/health"
+interval_secs = 10
+
+[[process]]
+name = "worker"
+command = "/app/worker"
+args = ["--concurrency", "4"]
+on_failure = "restart"
+on_exit = "stop"
+depends_on = ["api"]
+```
+
+Per-process logging:
+- Separate log files: `/var/stormd/logs/api.log`, `/var/stormd/logs/worker.log`
+- Separate VT100 terminals viewable in web UI or via `attach api` in SSH
+- Separate archive runs in MinIO (per-process, per-run)
+- Filterable in logs UI: `?process=api` or `?process=worker`
+
+SSH shell usage:
+```bash
+ps                  # see both processes with status
+logs api            # view api logs only
+logs worker         # view worker logs only
+logs -f             # follow all logs
+logs -f api         # follow api logs only
+restart worker      # restart just the worker
+```
+
 ### Building stormdbase
 
 ```bash
