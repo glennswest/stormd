@@ -158,6 +158,7 @@ podman manifest push --all --tls-verify=false stormdbase:latest registry.gt.lo:5
 
 - **Process supervisor** — launches and monitors one or more binaries with configurable restart policies
 - **Web dashboard** — browser-based process management, memory charts, mount usage, restart history at `/ui/`
+- **Plugin UI** — managed processes add custom tabs to the web UI via `[process.ui]` config, with reverse proxy and style guide
 - **SSH server** — built-in SSH with a bash-like management shell (process control, log tailing, tab completion)
 - **VT100 terminals** — per-process terminal emulation, viewable via SSH, WebSocket, or web UI
 - **Structured logging** — severity auto-detection, MinIO S3 storage, syslog receiver, broadcast streams
@@ -165,7 +166,8 @@ podman manifest push --all --tls-verify=false stormdbase:latest registry.gt.lo:5
 - **Stdio capture** — captures stdout/stderr with automatic severity detection (PANIC/FATAL/ERROR/WARN)
 - **Cron scheduler** — run commands on cron schedules
 - **OCI image updater** — automatic image updates with blue/green rootfs pivot via stormpull
-- **REST API** — full control plane for status, process management, logs, terminals, and debug
+- **REST API** — full control plane for status, process management, logs, terminals, plugins, and debug
+- **Graceful shutdown** — `POST /api/v1/shutdown` stops all processes and exits with optional exit code
 - **Event system** — push events to NATS or webhooks when processes start/stop/crash
 - **Liveness probes** — HTTP and TCP health checks with automatic restart on failure (SIGUSR1 grace, then SIGKILL)
 - **Busybox commands** — 63 built-in Unix commands (ls, cat, grep, curl, ping, etc.) via argv[0] symlinks
