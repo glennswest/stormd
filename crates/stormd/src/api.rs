@@ -22,6 +22,7 @@ pub struct AppState {
     pub stats: Arc<StatsCollector>,
     pub backup: Arc<BackupManager>,
     pub updater: Option<Arc<Updater>>,
+    pub shutdown_tx: tokio::sync::watch::Sender<Option<i32>>,
     pub debug_enabled: bool,
     pub allow_signal: bool,
     pub allow_stdin: bool,
@@ -65,6 +66,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // WebSocket
         .route("/ws/console/{process}", get(ws::ws_console))
         .route("/ws/logs", get(ws::ws_logs))
+        // Shutdown
+        .route("/api/v1/shutdown", post(shutdown))
         // Web UI
         .route("/ui/", get(crate::web::dashboard_page))
         .route("/ui/terminal", get(crate::web::terminal_page))
@@ -344,6 +347,23 @@ async fn trigger_backup(
 ) -> Result<impl IntoResponse, AppError> {
     state.backup.backup_logs(&state.log_dir).await?;
     Ok(Json(serde_json::json!({ "status": "backup_complete" })))
+}
+
+// --- Shutdown ---
+
+#[derive(Deserialize, Default)]
+struct ShutdownRequest {
+    #[serde(default, rename = "exitCode")]
+    exit_code: Option<i32>,
+}
+
+async fn shutdown(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<ShutdownRequest>>,
+) -> impl IntoResponse {
+    let code = body.and_then(|b| b.0.exit_code).unwrap_or(0);
+    let _ = state.shutdown_tx.send(Some(code));
+    Json(serde_json::json!({ "status": "shutting down" }))
 }
 
 // --- Debug ---

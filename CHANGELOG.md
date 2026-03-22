@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### 2026-03-21
+- **feat:** `POST /api/v1/shutdown` endpoint — gracefully stops all supervised processes and exits stormd (PID 1), triggering container restart by external orchestrator
+- **feat:** Optional `exitCode` parameter in shutdown request body — allows callers to distinguish update restarts from normal shutdowns
+
 ### 2026-03-18
 - **feat:** Liveness probe for process health checking — HTTP and TCP probes with configurable interval, timeout, failure threshold, and initial delay
 - **feat:** Automatic restart on liveness failure — SIGUSR1 grace period, then SIGKILL if still hung

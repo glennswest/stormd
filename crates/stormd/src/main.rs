@@ -229,6 +229,9 @@ async fn main() {
         });
     }
 
+    // Shutdown channel — API handler sends exit code, main loop receives it
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel::<Option<i32>>(None);
+
     // Start SSH server
     let ssh_config = config.ssh.clone();
     let ssh_state = Arc::new(api::AppState {
@@ -238,6 +241,7 @@ async fn main() {
         stats: stats.clone(),
         backup: backup.clone(),
         updater: updater.clone(),
+        shutdown_tx: shutdown_tx.clone(),
         debug_enabled: config.debug.enabled,
         allow_signal: config.debug.allow_signal,
         allow_stdin: config.debug.allow_stdin,
@@ -257,6 +261,7 @@ async fn main() {
         stats: stats.clone(),
         backup: backup.clone(),
         updater: updater.clone(),
+        shutdown_tx,
         debug_enabled: config.debug.enabled,
         allow_signal: config.debug.allow_signal,
         allow_stdin: config.debug.allow_stdin,
@@ -286,8 +291,17 @@ async fn main() {
     let backup_on_failure = config.backup.enabled && config.backup.on_failure;
     let stormlog_shutdown = stormlog.clone();
 
+    let exit_code_rx = shutdown_rx.clone();
+    let mut api_shutdown_rx = shutdown_rx;
     let shutdown_signal = async move {
         let ctrl_c = tokio::signal::ctrl_c();
+        let api_shutdown = async {
+            while api_shutdown_rx.changed().await.is_ok() {
+                if api_shutdown_rx.borrow().is_some() {
+                    return;
+                }
+            }
+        };
 
         #[cfg(unix)]
         {
@@ -296,13 +310,22 @@ async fn main() {
             tokio::select! {
                 _ = ctrl_c => info!("received SIGINT"),
                 _ = sigterm.recv() => info!("received SIGTERM"),
+                _ = api_shutdown => {
+                    let code = api_shutdown_rx.borrow().unwrap_or(0);
+                    info!(exit_code = code, "shutdown requested via API");
+                }
             }
         }
 
         #[cfg(not(unix))]
         {
-            ctrl_c.await.expect("ctrl-c handler");
-            info!("received SIGINT");
+            tokio::select! {
+                _ = ctrl_c => info!("received SIGINT"),
+                _ = api_shutdown => {
+                    let code = api_shutdown_rx.borrow().unwrap_or(0);
+                    info!(exit_code = code, "shutdown requested via API");
+                }
+            }
         }
     };
 
@@ -367,7 +390,10 @@ async fn main() {
 
     info!("stormd shutdown complete");
 
-    // Exit with error code if container failed
+    // Exit with API-requested code, failure code, or 0
+    if let Some(code) = *exit_code_rx.borrow() {
+        std::process::exit(code);
+    }
     if supervisor.has_failed().await {
         std::process::exit(1);
     }
