@@ -417,8 +417,164 @@ Shell features: tab completion, command history, colorized output, piping (`logs
 | Dashboard | `/ui/` | Process table, stats (uptime, avg uptime, restarts, memory), memory chart, mount usage, restart history |
 | Terminal | `/ui/terminal` | Live VT100 terminal output per process |
 | Logs | `/ui/logs` | Log viewer with severity filter, search, run selector for crash history |
+| Plugin | `/ui/ext/{name}` | Custom app UI served via reverse proxy with stormd nav chrome |
 
 The dashboard shows container name as the brand. Restart history entries link directly to the failed run's logs.
+
+### Plugin UI
+
+Any managed process can add its own tab to the stormd web UI without recompiling stormd. Add a `[process.ui]` section to your process config:
+
+```toml
+[[process]]
+name = "myapp"
+command = "/app/myapp"
+args = ["--port", "3000"]
+
+[process.ui]
+label = "My App"
+proxy = "http://127.0.0.1:3000"
+```
+
+This adds a "My App" tab to the nav bar. When clicked, stormd serves a page with its nav chrome and an iframe. The iframe content is reverse-proxied through stormd at `/ui/proxy/myapp/`, so:
+
+- Same-origin — no CORS issues, cookies and fetch work naturally
+- The app doesn't need to be directly reachable from the browser
+- All HTTP methods are forwarded (GET, POST, PUT, DELETE, PATCH)
+- Content-type headers are preserved (HTML, CSS, JS, JSON, images all work)
+
+The proxy path structure:
+```
+/ui/ext/myapp          → stormd nav + iframe (what the user sees)
+/ui/proxy/myapp/       → proxied to http://127.0.0.1:3000/
+/ui/proxy/myapp/foo    → proxied to http://127.0.0.1:3000/foo
+/ui/proxy/myapp/api/x  → proxied to http://127.0.0.1:3000/api/x
+```
+
+#### Example: app with its own UI
+
+```toml
+[general]
+name = "my-stack"
+
+[[process]]
+name = "api"
+command = "/app/api"
+args = ["--port", "8080"]
+
+[[process]]
+name = "admin"
+command = "/app/admin-ui"
+args = ["--port", "3001"]
+
+[process.ui]
+label = "Admin"
+proxy = "http://127.0.0.1:3001"
+
+[[process]]
+name = "grafana"
+command = "/app/grafana-server"
+args = ["--homepath", "/app/grafana"]
+
+[process.ui]
+label = "Metrics"
+proxy = "http://127.0.0.1:3002"
+```
+
+This gives you five tabs: Dashboard, Terminal, Logs, Admin, Metrics.
+
+#### Style guide for plugin UIs
+
+Plugin UIs render inside an iframe that fills the viewport below stormd's 48px nav bar. To match stormd's visual style:
+
+**Colors (Dracula-inspired dark theme):**
+```css
+/* Background and text */
+body { background: #0f0f1a; color: #e0e0e0; }
+
+/* Accent colors */
+--red:    #e94560;    /* errors, danger, brand */
+--green:  #50fa7b;    /* success, running, healthy */
+--yellow: #f1fa8c;    /* warnings, caution */
+--cyan:   #8be9fd;    /* links, info, accents */
+--pink:   #ff79c6;    /* highlights */
+--purple: #6272a4;    /* muted accents */
+
+/* Surfaces */
+--surface:    #16192e;   /* cards, nav, panels */
+--border:     #2a2d45;   /* borders, dividers */
+--hover:      #1e2140;   /* hover backgrounds */
+--active:     #2a2d50;   /* active/selected state */
+--input-bg:   #1a1d32;   /* form input backgrounds */
+```
+
+**Typography:**
+```css
+/* System font stack */
+font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+
+/* Monospace (for code, logs, data) */
+font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+```
+
+**Component patterns:**
+```css
+/* Cards */
+.card {
+    background: #16192e;
+    border: 1px solid #2a2d45;
+    border-radius: 8px;
+    padding: 16px 20px;
+}
+
+/* Buttons */
+button {
+    background: #2a2d50;
+    color: #e0e0e0;
+    border: 1px solid #3a3d60;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+/* Status badges */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+.badge-green { background: #1a4a2a; color: #50fa7b; }
+.badge-red   { background: #4a1a2a; color: #e94560; }
+
+/* Tables */
+th { font-size: 11px; font-weight: 600; text-transform: uppercase;
+     letter-spacing: 0.5px; color: #666; }
+td { font-size: 13px; border-bottom: 1px solid #1a1d32; }
+tr:hover { background: #1a1d32; }
+
+/* Form inputs */
+input, select {
+    background: #1a1d32;
+    color: #e0e0e0;
+    border: 1px solid #2a2d45;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+}
+```
+
+**Key dimensions:**
+- stormd nav bar: 48px height (your iframe gets `calc(100vh - 48px)`)
+- Card border-radius: 8px
+- Button/input border-radius: 6px
+- Badge border-radius: 10px
+- Base font size: 13px
+- Label font size: 11px, uppercase, letter-spacing 0.5px
+
+Your app doesn't have to match stormd's style — it renders in its own iframe and can use any framework. The style guide is just for visual consistency if you want it.
 
 ## Configuration reference
 
@@ -486,6 +642,11 @@ max_restarts = 100                     # max restarts in window before failing
 restart_window_secs = 3600             # restart counting window
 depends_on = ["other-process"]         # start after these processes
 # image = "myapp:latest"              # OCI image (for updater)
+
+# Plugin UI — add a custom tab to the stormd web UI
+# [process.ui]
+# label = "My App"                      # nav tab label
+# proxy = "http://127.0.0.1:3000"       # URL to reverse-proxy
 
 # Liveness probe — restarts process if health check fails
 [process.liveness]
@@ -603,6 +764,8 @@ curl http://localhost:8080/health > /tmp/health.txt
 | GET | `/api/v1/updates` | List OCI image update status |
 | POST | `/api/v1/updates/{name}/trigger` | Trigger image update check |
 | POST | `/api/v1/backup` | Trigger manual log backup |
+| GET | `/api/v1/plugins` | List registered UI plugins |
+| POST | `/api/v1/shutdown` | Graceful shutdown (optional `exitCode` in body) |
 | WS | `/ws/console/{process}` | Realtime terminal stream |
 | WS | `/ws/logs` | Realtime log tailing (`?process=X&severity=error`) |
 
