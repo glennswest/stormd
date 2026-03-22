@@ -345,6 +345,7 @@ impl Updater {
                 liveness: None,
                 capture_stdout: true,
                 capture_stderr: true,
+                ui: None,
             }
         };
 

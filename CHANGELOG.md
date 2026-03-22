@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### 2026-03-21
+- **feat:** Extensible plugin UI — managed processes can declare `[process.ui]` with `label` and `proxy` to add custom tabs to the stormd web UI
+- **feat:** Reverse proxy at `/ui/proxy/{name}/` forwards all HTTP methods to the plugin's target URL (same-origin, no CORS issues)
+- **feat:** Plugin pages rendered in iframe with stormd nav chrome — apps get full-page rendering with consistent navigation
+- **feat:** `GET /api/v1/plugins` endpoint lists registered UI plugins
+- **feat:** Dynamic nav bar — plugin tabs appear alongside Dashboard, Terminal, Logs automatically
 - **feat:** `POST /api/v1/shutdown` endpoint — gracefully stops all supervised processes and exits stormd (PID 1), triggering container restart by external orchestrator
 - **feat:** Optional `exitCode` parameter in shutdown request body — allows callers to distinguish update restarts from normal shutdowns
 

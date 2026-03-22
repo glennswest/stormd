@@ -5,15 +5,22 @@ use crate::stats::StatsCollector;
 use crate::supervisor::{ProcessState, Supervisor};
 use crate::updater::Updater;
 use crate::ws;
-use axum::extract::{Path, Query, State};
+use axum::extract::{OriginalUri, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use stormlog::types::LogQuery as StormLogQuery;
 use stormlog::StormLog;
+
+#[derive(Clone)]
+pub struct UiPlugin {
+    pub name: String,
+    pub label: String,
+    pub proxy_url: String,
+}
 
 pub struct AppState {
     pub supervisor: Arc<Supervisor>,
@@ -28,6 +35,7 @@ pub struct AppState {
     pub allow_stdin: bool,
     pub log_dir: std::path::PathBuf,
     pub container_name: String,
+    pub ui_plugins: Vec<UiPlugin>,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -71,7 +79,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // Web UI
         .route("/ui/", get(crate::web::dashboard_page))
         .route("/ui/terminal", get(crate::web::terminal_page))
-        .route("/ui/logs", get(crate::web::logs_page));
+        .route("/ui/logs", get(crate::web::logs_page))
+        // Plugin UI
+        .route("/ui/ext/{name}", get(crate::web::plugin_page))
+        .route("/ui/proxy/{name}", any(proxy_plugin))
+        .route("/ui/proxy/{name}/{*rest}", any(proxy_plugin))
+        .route("/api/v1/plugins", get(list_plugins));
 
     // Debug endpoints (only if enabled)
     if state.debug_enabled {
@@ -518,6 +531,100 @@ async fn read_log_files(
     }
 
     Ok(all_lines)
+}
+
+// --- Plugins ---
+
+async fn list_plugins(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let plugins: Vec<_> = state
+        .ui_plugins
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "name": p.name,
+                "label": p.label,
+                "path": format!("/ui/ext/{}", p.name),
+            })
+        })
+        .collect();
+    Json(serde_json::Value::Array(plugins))
+}
+
+async fn proxy_plugin(
+    State(state): State<Arc<AppState>>,
+    method: axum::http::Method,
+    OriginalUri(uri): OriginalUri,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Result<axum::response::Response, AppError> {
+    let path = uri.path();
+    let after = path.strip_prefix("/ui/proxy/").unwrap_or("");
+    let (name, subpath) = match after.find('/') {
+        Some(i) => (&after[..i], &after[i + 1..]),
+        None => (after, ""),
+    };
+
+    let plugin = state
+        .ui_plugins
+        .iter()
+        .find(|p| p.name == name)
+        .ok_or_else(|| AppError(anyhow::anyhow!("plugin '{}' not found", name)))?;
+
+    let query = uri
+        .query()
+        .map(|q| format!("?{}", q))
+        .unwrap_or_default();
+    let target = format!(
+        "{}/{}{}",
+        plugin.proxy_url.trim_end_matches('/'),
+        subpath,
+        query
+    );
+
+    let client = reqwest::Client::new();
+    let mut builder = match method.as_str() {
+        "POST" => client.post(&target),
+        "PUT" => client.put(&target),
+        "DELETE" => client.delete(&target),
+        "PATCH" => client.patch(&target),
+        "HEAD" => client.head(&target),
+        _ => client.get(&target),
+    };
+
+    if let Some(ct) = headers.get("content-type") {
+        if let Ok(ct_str) = ct.to_str() {
+            builder = builder.header("content-type", ct_str);
+        }
+    }
+
+    if method != axum::http::Method::GET
+        && method != axum::http::Method::HEAD
+        && !body.is_empty()
+    {
+        builder = builder.body(body);
+    }
+
+    let resp = builder
+        .send()
+        .await
+        .map_err(|e| AppError(anyhow::anyhow!("proxy: {}", e)))?;
+
+    let status = axum::http::StatusCode::from_u16(resp.status().as_u16())
+        .unwrap_or(axum::http::StatusCode::BAD_GATEWAY);
+    let ct = resp.headers().get("content-type").cloned();
+    let resp_body = resp
+        .bytes()
+        .await
+        .map_err(|e| AppError(anyhow::anyhow!("proxy: {}", e)))?;
+
+    let mut response = axum::http::Response::builder().status(status);
+    if let Some(ct) = ct {
+        response = response.header("content-type", ct);
+    }
+
+    Ok(response
+        .body(axum::body::Body::from(resp_body.to_vec()))
+        .unwrap())
 }
 
 // --- Error handling ---

@@ -1,21 +1,45 @@
-use crate::api::AppState;
-use axum::extract::State;
+use crate::api::{AppState, UiPlugin};
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::Html;
 use std::sync::Arc;
 
 /// Serve the main dashboard page.
 pub async fn dashboard_page(State(state): State<Arc<AppState>>) -> Html<String> {
-    Html(build_dashboard(&state.container_name))
+    Html(build_dashboard(&state.container_name, &state.ui_plugins))
 }
 
 /// Serve the web terminal page.
 pub async fn terminal_page(State(state): State<Arc<AppState>>) -> Html<String> {
-    Html(build_terminal(&state.container_name))
+    Html(build_terminal(&state.container_name, &state.ui_plugins))
 }
 
 /// Serve the log viewer page.
 pub async fn logs_page(State(state): State<Arc<AppState>>) -> Html<String> {
-    Html(build_logs(&state.container_name))
+    Html(build_logs(&state.container_name, &state.ui_plugins))
+}
+
+/// Serve a plugin page (nav chrome + iframe to proxied app).
+pub async fn plugin_page(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<Html<String>, (StatusCode, String)> {
+    let plugin = state
+        .ui_plugins
+        .iter()
+        .find(|p| p.name == name)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("Plugin '{}' not found", name),
+            )
+        })?;
+    Ok(Html(build_plugin(
+        &state.container_name,
+        &state.ui_plugins,
+        &plugin.name,
+        &plugin.label,
+    )))
 }
 
 // --- Shared CSS + JS ---
@@ -172,24 +196,38 @@ function ansiToHtml(text) {
 "#
 }
 
-fn nav_html(active: &str, container_name: &str) -> String {
-    let pages = [("Dashboard", "/ui/"), ("Terminal", "/ui/terminal"), ("Logs", "/ui/logs")];
-    let links: Vec<String> = pages
-        .iter()
-        .map(|(name, href)| {
-            let cls = if *name == active { " class=\"active\"" } else { "" };
-            format!("<a href=\"{}\"{}>{}</a>", href, cls, name)
-        })
-        .collect();
+fn nav_html(active: &str, container_name: &str, plugins: &[UiPlugin]) -> String {
+    let mut links = String::new();
+    for (name, href) in [
+        ("Dashboard", "/ui/"),
+        ("Terminal", "/ui/terminal"),
+        ("Logs", "/ui/logs"),
+    ] {
+        let cls = if name == active {
+            " class=\"active\""
+        } else {
+            ""
+        };
+        links.push_str(&format!("<a href=\"{}\"{}>{}</a>", href, cls, name));
+    }
+    for p in plugins {
+        let href = format!("/ui/ext/{}", p.name);
+        let cls = if p.label == active {
+            " class=\"active\""
+        } else {
+            ""
+        };
+        links.push_str(&format!("<a href=\"{}\"{}>{}</a>", href, cls, p.label));
+    }
     format!(
         "<nav><span class=\"brand\">{}</span><div class=\"links\">{}</div><span style=\"margin-left:auto;font-size:12px;color:#888;font-weight:500\">stormd</span></nav>",
-        container_name, links.join("")
+        container_name, links
     )
 }
 
 // --- Dashboard ---
 
-fn build_dashboard(name: &str) -> String {
+fn build_dashboard(name: &str, plugins: &[UiPlugin]) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html>
@@ -583,14 +621,14 @@ fn build_dashboard(name: &str) -> String {
 </body>
 </html>"#,
         css = nav_css(),
-        nav = nav_html("Dashboard", name),
+        nav = nav_html("Dashboard", name, plugins),
         ansi_js = ansi_js(),
     )
 }
 
 // --- Terminal page ---
 
-fn build_terminal(name: &str) -> String {
+fn build_terminal(name: &str, plugins: &[UiPlugin]) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html>
@@ -686,14 +724,14 @@ fn build_terminal(name: &str) -> String {
 </body>
 </html>"#,
         css = nav_css(),
-        nav = nav_html("Terminal", name),
+        nav = nav_html("Terminal", name, plugins),
         ansi_js = ansi_js(),
     )
 }
 
 // --- Logs page ---
 
-fn build_logs(name: &str) -> String {
+fn build_logs(name: &str, plugins: &[UiPlugin]) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html>
@@ -1104,7 +1142,35 @@ fn build_logs(name: &str) -> String {
 </body>
 </html>"#,
         css = nav_css(),
-        nav = nav_html("Logs", name),
+        nav = nav_html("Logs", name, plugins),
         ansi_js = ansi_js(),
+    )
+}
+
+// --- Plugin page ---
+
+fn build_plugin(name: &str, plugins: &[UiPlugin], plugin_name: &str, label: &str) -> String {
+    format!(
+        r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>stormd — {label}</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+{css}
+    html, body {{ height: 100%; overflow: hidden; }}
+    .plugin-frame {{ width: 100%; height: calc(100vh - 48px); border: none; }}
+    </style>
+</head>
+<body>
+    {nav}
+    <iframe class="plugin-frame" src="/ui/proxy/{plugin_name}/"></iframe>
+</body>
+</html>"#,
+        css = nav_css(),
+        nav = nav_html(label, name, plugins),
+        label = label,
+        plugin_name = plugin_name,
     )
 }

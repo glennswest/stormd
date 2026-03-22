@@ -232,6 +232,27 @@ async fn main() {
     // Shutdown channel — API handler sends exit code, main loop receives it
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel::<Option<i32>>(None);
 
+    // Extract UI plugins from process configs
+    let ui_plugins: Vec<api::UiPlugin> = config
+        .process
+        .iter()
+        .filter_map(|p| {
+            p.ui.as_ref().map(|ui| api::UiPlugin {
+                name: p.name.clone(),
+                label: ui.label.clone(),
+                proxy_url: ui.proxy.clone(),
+            })
+        })
+        .collect();
+
+    if !ui_plugins.is_empty() {
+        info!(
+            count = ui_plugins.len(),
+            plugins = ?ui_plugins.iter().map(|p| &p.label).collect::<Vec<_>>(),
+            "registered UI plugins"
+        );
+    }
+
     // Start SSH server
     let ssh_config = config.ssh.clone();
     let ssh_state = Arc::new(api::AppState {
@@ -247,6 +268,7 @@ async fn main() {
         allow_stdin: config.debug.allow_stdin,
         log_dir: config.general.log_dir.clone(),
         container_name: config.general.name.clone(),
+        ui_plugins: ui_plugins.clone(),
     });
     let ssh_container = config.general.name.clone();
     tokio::spawn(async move {
@@ -267,6 +289,7 @@ async fn main() {
         allow_stdin: config.debug.allow_stdin,
         log_dir: config.general.log_dir.clone(),
         container_name: config.general.name.clone(),
+        ui_plugins,
     });
 
     let router = api::build_router(app_state);

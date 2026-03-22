@@ -84,6 +84,14 @@ pub struct ProcessConfig {
     pub capture_stdout: bool,
     #[serde(default = "default_true")]
     pub capture_stderr: bool,
+    #[serde(default)]
+    pub ui: Option<ProcessUiConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProcessUiConfig {
+    pub label: String,
+    pub proxy: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
