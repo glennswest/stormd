@@ -83,6 +83,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // Plugin UI
         .route("/ui/ext/{name}", get(crate::web::plugin_page))
         .route("/ui/proxy/{name}", any(proxy_plugin))
+        .route("/ui/proxy/{name}/", any(proxy_plugin))
         .route("/ui/proxy/{name}/{*rest}", any(proxy_plugin))
         .route("/api/v1/plugins", get(list_plugins));
 
