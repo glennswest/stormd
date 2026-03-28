@@ -154,6 +154,16 @@ podman manifest add stormdbase:latest localhost/stormdbase-amd64:latest --arch a
 podman manifest push --all --tls-verify=false stormdbase:latest registry.gt.lo:5000/stormdbase:latest
 ```
 
+### Projects using stormdbase
+
+| Project | Description | Image |
+|---------|-------------|-------|
+| **netwatch** | Network monitoring and topology mapping | `registry.gt.lo:5000/netwatch:edge` |
+| **microdns** | DNS/DHCP server with REST API | `registry.gt.lo:5000/microdns:edge` |
+| **miniminio** | Minimal MinIO S3 gateway | `registry.gt.lo:5000/miniminio:edge` |
+| **rust4git** | Git web interface | `registry.gt.lo:5000/rust4git:edge` |
+| **mkube** | Container orchestrator | `registry.gt.lo:5000/mkube:edge` |
+
 ## What it does
 
 - **Process supervisor** — launches and monitors one or more binaries with configurable restart policies
