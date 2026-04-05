@@ -35,6 +35,7 @@ pub struct AppState {
     pub allow_stdin: bool,
     pub log_dir: std::path::PathBuf,
     pub container_name: String,
+    pub cloud_id: String,
     pub ui_plugins: Vec<UiPlugin>,
 }
 
@@ -44,6 +45,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/health", get(health))
         .route("/api/v1/status", get(status))
         .route("/api/v1/stats", get(stats))
+        .route("/api/v1/cloudid", get(get_cloud_id))
         // Processes
         .route("/api/v1/processes", get(list_processes))
         .route("/api/v1/processes/{name}", get(get_process))
@@ -128,6 +130,13 @@ async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "stats": stats,
         "processes": processes,
         "cron_jobs": cron_jobs,
+    }))
+}
+
+async fn get_cloud_id(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(serde_json::json!({
+        "cloud_id": state.cloud_id,
+        "container_name": state.container_name,
     }))
 }
 

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use stormlog::types::StormLogConfig;
+use tracing::info;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -37,6 +38,8 @@ pub struct GeneralConfig {
     pub log_dir: PathBuf,
     #[serde(default = "default_pid_file")]
     pub pid_file: PathBuf,
+    #[serde(default)]
+    pub cloud_id: Option<String>,
 }
 
 impl Default for GeneralConfig {
@@ -45,8 +48,55 @@ impl Default for GeneralConfig {
             name: default_name(),
             log_dir: default_log_dir(),
             pid_file: default_pid_file(),
+            cloud_id: None,
         }
     }
+}
+
+/// Resolve the cloud_id for this instance.
+///
+/// Priority order:
+/// 1. Explicit value in config (`[general] cloud_id = "..."`)
+/// 2. Environment variable `STORM_CLOUD_ID`
+/// 3. Persisted file at `{log_dir}/.cloudid`
+/// 4. Generate a new UUID v4 and persist to `{log_dir}/.cloudid`
+pub fn resolve_cloud_id(config: &GeneralConfig) -> String {
+    // 1. Config file
+    if let Some(ref id) = config.cloud_id {
+        if !id.is_empty() {
+            info!(cloud_id = %id, source = "config", "cloud_id resolved");
+            return id.clone();
+        }
+    }
+
+    // 2. Environment variable
+    if let Ok(id) = std::env::var("STORM_CLOUD_ID") {
+        if !id.is_empty() {
+            info!(cloud_id = %id, source = "env", "cloud_id resolved");
+            return id;
+        }
+    }
+
+    // 3. Persisted file
+    let persist_path = config.log_dir.join(".cloudid");
+    if let Ok(id) = std::fs::read_to_string(&persist_path) {
+        let id = id.trim().to_string();
+        if !id.is_empty() {
+            info!(cloud_id = %id, source = "file", path = %persist_path.display(), "cloud_id resolved");
+            return id;
+        }
+    }
+
+    // 4. Generate new UUID and persist
+    let id = uuid::Uuid::new_v4().to_string();
+    if let Err(e) = std::fs::create_dir_all(&config.log_dir) {
+        tracing::warn!(error = %e, "could not create log_dir for cloud_id persistence");
+    }
+    if let Err(e) = std::fs::write(&persist_path, &id) {
+        tracing::warn!(error = %e, path = %persist_path.display(), "could not persist cloud_id");
+    }
+    info!(cloud_id = %id, source = "generated", "cloud_id resolved");
+    id
 }
 
 #[derive(Debug, Clone, Deserialize)]

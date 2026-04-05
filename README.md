@@ -181,6 +181,8 @@ podman manifest push --all --tls-verify=false stormdbase:latest registry.gt.lo:5
 - **Event system** — push events to NATS or webhooks when processes start/stop/crash
 - **Liveness probes** — HTTP and TCP health checks with automatic restart on failure (SIGUSR1 grace, then SIGKILL)
 - **Busybox commands** — 63 built-in Unix commands (ls, cat, grep, curl, ping, etc.) via argv[0] symlinks
+- **Cloud ID** — per-instance unique identifier usable as SSH password; set via config, env var, or auto-generated UUID
+- **SFTP/SCP** — built-in SFTP subsystem enables `scp` and `sftp` file transfers into and out of containers
 - **Docker HEALTHCHECK** — `stormd --healthcheck` probes the running instance for use in scratch containers
 - **PID 1** — proper zombie reaping, signal handling, and network sysctl init for scratch containers
 
@@ -594,6 +596,8 @@ Your app doesn't have to match stormd's style — it renders in its own iframe a
 [general]
 name = "my-service"                    # container name (shown in UI nav)
 log_dir = "/var/stormd/logs"           # log file directory
+# cloud_id = "my-unique-id"           # unique instance ID (also accepted as SSH password)
+                                       # auto-generated UUID if not set (env: STORM_CLOUD_ID)
 
 [api]
 bind = "0.0.0.0:9080"                 # REST API + web UI bind address
@@ -754,6 +758,7 @@ curl http://localhost:8080/health > /tmp/health.txt
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/api/v1/cloudid` | Instance cloud ID and container name |
 | GET | `/api/v1/health` | Health check |
 | GET | `/api/v1/status` | Full status (processes, cron, stats) |
 | GET | `/api/v1/stats` | System stats (uptime, memory, counts) |
@@ -818,6 +823,36 @@ Events are emitted for process lifecycle changes and can be sent to NATS or webh
 - `update_check_started`, `update_available`, `update_pulling`, `update_pivoting`, `update_completed`, `update_failed`
 - `cron_executed`, `cron_failed`
 - `backup_started`, `backup_completed`, `backup_failed`
+
+## Cloud ID
+
+Each stormd instance has a unique cloud ID that can be used as an SSH password. This provides per-instance credentials for fleet management without sharing a single password.
+
+**Resolution order:**
+1. Config file: `[general] cloud_id = "my-id"`
+2. Environment variable: `STORM_CLOUD_ID=my-id`
+3. Persisted file: `{log_dir}/.cloudid` (survives restarts if log_dir is on a volume)
+4. Auto-generated UUID v4 (persisted to `{log_dir}/.cloudid`)
+
+**Usage:**
+```bash
+# Retrieve cloud_id via API
+curl http://localhost:9080/api/v1/cloudid
+
+# SSH using cloud_id as password
+ssh root@container-host -p 22
+# enter the cloud_id as the password
+
+# SCP files into the container
+scp -P 22 myfile.tar.gz root@container-host:/data/
+
+# SFTP session
+sftp -P 22 root@container-host
+sftp> put localfile.txt /app/
+sftp> get /var/stormd/logs/api.log
+```
+
+The cloud_id is accepted alongside the configured SSH password — both work.
 
 ## Version
 

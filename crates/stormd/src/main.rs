@@ -6,7 +6,7 @@ use tracing::{error, info, warn};
 
 use stormd::api;
 use stormd::backup::BackupManager;
-use stormd::config::Config;
+use stormd::config::{self, Config};
 use stormd::cron::CronScheduler;
 use stormd::events::{EventBus, EventKind};
 use stormd::ssh;
@@ -132,6 +132,9 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    // Resolve cloud_id (config → env → persisted file → generate)
+    let cloud_id = config::resolve_cloud_id(&config.general);
 
     // Initialize components
     let event_bus = Arc::new(EventBus::new(
@@ -268,6 +271,7 @@ async fn main() {
         allow_stdin: config.debug.allow_stdin,
         log_dir: config.general.log_dir.clone(),
         container_name: config.general.name.clone(),
+        cloud_id: cloud_id.clone(),
         ui_plugins: ui_plugins.clone(),
     });
     let ssh_container = config.general.name.clone();
@@ -289,6 +293,7 @@ async fn main() {
         allow_stdin: config.debug.allow_stdin,
         log_dir: config.general.log_dir.clone(),
         container_name: config.general.name.clone(),
+        cloud_id,
         ui_plugins,
     });
 

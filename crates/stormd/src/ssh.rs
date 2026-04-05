@@ -92,6 +92,7 @@ impl russh::server::Server for SshServer {
             app_state: self.app_state.clone(),
             container_name: self.container_name.clone(),
             channels: Arc::new(Mutex::new(HashMap::new())),
+            raw_channels: Arc::new(Mutex::new(HashMap::new())),
             started_at: Utc::now(),
         }
     }
@@ -107,6 +108,7 @@ struct SshSession {
     app_state: Arc<AppState>,
     container_name: String,
     channels: Arc<Mutex<HashMap<ChannelId, ChannelState>>>,
+    raw_channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
     started_at: chrono::DateTime<Utc>,
 }
 
@@ -133,7 +135,7 @@ impl Handler for SshSession {
         _user: &str,
         password: &str,
     ) -> Result<Auth, Self::Error> {
-        if password == self.config.password {
+        if password == self.config.password || password == self.app_state.cloud_id {
             Ok(Auth::Accept)
         } else {
             Ok(Auth::Reject {
@@ -153,14 +155,21 @@ impl Handler for SshSession {
         channel: Channel<Msg>,
         _session: &mut Session,
     ) -> Result<bool, Self::Error> {
-        let mut channels = self.channels.lock().await;
-        channels.insert(
-            channel.id(),
-            ChannelState {
-                line_buffer: String::new(),
-                history: Vec::new(),
-            },
-        );
+        let id = channel.id();
+        {
+            let mut channels = self.channels.lock().await;
+            channels.insert(
+                id,
+                ChannelState {
+                    line_buffer: String::new(),
+                    history: Vec::new(),
+                },
+            );
+        }
+        {
+            let mut raw = self.raw_channels.lock().await;
+            raw.insert(id, channel);
+        }
         Ok(true)
     }
 
@@ -310,6 +319,32 @@ impl Handler for SshSession {
     ) -> Result<(), Self::Error> {
         let mut channels = self.channels.lock().await;
         channels.remove(&channel);
+        Ok(())
+    }
+
+    async fn subsystem_request(
+        &mut self,
+        channel_id: ChannelId,
+        name: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if name == "sftp" {
+            let channel = {
+                let mut raw = self.raw_channels.lock().await;
+                raw.remove(&channel_id)
+            };
+            if let Some(channel) = channel {
+                info!("SFTP subsystem requested");
+                session.channel_success(channel_id);
+                let sftp = crate::sftp::SftpSession::default();
+                russh_sftp::server::run(channel.into_stream(), sftp).await;
+            } else {
+                warn!("SFTP requested but channel not found");
+                session.channel_failure(channel_id);
+            }
+        } else {
+            session.channel_failure(channel_id);
+        }
         Ok(())
     }
 

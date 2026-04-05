@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### 2026-04-05
+- **feat:** Cloud ID — per-instance unique identifier accepted as SSH password; configurable via `[general] cloud_id`, `STORM_CLOUD_ID` env var, or auto-generated UUID persisted to `{log_dir}/.cloudid`
+- **feat:** SFTP subsystem — built-in SFTP server enables `scp` and `sftp` file transfers into containers (open, read, write, stat, mkdir, rmdir, rename, symlink, readlink, remove)
+- **feat:** `GET /api/v1/cloudid` endpoint — returns the instance cloud ID and container name
+
 ### 2026-03-21
 - **feat:** Extensible plugin UI — managed processes can declare `[process.ui]` with `label` and `proxy` to add custom tabs to the stormd web UI
 - **feat:** Reverse proxy at `/ui/proxy/{name}/` forwards all HTTP methods to the plugin's target URL (same-origin, no CORS issues)
