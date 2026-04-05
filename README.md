@@ -65,9 +65,18 @@ open http://localhost:9080/ui/
 
 # SSH in — full shell with ls, cat, grep, curl, ping, etc.
 ssh root@localhost -p 2222
+
+# Get the instance cloud_id (auto-generated, also works as SSH password)
+curl -s http://localhost:9080/api/v1/cloudid | jq -r .cloud_id
+
+# SCP files into the container
+scp -P 2222 mydata.tar.gz root@localhost:/data/
+
+# SFTP session
+sftp -P 2222 root@localhost
 ```
 
-That's it. Your final image has a process supervisor, SSH server, web dashboard, REST API, liveness health checks, and 63 Unix commands — all from a single static binary.
+That's it. Your final image has a process supervisor, SSH server, web dashboard, REST API, liveness health checks, SCP/SFTP file transfer, and 63 Unix commands — all from a single static binary.
 
 ### Example: multi-process with per-process logging
 
