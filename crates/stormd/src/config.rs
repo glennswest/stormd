@@ -329,6 +329,15 @@ pub struct SshConfig {
     #[serde(default = "default_ssh_password")]
     pub password: String,
     pub authorized_keys: Option<PathBuf>,
+    /// CloudID metadata endpoint URL for SSH public key auth.
+    /// Defaults to the EC2-compatible metadata IP (169.254.169.254).
+    #[serde(default = "default_cloudid_url")]
+    pub cloudid_url: String,
+    /// Owner tag — identifies this container to CloudID for key resolution.
+    /// When set, CloudID uses the namespace owner annotation to serve the
+    /// correct SSH keys. Required for CloudID public key auth to activate.
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
 impl Default for SshConfig {
@@ -339,6 +348,8 @@ impl Default for SshConfig {
             host_key: default_ssh_host_key(),
             password: default_ssh_password(),
             authorized_keys: None,
+            cloudid_url: default_cloudid_url(),
+            owner: None,
         }
     }
 }
@@ -391,6 +402,7 @@ fn default_api_bind() -> String { "0.0.0.0:9080".to_string() }
 fn default_ssh_bind() -> String { "0.0.0.0:22".to_string() }
 fn default_ssh_host_key() -> PathBuf { PathBuf::from("/etc/stormd/host_key") }
 fn default_ssh_password() -> String { "stormd".to_string() }
+fn default_cloudid_url() -> String { "http://169.254.169.254".to_string() }
 fn default_liveness_interval() -> u64 { 10 }
 fn default_liveness_timeout() -> u64 { 5 }
 fn default_failure_threshold() -> u32 { 1 }

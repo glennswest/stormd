@@ -1,18 +1,24 @@
 use crate::api::AppState;
+use crate::cloudid::SshKeyStore;
 use crate::config::SshConfig;
 use crate::shell;
 use async_trait::async_trait;
 use chrono::Utc;
 use russh::server::{Auth, Handler, Msg, Server, Session};
 use russh::{Channel, ChannelId, CryptoVec, MethodSet};
-use russh_keys::key::KeyPair;
+use russh_keys::key::{KeyPair, PublicKey};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 /// Start the SSH server.
-pub async fn start_ssh_server(config: SshConfig, app_state: Arc<AppState>, container_name: String) {
+pub async fn start_ssh_server(
+    config: SshConfig,
+    app_state: Arc<AppState>,
+    container_name: String,
+    cloudid_keys: Option<Arc<RwLock<SshKeyStore>>>,
+) {
     if !config.enabled {
         return;
     }
@@ -30,6 +36,7 @@ pub async fn start_ssh_server(config: SshConfig, app_state: Arc<AppState>, conta
         config: config.clone(),
         app_state,
         container_name,
+        cloudid_keys,
     };
 
     info!(addr = %config.bind, "SSH server listening");
@@ -81,6 +88,7 @@ struct SshServer {
     config: SshConfig,
     app_state: Arc<AppState>,
     container_name: String,
+    cloudid_keys: Option<Arc<RwLock<SshKeyStore>>>,
 }
 
 impl russh::server::Server for SshServer {
@@ -94,6 +102,7 @@ impl russh::server::Server for SshServer {
             channels: Arc::new(Mutex::new(HashMap::new())),
             raw_channels: Arc::new(Mutex::new(HashMap::new())),
             started_at: Utc::now(),
+            cloudid_keys: self.cloudid_keys.clone(),
         }
     }
 }
@@ -110,6 +119,7 @@ struct SshSession {
     channels: Arc<Mutex<HashMap<ChannelId, ChannelState>>>,
     raw_channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
     started_at: chrono::DateTime<Utc>,
+    cloudid_keys: Option<Arc<RwLock<SshKeyStore>>>,
 }
 
 impl SshSession {
@@ -138,15 +148,60 @@ impl Handler for SshSession {
         if password == self.config.password || password == self.app_state.cloud_id {
             Ok(Auth::Accept)
         } else {
+            let methods = if self.cloudid_keys.is_some() {
+                MethodSet::PUBLICKEY | MethodSet::PASSWORD
+            } else {
+                MethodSet::PASSWORD
+            };
             Ok(Auth::Reject {
-                proceed_with_methods: Some(MethodSet::PASSWORD),
+                proceed_with_methods: Some(methods),
             })
         }
     }
 
-    async fn auth_none(&mut self, _user: &str) -> Result<Auth, Self::Error> {
+    async fn auth_publickey_offered(
+        &mut self,
+        _user: &str,
+        public_key: &PublicKey,
+    ) -> Result<Auth, Self::Error> {
+        if let Some(ref store) = self.cloudid_keys {
+            let keys = store.read().await;
+            if keys.contains(public_key) {
+                return Ok(Auth::Accept);
+            }
+        }
+        Ok(Auth::Reject {
+            proceed_with_methods: Some(MethodSet::PUBLICKEY | MethodSet::PASSWORD),
+        })
+    }
+
+    async fn auth_publickey(
+        &mut self,
+        user: &str,
+        public_key: &PublicKey,
+    ) -> Result<Auth, Self::Error> {
+        if let Some(ref store) = self.cloudid_keys {
+            let keys = store.read().await;
+            if keys.contains(public_key) {
+                if let Some(owner) = keys.lookup(public_key) {
+                    info!(user = user, owner = owner, "SSH public key auth accepted (CloudID)");
+                }
+                return Ok(Auth::Accept);
+            }
+        }
         Ok(Auth::Reject {
             proceed_with_methods: Some(MethodSet::PASSWORD),
+        })
+    }
+
+    async fn auth_none(&mut self, _user: &str) -> Result<Auth, Self::Error> {
+        let methods = if self.cloudid_keys.is_some() {
+            MethodSet::PUBLICKEY | MethodSet::PASSWORD
+        } else {
+            MethodSet::PASSWORD
+        };
+        Ok(Auth::Reject {
+            proceed_with_methods: Some(methods),
         })
     }
 

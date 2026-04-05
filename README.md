@@ -191,6 +191,7 @@ podman manifest push --all --tls-verify=false stormdbase:latest registry.gt.lo:5
 - **Liveness probes** — HTTP and TCP health checks with automatic restart on failure (SIGUSR1 grace, then SIGKILL)
 - **Busybox commands** — 63 built-in Unix commands (ls, cat, grep, curl, ping, etc.) via argv[0] symlinks
 - **Cloud ID** — per-instance unique identifier usable as SSH password; set via config, env var, or auto-generated UUID
+- **CloudID SSH key auth** — fetches SSH public keys from CloudID metadata service (169.254.169.254) for passwordless login; 30s auto-refresh
 - **SFTP/SCP** — built-in SFTP subsystem enables `scp` and `sftp` file transfers into and out of containers
 - **Docker HEALTHCHECK** — `stormd --healthcheck` probes the running instance for use in scratch containers
 - **PID 1** — proper zombie reaping, signal handling, and network sysctl init for scratch containers
@@ -615,6 +616,9 @@ bind = "0.0.0.0:9080"                 # REST API + web UI bind address
 enabled = true                         # enable built-in SSH server
 bind = "0.0.0.0:22"                   # SSH bind address
 password = "stormd"                    # SSH password (default: stormd)
+# host_key = "/etc/stormd/host_key"   # SSH host key path (auto-generated if missing)
+# owner = "my-namespace"              # CloudID owner tag — enables SSH public key auth
+# cloudid_url = "http://169.254.169.254"  # CloudID metadata endpoint (default: magic IP)
 
 [events]
 enabled = false                        # enable event system
@@ -862,6 +866,50 @@ sftp> get /var/stormd/logs/api.log
 ```
 
 The cloud_id is accepted alongside the configured SSH password — both work.
+
+## CloudID SSH Key Auth
+
+When `owner` is set in `[ssh]`, stormd fetches SSH public keys from the CloudID metadata service and accepts public key authentication. This eliminates password prompts and centralizes key management across all stormd containers.
+
+CloudID resolves which keys to serve based on the requesting container's IP address and namespace owner annotation (`vkube.io/owner`). The magic IP `169.254.169.254` is routed to CloudID via DHCP option 121 on all data networks.
+
+**Config:**
+```toml
+[ssh]
+enabled = true
+bind = "0.0.0.0:22"
+owner = "my-namespace"                       # activates CloudID key fetching
+cloudid_url = "http://169.254.169.254"       # default — uses magic metadata IP
+```
+
+**How it works:**
+1. On startup, stormd fetches authorized SSH keys from `{cloudid_url}/latest/meta-data/public-keys/`
+2. Keys are refreshed every 30 seconds so changes propagate without restart
+3. SSH clients can authenticate with their SSH key — no password needed
+4. Password auth (configured password + cloud_id) remains available as fallback
+5. If CloudID is unreachable, stormd starts with an empty key store and retries
+
+**Usage:**
+```bash
+# SSH in with your key (no password prompt)
+ssh root@container-host -p 22
+
+# SCP with key auth
+scp -P 22 myfile.tar.gz root@container-host:/data/
+```
+
+**Example configs:**
+```toml
+# mkube container
+[ssh]
+enabled = true
+owner = "mkube"
+
+# app in user namespace
+[ssh]
+enabled = true
+owner = "gwest"
+```
 
 ## Version
 

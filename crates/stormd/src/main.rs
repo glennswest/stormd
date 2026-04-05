@@ -256,6 +256,19 @@ async fn main() {
         );
     }
 
+    // Start CloudID key refresh if owner is configured
+    let cloudid_keys = if config.ssh.enabled && config.ssh.owner.is_some() {
+        let url = config.ssh.cloudid_url.clone();
+        info!(
+            cloudid_url = %url,
+            owner = ?config.ssh.owner,
+            "starting CloudID SSH key refresh"
+        );
+        Some(stormd::cloudid::start_key_refresh(url).await)
+    } else {
+        None
+    };
+
     // Start SSH server
     let ssh_config = config.ssh.clone();
     let ssh_state = Arc::new(api::AppState {
@@ -275,8 +288,9 @@ async fn main() {
         ui_plugins: ui_plugins.clone(),
     });
     let ssh_container = config.general.name.clone();
+    let ssh_keys = cloudid_keys.clone();
     tokio::spawn(async move {
-        ssh::start_ssh_server(ssh_config, ssh_state, ssh_container).await;
+        ssh::start_ssh_server(ssh_config, ssh_state, ssh_container, ssh_keys).await;
     });
 
     // Build and start API server

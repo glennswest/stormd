@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### 2026-04-05
+- **feat:** CloudID SSH public key auth — fetches authorized keys from CloudID metadata service (169.254.169.254) with 30s refresh; enable via `[ssh] owner = "my-tag"`
+- **feat:** `cloudid_url` and `owner` config fields in `[ssh]` section for CloudID integration
 - **feat:** Cloud ID — per-instance unique identifier accepted as SSH password; configurable via `[general] cloud_id`, `STORM_CLOUD_ID` env var, or auto-generated UUID persisted to `{log_dir}/.cloudid`
 - **feat:** SFTP subsystem — built-in SFTP server enables `scp` and `sftp` file transfers into containers (open, read, write, stat, mkdir, rmdir, rename, symlink, readlink, remove)
 - **feat:** `GET /api/v1/cloudid` endpoint — returns the instance cloud ID and container name
