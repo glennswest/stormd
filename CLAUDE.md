@@ -402,7 +402,7 @@ Cargo.toml         → version = "5.0.0"
 - Uses rustls-tls (no OpenSSL) for fully static musl binaries (11 MB stripped)
 - Build and test on Linux at: `root@devx.gw.lo:/root/stormblock` (192.168.1.53, CT 102 on pvex.gw.lo)
 - Linux build host has 40GB `/build` disk for cargo target dir (symlinked from target/)
-- DNS on devx: 192.168.1.199, 192.168.1.154 (dns.gw.lo)
+- DNS on devx: 192.168.1.252, 192.168.1.154 (dns.gw.lo)
 
 ### Known Decisions & Context
 - openraft pinned to 0.9 (0.10 has breaking API changes)
@@ -424,7 +424,7 @@ MicroDNS instances run on each network's DNS server. Base URL is `http://<dns-ip
 | gt | 192.168.200.199 | `http://192.168.200.199:8080/api/v1` |
 | g10 | 192.168.10.252 | `http://192.168.10.252:8080/api/v1` |
 | g11 | 192.168.11.252 | `http://192.168.11.252:8080/api/v1` |
-| gw | 192.168.1.199 | `http://192.168.1.199:8080/api/v1` |
+| gw | 192.168.1.252 | `http://192.168.1.252:8080/api/v1` |
 
 ### DNS Zones
 
@@ -533,7 +533,7 @@ range_start = "192.168.10.10"
 range_end = "192.168.10.210"
 subnet = "192.168.10.0/24"
 gateway = "192.168.10.1"
-dns = ["192.168.1.199"]
+dns = ["192.168.1.252"]
 domain = "g10.lo"
 lease_time_secs = 600
 next_server = "192.168.10.200"   # PXE TFTP server
