@@ -6,7 +6,7 @@ license.workspace = true
 description = "TUI client for stormd — process management, terminal, and log viewer"
 
 [dependencies]
-stormlog = { path = "../stormlog" }
+stormlog = { path = "../stormlog", default-features = false }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -19,3 +19,7 @@ futures-util.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 tracing.workspace = true
+
+[features]
+default = ["s3"]
+s3 = ["stormlog/s3"]

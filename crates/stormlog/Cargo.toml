@@ -15,5 +15,9 @@ uuid.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 vt100.workspace = true
-rust-s3.workspace = true
+rust-s3 = { workspace = true, optional = true }
 tokio-util.workspace = true
+
+[features]
+default = ["s3"]
+s3 = ["dep:rust-s3"]

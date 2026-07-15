@@ -1,5 +1,9 @@
 pub mod file;
 pub mod ingest;
+#[cfg(feature = "s3")]
+pub mod storage;
+#[cfg(not(feature = "s3"))]
+#[path = "storage_stub.rs"]
 pub mod storage;
 pub mod stream;
 pub mod syslog;
