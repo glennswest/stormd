@@ -3,3 +3,7 @@ linker = "aarch64-linux-musl-gcc"
 
 [target.x86_64-unknown-linux-musl]
 linker = "x86_64-linux-musl-gcc"
+
+# armv7 hard-float (32-bit ARM) — MikroTik hAP ac2 and other RouterOS "arm" devices
+[target.armv7-unknown-linux-musleabihf]
+linker = "armv7-unknown-linux-musleabihf-gcc"
