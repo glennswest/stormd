@@ -25,3 +25,7 @@ credentials/
 *.log
 tmp/
 temp/
+
+# vendored deps: keep only the patched russh-sftp; ignore the rest of cargo-vendor output
+/vendor/*
+!/vendor/russh-sftp/
