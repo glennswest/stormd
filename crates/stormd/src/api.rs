@@ -20,6 +20,7 @@ pub struct UiPlugin {
     pub name: String,
     pub label: String,
     pub proxy_url: String,
+    pub host: Option<String>,
 }
 
 pub struct AppState {
@@ -37,10 +38,14 @@ pub struct AppState {
     pub container_name: String,
     pub cloud_id: String,
     pub ui_plugins: Vec<UiPlugin>,
+    /// Host: header -> redirect target path (name-based routing on the API port).
+    pub host_routes: std::collections::HashMap<String, String>,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     let mut router = Router::new()
+        // Name-based routing entry point
+        .route("/", get(root_redirect))
         // Health & status
         .route("/api/v1/health", get(health))
         .route("/api/v1/status", get(status))
@@ -558,6 +563,25 @@ async fn list_plugins(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         })
         .collect();
     Json(serde_json::Value::Array(plugins))
+}
+
+/// Root handler: route by `Host:` header. Looks up the (config-driven) host
+/// map and redirects to its target; unknown hosts fall back to the dashboard.
+async fn root_redirect(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Redirect {
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .map(|h| h.split(':').next().unwrap_or(h).to_ascii_lowercase())
+        .unwrap_or_default();
+    let target = state
+        .host_routes
+        .get(&host)
+        .cloned()
+        .unwrap_or_else(|| "/ui/".to_string());
+    axum::response::Redirect::temporary(&target)
 }
 
 async fn proxy_plugin(

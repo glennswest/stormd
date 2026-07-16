@@ -244,6 +244,7 @@ async fn main() {
                 name: p.name.clone(),
                 label: ui.label.clone(),
                 proxy_url: ui.proxy.clone(),
+                host: ui.host.clone(),
             })
         })
         .collect();
@@ -254,6 +255,15 @@ async fn main() {
             plugins = ?ui_plugins.iter().map(|p| &p.label).collect::<Vec<_>>(),
             "registered UI plugins"
         );
+    }
+
+    // Reusable host-based routing map: config `[api.hosts]` plus each plugin's
+    // declared `host` -> its proxied UI path.
+    let mut host_routes = config.api.hosts.clone();
+    for p in &ui_plugins {
+        if let Some(h) = &p.host {
+            host_routes.insert(h.to_ascii_lowercase(), format!("/ui/proxy/{}/", p.name));
+        }
     }
 
     // Start CloudID key refresh if owner is configured
@@ -286,6 +296,7 @@ async fn main() {
         container_name: config.general.name.clone(),
         cloud_id: cloud_id.clone(),
         ui_plugins: ui_plugins.clone(),
+        host_routes: host_routes.clone(),
     });
     let ssh_container = config.general.name.clone();
     let ssh_keys = cloudid_keys.clone();
@@ -309,6 +320,7 @@ async fn main() {
         container_name: config.general.name.clone(),
         cloud_id,
         ui_plugins,
+        host_routes,
     });
 
     let router = api::build_router(app_state);

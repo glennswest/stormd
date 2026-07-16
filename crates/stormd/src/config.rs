@@ -142,6 +142,10 @@ pub struct ProcessConfig {
 pub struct ProcessUiConfig {
     pub label: String,
     pub proxy: String,
+    /// Optional virtual host. Requests whose `Host:` matches on the API port are
+    /// routed to this plugin's UI, enabling name-based routing (e.g. clients.mob.lo).
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -295,6 +299,10 @@ pub struct ApiConfig {
     pub bind: String,
     #[serde(default)]
     pub auth_token: Option<String>,
+    /// Reusable, config-driven host-based routing: `Host:` header -> redirect
+    /// target path (e.g. "manager.mob.lo" = "/ui/", "api.x" = "/api/v1/health").
+    #[serde(default)]
+    pub hosts: std::collections::HashMap<String, String>,
 }
 
 impl Default for ApiConfig {
@@ -302,6 +310,7 @@ impl Default for ApiConfig {
         Self {
             bind: default_api_bind(),
             auth_token: None,
+            hosts: std::collections::HashMap::new(),
         }
     }
 }
