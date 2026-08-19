@@ -1,4 +1,17 @@
 # Stage 1: Create busybox-style symlinks
+#
+# Relative targets, not `/stormd`.
+#
+# An absolute target only resolves when the image root is `/`. Under a
+# copy-on-write model the image is a clone mounted somewhere else — RouterOS
+# will not take a block device as a container's root, so the rootfs arrives at
+# a mount point and the container's own root is a stub — and there `/stormd`
+# does not exist. Every one of these 252 names then fails to resolve, which
+# takes out `execve` for anything that goes through them and looks like the
+# binary is missing rather than the link being wrong.
+#
+# `../stormd` from `/bin`, `../../stormd` from `/usr/bin`: identical when the
+# root is `/`, and still correct when it is not.
 FROM busybox:musl AS symlinks
 COPY target/aarch64-unknown-linux-musl/release/stormd /stormd
 RUN mkdir -p /out/bin /out/usr/bin /out/sbin /out/usr/sbin && \
@@ -9,10 +22,10 @@ RUN mkdir -p /out/bin /out/usr/bin /out/sbin /out/usr/sbin && \
       mount df free uname date id kill printenv export unset \
       sleep echo env whoami which type lsof true false clear \
       sort uniq cut tr sed rev base64 xxd grep; do \
-    ln -s /stormd /out/bin/$cmd; \
-    ln -s /stormd /out/usr/bin/$cmd; \
-    ln -s /stormd /out/sbin/$cmd; \
-    ln -s /stormd /out/usr/sbin/$cmd; \
+    ln -s ../stormd /out/bin/$cmd; \
+    ln -s ../../stormd /out/usr/bin/$cmd; \
+    ln -s ../stormd /out/sbin/$cmd; \
+    ln -s ../../stormd /out/usr/sbin/$cmd; \
     done
 
 # Stage 2: Scratch image with stormd + symlinks

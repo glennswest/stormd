@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### 2026-08-19
+- **fix:** the applet symlinks are relative (`../stormd`, `../../stormd`)
+  instead of absolute (`/stormd`), in all three architecture Containerfiles.
+  An absolute target only resolves when the image root is `/`. Under a
+  copy-on-write model the rootfs is a clone mounted somewhere else — RouterOS
+  will not take a block device as a container's root, so the image arrives at
+  a mount point and the container's own root is a stub — and there `/stormd`
+  does not exist. All 252 applet names then fail to resolve, which takes out
+  `execve` for anything reached through them and reads as a missing binary
+  rather than a broken link. This is what stopped the 2026-08-19 netwatch
+  CoW trial: the container was created, the clone attached, and it exited
+  immediately.
+  Verified both ways: relative targets resolve at `/` and under `/payload`;
+  the absolute form resolves at `/` and breaks the moment the image moves.
+  Behaviour at `/` is unchanged, so this costs nothing for tarball-served
+  containers.
+
 ### 2026-04-05
 - **feat:** CloudID SSH public key auth — fetches authorized keys from CloudID metadata service (169.254.169.254) with 30s refresh; enable via `[ssh] owner = "my-tag"`
 - **feat:** `cloudid_url` and `owner` config fields in `[ssh]` section for CloudID integration
