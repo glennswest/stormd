@@ -50,6 +50,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/health", get(health))
         .route("/api/v1/status", get(status))
         .route("/api/v1/stats", get(stats))
+        // Prometheus text format, at the path everything that scrapes expects.
+        // Not under /api/v1: a scraper is configured with a port and a path,
+        // and every one of them defaults to this one.
+        .route("/metrics", get(metrics))
         .route("/api/v1/cloudid", get(get_cloud_id))
         // Processes
         .route("/api/v1/processes", get(list_processes))
@@ -155,6 +159,112 @@ async fn stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     let sys_stats = state.stats.get_stats().await;
     Json(sys_stats)
+}
+
+/// Prometheus text format, for whatever is scraping.
+///
+/// Metrics are not events and are not logs. Kubernetes keeps none of this in
+/// its datastore — `kubectl top` is served by metrics-server out of memory and
+/// persists nothing — because a number sampled every fifteen seconds forever is
+/// the one kind of data a consensus store must never be asked to hold. So this
+/// is a reading taken on request, kept nowhere, and true at the moment it is
+/// asked for.
+///
+/// The names follow the conventions a Prometheus consumer expects: a `_total`
+/// suffix on counters, `_seconds` and `_bytes` on units, and one label set per
+/// series. `container` is this stormd's name, `process` the supervised binary —
+/// so a fleet's worth of these aggregate by either without anything having to
+/// rewrite them.
+async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    use std::fmt::Write;
+
+    let statuses = state.supervisor.get_all_statuses().await;
+    let sys = state.stats.get_stats().await;
+    let c = &sys.container_name;
+    let mut o = String::with_capacity(2048);
+
+    let _ = writeln!(o, "# HELP stormd_up 1 when this supervisor is answering.");
+    let _ = writeln!(o, "# TYPE stormd_up gauge");
+    let _ = writeln!(o, "stormd_up{{container=\"{c}\"}} 1");
+
+    let _ = writeln!(o, "# HELP stormd_uptime_seconds How long this supervisor has been up.");
+    let _ = writeln!(o, "# TYPE stormd_uptime_seconds gauge");
+    let _ = writeln!(o, "stormd_uptime_seconds{{container=\"{c}\"}} {}", sys.uptime_secs);
+
+    if let Some(m) = &sys.memory {
+        let _ = writeln!(o, "# HELP stormd_memory_rss_bytes Resident memory of the supervisor.");
+        let _ = writeln!(o, "# TYPE stormd_memory_rss_bytes gauge");
+        let _ = writeln!(o, "stormd_memory_rss_bytes{{container=\"{c}\"}} {}", m.rss_bytes);
+    }
+
+    let _ = writeln!(
+        o,
+        "# HELP stormd_process_state 1 for the state this process is in, 0 otherwise."
+    );
+    let _ = writeln!(o, "# TYPE stormd_process_state gauge");
+    for p in &statuses {
+        for st in ["running", "stopped", "failed", "starting", "restarting"] {
+            let now = format!("{:?}", p.state).to_lowercase();
+            let v = if now == st { 1 } else { 0 };
+            let _ = writeln!(
+                o,
+                "stormd_process_state{{container=\"{c}\",process=\"{}\",state=\"{st}\"}} {v}",
+                p.name
+            );
+        }
+    }
+
+    // The counter Kubernetes keeps on the Pod as
+    // status.containerStatuses[].restartCount, at the level this supervisor
+    // owns: a process inside a container rather than a container inside a pod.
+    let _ = writeln!(o, "# HELP stormd_process_restarts_total Restarts since this supervisor started.");
+    let _ = writeln!(o, "# TYPE stormd_process_restarts_total counter");
+    for p in &statuses {
+        let _ = writeln!(
+            o,
+            "stormd_process_restarts_total{{container=\"{c}\",process=\"{}\"}} {}",
+            p.name, p.restarts
+        );
+    }
+
+    let _ = writeln!(o, "# HELP stormd_process_crashes_total Non-zero exits since this supervisor started.");
+    let _ = writeln!(o, "# TYPE stormd_process_crashes_total counter");
+    for p in &statuses {
+        let _ = writeln!(
+            o,
+            "stormd_process_crashes_total{{container=\"{c}\",process=\"{}\"}} {}",
+            p.name, p.crashes
+        );
+    }
+
+    let _ = writeln!(o, "# HELP stormd_process_liveness_failures_total Liveness probe failures.");
+    let _ = writeln!(o, "# TYPE stormd_process_liveness_failures_total counter");
+    for p in &statuses {
+        let _ = writeln!(
+            o,
+            "stormd_process_liveness_failures_total{{container=\"{c}\",process=\"{}\"}} {}",
+            p.name, p.liveness_failures
+        );
+    }
+
+    let _ = writeln!(o, "# HELP stormd_process_uptime_seconds How long this process has been up.");
+    let _ = writeln!(o, "# TYPE stormd_process_uptime_seconds gauge");
+    for p in &statuses {
+        // Absent rather than zero when it is not running: zero is a running
+        // process that has just started, and the two must not read alike.
+        if let Some(u) = p.uptime_secs {
+            let _ = writeln!(
+                o,
+                "stormd_process_uptime_seconds{{container=\"{c}\",process=\"{}\"}} {u}",
+                p.name
+            );
+        }
+    }
+
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        o,
+    )
 }
 
 // --- Processes ---
