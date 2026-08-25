@@ -42,6 +42,5 @@ nix = { version = "0.29", features = ["signal", "process", "fs", "user"] }
 libc = "0.2"
 
 [features]
-default = ["nats", "s3"]
+default = ["nats"]
 nats = ["async-nats"]
-s3 = ["stormlog/s3"]

@@ -28,7 +28,6 @@ flate2 = "1"
 tar = "0.4"
 tokio-util = { version = "0.7", features = ["io"] }
 vt100 = "0.15"
-rust-s3 = { version = "0.35", default-features = false, features = ["tokio-rustls-tls"] }
 ratatui = "0.29"
 crossterm = "0.28"
 russh = "0.46"

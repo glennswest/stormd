@@ -1,13 +1,23 @@
+//! A container's logging: write it down, put it on the wire, let someone
+//! follow it.
+//!
+//! Three things and no more. Lines go to a file on the log volume, which is
+//! rotated and is what `must-gather` collects; they go onto the fleet's
+//! multicast group, which is how anyone sees them without being on this node;
+//! and they go to a broadcast channel, which is what the web console follows.
+//!
+//! What used to be here as well — an object store with a bucket and
+//! credentials, a flush loop, and syslog receivers on UDP, TCP and `/dev/log`
+//! — has gone. Receiving, storing, indexing and searching a fleet's logs is a
+//! collector's job (`mcastsyslog`), and doing it in a container's init as well
+//! meant two stores, two schemas, and a view that saw half the nodes. Worse,
+//! it made the logs a node keeps depend on a service elsewhere being up — and
+//! the logs anyone wants are from the failure that also took the network out.
+
 pub mod file;
-pub mod ingest;
-#[cfg(feature = "s3")]
-pub mod storage;
-#[cfg(not(feature = "s3"))]
-#[path = "storage_stub.rs"]
-pub mod storage;
-pub mod stream;
 pub mod mcast;
-pub mod syslog;
+pub mod store;
+pub mod stream;
 pub mod terminal;
 pub mod types;
 
@@ -19,59 +29,38 @@ use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
 use crate::file::FileLogger;
-use crate::storage::LogStorage;
+use crate::store::LogStore;
 use crate::stream::StreamManager;
-use crate::syslog::SyslogReceiver;
 use crate::terminal::TerminalManager;
 use crate::types::{LogEntry, LogQuery, LogStream, ScreenSnapshot, Severity, StormLogConfig};
 
-/// Detect severity from a log line's content.
+/// What a line looks like it is.
 ///
-/// Scans for common severity keywords that applications emit (e.g. ERROR, FATAL,
-/// WARN, panic, etc.) and returns an appropriate severity level.
+/// One judgement, in [`stormcast`], shared with the wire and with `stormpump`
+/// — so a line has the same severity in the file, on the group and in the
+/// console rather than one per program that looked at it. `base` is what the
+/// stream implies when the text says nothing: a bare line on stderr is a
+/// warning, the same line on stdout is not.
 fn detect_severity(line: &str, base: Severity) -> Severity {
-    // Case-insensitive scan for severity keywords
-    let upper = line.to_uppercase();
-    // Check for the most severe patterns first
-    if upper.contains("PANIC") || upper.contains("FATAL") || upper.contains("SEGFAULT")
-        || upper.contains("SIGSEGV") || upper.contains("SIGABRT")
-        || upper.contains("CORE DUMPED")
-    {
-        return Severity::Emergency;
+    let read = crate::store::severity_of(line);
+    if read == Severity::Info {
+        base
+    } else {
+        read
     }
-    if upper.contains("CRITICAL") {
-        return Severity::Critical;
-    }
-    // Common structured log patterns: level=error, "level":"error", [ERROR], ERROR:
-    if upper.contains("\"LEVEL\":\"ERROR\"")
-        || upper.contains("LEVEL=ERROR")
-        || upper.contains("[ERROR]")
-        || upper.contains("ERROR:")
-        || upper.contains(" ERROR ")
-    {
-        return Severity::Error;
-    }
-    if upper.contains("\"LEVEL\":\"WARN\"")
-        || upper.contains("LEVEL=WARN")
-        || upper.contains("[WARN")
-        || upper.contains("WARNING:")
-        || upper.contains(" WARN ")
-    {
-        return Severity::Warning;
-    }
-    base
 }
 
 /// StormLog — unified logging facade.
 ///
-/// Handles VT100 terminal emulation, broadcast streams, MinIO storage,
-/// and syslog reception.
+/// VT100 terminal emulation for the console, broadcast streams for following,
+/// a rotated file per process, and the fleet's multicast group.
 pub struct StormLog {
     config: StormLogConfig,
     container_name: String,
     terminal_manager: TerminalManager,
     stream_manager: StreamManager,
-    storage: Arc<LogStorage>,
+    /// The log directory, read back. There is no other store.
+    store: LogStore,
     file_logger: FileLogger,
     /// The fleet's multicast group, when one is configured. Emitting only —
     /// receiving and storing belongs to a collector, not to a container init.
@@ -89,7 +78,7 @@ impl StormLog {
     pub fn new(config: StormLogConfig, container_name: impl Into<String>) -> Self {
         let terminal_manager = TerminalManager::new(config.terminal.rows, config.terminal.cols);
         let stream_manager = StreamManager::new();
-        let storage = Arc::new(LogStorage::new(config.minio.clone()));
+        let store = LogStore::new(config.file.log_dir.clone());
         let file_logger = FileLogger::new(config.file.clone());
         let (ingest_tx, ingest_rx) = mpsc::channel(1024);
 
@@ -112,7 +101,7 @@ impl StormLog {
             container_name: name,
             terminal_manager,
             stream_manager,
-            storage,
+            store,
             file_logger,
             mcast,
             ingest_tx,
@@ -122,31 +111,11 @@ impl StormLog {
         }
     }
 
-    /// Start all subsystems: file logger, syslog listeners, storage flush loop, ingest receiver.
+    /// Start the file logger and the ingest receiver. Nothing here binds a
+    /// port, opens a connection, or waits on anything.
     pub async fn start(self: &Arc<Self>) {
-        // Initialize file logger (local disk)
         if let Err(e) = self.file_logger.init() {
             error!(error = %e, "failed to initialize file logger");
-        }
-
-        // Initialize MinIO storage on the actual storage instance
-        if self.config.minio.enabled {
-            if let Err(e) = self.storage.init().await {
-                error!(error = %e, "failed to initialize MinIO storage");
-            }
-        }
-
-        // Start syslog receivers
-        let syslog_tx = self.ingest_tx.clone();
-        let syslog = SyslogReceiver::new(self.config.syslog.clone(), syslog_tx);
-        syslog.start().await;
-
-        // Start storage flush loop
-        if self.config.minio.enabled {
-            let storage = self.storage.clone();
-            tokio::spawn(async move {
-                storage.run_flush_loop().await;
-            });
         }
 
         // Start ingest receiver loop
@@ -276,7 +245,8 @@ impl StormLog {
         }
     }
 
-    /// Write a log entry to all outputs: file, broadcast stream, storage.
+    /// Write an entry to all three: the file, the group, and whoever is
+    /// following.
     pub async fn write_entry(&self, entry: LogEntry) {
         // Write to local file
         self.file_logger.write(&entry).await;
@@ -290,13 +260,8 @@ impl StormLog {
             m.send(&entry);
         }
 
-        // Publish to broadcast streams
-        self.stream_manager.publish(entry.clone()).await;
-
-        // Buffer for MinIO storage
-        if self.storage.is_enabled() {
-            self.storage.buffer_entry(entry).await;
-        }
+        // Publish to broadcast streams — this is what a console follows.
+        self.stream_manager.publish(entry).await;
     }
 
     /// Emit a process crash/failure entry at Emergency severity.
@@ -317,26 +282,25 @@ impl StormLog {
         self.write_entry(entry).await;
     }
 
-    /// Archive a process run's logs to MinIO and clean up local disk.
+    /// Close out a process run: name its log file after the run and prune old
+    /// ones.
     ///
-    /// Called by the supervisor when a process exits. Flushes buffered entries,
-    /// takes the local log file, uploads it to MinIO, and removes local files.
+    /// Called by the supervisor when a process exits. The file stays exactly
+    /// where it was — this only renames it out of the hot path so the next run
+    /// starts a fresh one, and the console can still list and read it.
     pub async fn archive_run(&self, process: &str, failed: bool) {
-        // Get the run_id for this process
         let run_id = {
             let ids = self.run_ids.lock().await;
             ids.get(process).cloned()
         };
-        let run_id = match run_id {
-            Some(id) => id,
-            None => {
-                info!(process = %process, "no run_id to archive");
-                return;
-            }
+        let Some(run_id) = run_id else {
+            info!(process = %process, "no run_id to archive");
+            return;
         };
 
-        // Wait for stdout/stderr reader tasks to finish draining pipe buffers.
-        // This ensures all output (especially final stderr on crash) is captured.
+        // Wait for the stdout/stderr readers to drain their pipes first. On a
+        // crash the last thing written is the reason for it, and it is still
+        // in a pipe buffer when the process is already gone.
         let handles = {
             let mut tasks = self.reader_tasks.lock().await;
             tasks.remove(process).unwrap_or_default()
@@ -344,63 +308,40 @@ impl StormLog {
         if !handles.is_empty() {
             info!(process = %process, tasks = handles.len(), "waiting for reader tasks to drain");
             for h in handles {
-                if let Err(e) = tokio::time::timeout(
-                    tokio::time::Duration::from_secs(5),
-                    h,
-                ).await {
+                if let Err(e) =
+                    tokio::time::timeout(tokio::time::Duration::from_secs(5), h).await
+                {
                     warn!(process = %process, error = %e, "reader task drain timed out");
                 }
             }
         }
 
-        // Flush any buffered MinIO entries first
-        if self.storage.is_enabled() {
-            if let Err(e) = self.storage.flush().await {
-                error!(error = %e, "failed to flush buffer before archive");
-            }
-        }
-
-        // Take the local log file (renames it out of the hot path)
         let file_path = self.file_logger.take_file(process, &run_id, failed).await;
 
-        // Upload to MinIO if enabled and there's a file
-        if self.storage.is_enabled() {
-            if let Some(ref path) = file_path {
-                match self.storage.archive_file(process, &run_id, failed, path).await {
-                    Ok(_) => {
-                        // Clean up any rotated files too
-                        self.file_logger.cleanup_rotated(process);
-                        info!(
-                            process = %process, run_id = %run_id,
-                            failed = failed, "run archived to MinIO"
-                        );
-                    }
-                    Err(e) => {
-                        error!(
-                            error = %e, process = %process,
-                            "failed to archive to MinIO — local file preserved"
-                        );
-                    }
-                }
-            }
-        } else if let Some(ref path) = file_path {
-            // MinIO not enabled — keep the local archive file but log it
+        // The volume has a size, and a process that restarts in a loop writes
+        // one archive per restart. Without this the thing that fills the log
+        // volume is the record of what went wrong.
+        let pruned = self.store.prune(process, self.config.file.max_runs);
+        if pruned > 0 {
+            info!(process = %process, pruned, "pruned old runs");
+        }
+
+        if let Some(path) = file_path {
             info!(
-                process = %process, run_id = %run_id,
-                path = %path.display(),
-                "MinIO not enabled — archived log kept locally"
+                process = %process, run_id = %run_id, failed = failed,
+                path = %path.display(), "run closed"
             );
         }
     }
 
-    /// Query logs from MinIO storage.
+    /// Read back what is on the log volume.
     pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogEntry>> {
-        self.storage.query(query).await
+        Ok(self.store.query(query))
     }
 
-    /// List all runs for a process.
-    pub async fn list_runs(&self, process: &str) -> anyhow::Result<Vec<storage::RunInfo>> {
-        self.storage.list_runs(process).await
+    /// The runs of a process, newest first, the live one ahead of them.
+    pub async fn list_runs(&self, process: &str) -> anyhow::Result<Vec<store::RunInfo>> {
+        Ok(self.store.runs(process))
     }
 
     /// Get the current run_id for a process (if capturing).
@@ -437,8 +378,13 @@ impl StormLog {
         &self.terminal_manager
     }
 
-    /// Flush all buffered entries to storage.
+    /// Push what has been written down to the volume.
+    ///
+    /// Nothing is buffered in this process — every line is written when it
+    /// arrives — so this is an `fsync` and not a drain. It matters anyway: a
+    /// line in the page cache is lost by the panic it was describing.
     pub async fn flush(&self) -> anyhow::Result<usize> {
-        self.storage.flush().await
+        self.file_logger.sync_all().await;
+        Ok(0)
     }
 }

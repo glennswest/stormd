@@ -3,7 +3,7 @@ name = "stormlog"
 version = "0.2.0"
 edition.workspace = true
 license.workspace = true
-description = "Structured logging library — VT100 terminal emulation, S3 storage, syslog, broadcast streams"
+description = "A container's logging: a rotated file, the fleet's multicast group, and a stream to follow"
 
 [dependencies]
 # The wire format, shared with stormpump. See the crate's own README for why
@@ -18,12 +18,5 @@ uuid.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 vt100.workspace = true
-rust-s3 = { workspace = true, optional = true }
 tokio-util.workspace = true
 
-[features]
-# No S3 by default. Archiving logs to object storage is a collector's job, and
-# a container init that carries an S3 client by default is carrying it for
-# every image built on it.
-default = []
-s3 = ["dep:rust-s3"]

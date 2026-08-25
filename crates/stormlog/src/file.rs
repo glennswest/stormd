@@ -48,13 +48,9 @@ impl FileLogger {
             writer.current_size = 0;
         }
 
-        // Format: timestamp [stream] line
-        let line = format!(
-            "{} [{}] {}\n",
-            entry.timestamp.format("%Y-%m-%dT%H:%M:%S%.3fZ"),
-            entry.stream,
-            entry.line,
-        );
+        // The format lives next to its parser, in `store`, so the two cannot
+        // drift into a console that shows every line as INFO at the epoch.
+        let line = crate::store::format_line(entry);
 
         match std::fs::OpenOptions::new()
             .create(true)
@@ -123,6 +119,20 @@ impl FileLogger {
 
     pub fn log_dir(&self) -> &Path {
         &self.config.log_dir
+    }
+
+    /// Push every open log file down to the volume.
+    ///
+    /// Best effort and on demand: doing it per line would make logging a
+    /// synchronous write path, which is the other way to make logging the thing
+    /// that stops a container.
+    pub async fn sync_all(&self) {
+        let writers = self.writers.lock().await;
+        for w in writers.values() {
+            if let Ok(f) = std::fs::OpenOptions::new().append(true).open(&w.path) {
+                let _ = f.sync_data();
+            }
+        }
     }
 
     /// Rotate log files: .log -> .1.log -> .2.log -> ... -> .N.log (deleted)

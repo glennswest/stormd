@@ -17,18 +17,19 @@ json_format = false
 
 # --- StormLog (structured logging) ---
 
-[stormlog.minio]
-enabled = true
-endpoint = "http://127.0.0.1:9000"
-bucket = "logs"
-access_key = "stormd"
-secret_key = "stormdpass"
+# Where the lines are kept. Point log_dir at a volume and they outlive the
+# container; leave it on the image's filesystem and they do not.
+[stormlog.file]
+log_dir = "/var/log/stormd"
+max_size_bytes = 104857600  # 100 MiB before a file rotates
+max_files = 10              # rotated generations kept, per process
+max_runs = 10               # finished runs kept, per process
 
-[stormlog.syslog]
-enabled = true
-udp_bind = "127.0.0.1:514"
-tcp_bind = "127.0.0.1:514"
-unix_socket = "/dev/log"
+# Where they go on the network. Emitting only — a collector receives, stores
+# and indexes; see mcastsyslog. Defaults to the fleet group, so a container is
+# watchable with no configuration at all. Set to "off" to stay quiet.
+[stormlog.mcast]
+# group = "239.255.42.1:5514"
 
 [stormlog.terminal]
 rows = 24

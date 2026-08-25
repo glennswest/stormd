@@ -142,6 +142,12 @@ pub struct FileConfig {
     /// Maximum number of rotated files to keep per process.
     #[serde(default = "default_max_files")]
     pub max_files: u32,
+    /// Maximum number of finished runs to keep per process.
+    ///
+    /// A process that restarts in a loop writes one archive per restart, and
+    /// the volume has a size.
+    #[serde(default = "default_max_runs")]
+    pub max_runs: usize,
 }
 
 impl Default for FileConfig {
@@ -150,6 +156,7 @@ impl Default for FileConfig {
             log_dir: default_log_dir(),
             max_size_bytes: default_max_size_bytes(),
             max_files: default_max_files(),
+            max_runs: default_max_runs(),
         }
     }
 }
@@ -163,16 +170,15 @@ fn default_max_size_bytes() -> u64 {
 fn default_max_files() -> u32 {
     10
 }
+fn default_max_runs() -> usize {
+    10
+}
 
 /// Configuration for StormLog.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StormLogConfig {
     #[serde(default)]
     pub file: FileConfig,
-    #[serde(default)]
-    pub minio: MinioConfig,
-    #[serde(default)]
-    pub syslog: SyslogConfig,
     #[serde(default)]
     pub terminal: TerminalConfig,
     #[serde(default)]
@@ -204,75 +210,11 @@ impl Default for StormLogConfig {
     fn default() -> Self {
         Self {
             file: FileConfig::default(),
-            minio: MinioConfig::default(),
-            syslog: SyslogConfig::default(),
             terminal: TerminalConfig::default(),
             mcast: McastConfig::default(),
         }
     }
 }
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct MinioConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_minio_endpoint")]
-    pub endpoint: String,
-    #[serde(default = "default_minio_bucket")]
-    pub bucket: String,
-    #[serde(default = "default_minio_access_key")]
-    pub access_key: String,
-    #[serde(default = "default_minio_secret_key")]
-    pub secret_key: String,
-    #[serde(default = "default_minio_region")]
-    pub region: String,
-}
-
-impl Default for MinioConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            endpoint: default_minio_endpoint(),
-            bucket: default_minio_bucket(),
-            access_key: default_minio_access_key(),
-            secret_key: default_minio_secret_key(),
-            region: default_minio_region(),
-        }
-    }
-}
-
-fn default_minio_endpoint() -> String { "http://127.0.0.1:9000".to_string() }
-fn default_minio_bucket() -> String { "logs".to_string() }
-fn default_minio_access_key() -> String { "stormd".to_string() }
-fn default_minio_secret_key() -> String { "stormdpass".to_string() }
-fn default_minio_region() -> String { "us-east-1".to_string() }
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct SyslogConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_syslog_udp_bind")]
-    pub udp_bind: String,
-    #[serde(default = "default_syslog_tcp_bind")]
-    pub tcp_bind: String,
-    #[serde(default = "default_unix_socket")]
-    pub unix_socket: String,
-}
-
-impl Default for SyslogConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            udp_bind: default_syslog_udp_bind(),
-            tcp_bind: default_syslog_tcp_bind(),
-            unix_socket: default_unix_socket(),
-        }
-    }
-}
-
-fn default_syslog_udp_bind() -> String { "127.0.0.1:514".to_string() }
-fn default_syslog_tcp_bind() -> String { "127.0.0.1:514".to_string() }
-fn default_unix_socket() -> String { "/dev/log".to_string() }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TerminalConfig {
