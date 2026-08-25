@@ -1,6 +1,5 @@
 use anyhow::Result;
 use serde::Deserialize;
-use stormlog::types::LogEntry;
 
 /// HTTP + WebSocket client for connecting to stormd.
 pub struct StormClient {

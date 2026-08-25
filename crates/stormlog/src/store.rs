@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 /// that displays every line as INFO with the epoch for a timestamp.
 ///
 /// ```text
-/// 2026-08-25T11:50:09.123Z stderr error  something broke
+/// 2026-08-25T11:50:09.123Z stderr error something broke
 /// ```
 ///
 /// Four fields and then the rest of the line, so a message containing spaces —
@@ -389,7 +389,8 @@ mod tests {
         // Something else wrote to the file. The line is evidence either way.
         let e = parse_line("api", "PANIC: kernel BUG at fs/ext4/inode.c");
         assert!(e.line.contains("kernel BUG"));
-        assert_eq!(e.severity, Severity::Error);
+        // A panic is worse than an error, and stormcast says so.
+        assert_eq!(e.severity, Severity::Critical);
     }
 
     #[test]
@@ -398,17 +399,17 @@ mod tests {
         // An archived run, a rotation, and the live file.
         std::fs::write(
             dir.join("api.20260825T100000.exited.log"),
-            "2026-08-25T10:00:00.000Z stdout info  first\n",
+            "2026-08-25T10:00:00.000Z stdout info first\n",
         )
         .unwrap();
         std::fs::write(
             dir.join("api.1.log"),
-            "2026-08-25T11:00:00.000Z stdout info  second\n",
+            "2026-08-25T11:00:00.000Z stdout info second\n",
         )
         .unwrap();
         std::fs::write(
             dir.join("api.log"),
-            "2026-08-25T12:00:00.000Z stderr error  third\n",
+            "2026-08-25T12:00:00.000Z stderr error third\n",
         )
         .unwrap();
 
