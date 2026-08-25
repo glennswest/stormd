@@ -187,15 +187,38 @@ async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let _ = writeln!(o, "# TYPE stormd_up gauge");
     let _ = writeln!(o, "stormd_up{{container=\"{c}\"}} 1");
 
+    // The supervisor's own process, under the names every Prometheus client
+    // library uses for the exporting process. Not stormd_-prefixed inventions:
+    // a dashboard or an alert written against a Kubernetes component works
+    // against this one unchanged, and that is the whole value of a convention.
+    let _ = writeln!(o, "# HELP process_start_time_seconds Start time since the epoch.");
+    let _ = writeln!(o, "# TYPE process_start_time_seconds gauge");
+    let _ = writeln!(
+        o,
+        "process_start_time_seconds{{container=\"{c}\"}} {}",
+        sys.started_at.timestamp()
+    );
+
+    if let Some(m) = &sys.memory {
+        let _ = writeln!(o, "# HELP process_resident_memory_bytes Resident memory.");
+        let _ = writeln!(o, "# TYPE process_resident_memory_bytes gauge");
+        let _ = writeln!(
+            o,
+            "process_resident_memory_bytes{{container=\"{c}\"}} {}",
+            m.rss_bytes
+        );
+        let _ = writeln!(o, "# HELP process_virtual_memory_bytes Virtual memory.");
+        let _ = writeln!(o, "# TYPE process_virtual_memory_bytes gauge");
+        let _ = writeln!(
+            o,
+            "process_virtual_memory_bytes{{container=\"{c}\"}} {}",
+            m.vms_bytes
+        );
+    }
+
     let _ = writeln!(o, "# HELP stormd_uptime_seconds How long this supervisor has been up.");
     let _ = writeln!(o, "# TYPE stormd_uptime_seconds gauge");
     let _ = writeln!(o, "stormd_uptime_seconds{{container=\"{c}\"}} {}", sys.uptime_secs);
-
-    if let Some(m) = &sys.memory {
-        let _ = writeln!(o, "# HELP stormd_memory_rss_bytes Resident memory of the supervisor.");
-        let _ = writeln!(o, "# TYPE stormd_memory_rss_bytes gauge");
-        let _ = writeln!(o, "stormd_memory_rss_bytes{{container=\"{c}\"}} {}", m.rss_bytes);
-    }
 
     let _ = writeln!(
         o,
