@@ -484,9 +484,12 @@ impl Supervisor {
                         restarts = restarts_in_window,
                         "restarting process"
                     );
+                    // Which attempt this is and how long it waits — the two
+                    // facts a reader needs and the ones a bare "restarting"
+                    // leaves them to count for themselves.
                     let mut detail = std::collections::HashMap::new();
-                    detail.insert("restart".to_string(), restarts_in_window.to_string());
-                    detail.insert("cooloff_secs".to_string(), wait.as_secs().to_string());
+                    detail.insert("restart".to_string(), restarts_in_window.into());
+                    detail.insert("cooloff_secs".to_string(), wait.as_secs().into());
                     self.event_bus
                         .emit(
                             EventKind::ProcessRestarting,

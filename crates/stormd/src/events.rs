@@ -116,7 +116,13 @@ impl EventBus {
             keys.sort();
             for k in keys {
                 if let Some(v) = event.detail.get(k) {
-                    line.push_str(&format!(" {k}={v}"));
+                    // A string renders bare rather than quoted: this is a log
+                    // line, not JSON, and `restart="3"` reads worse than
+                    // `restart=3` for no gain.
+                    match v.as_str() {
+                        Some(t) => line.push_str(&format!(" {k}={t}")),
+                        None => line.push_str(&format!(" {k}={v}")),
+                    }
                 }
             }
             let entry = stormlog::types::LogEntry::new(
