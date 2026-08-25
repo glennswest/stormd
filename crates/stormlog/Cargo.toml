@@ -19,5 +19,8 @@ rust-s3 = { workspace = true, optional = true }
 tokio-util.workspace = true
 
 [features]
-default = ["s3"]
+# No S3 by default. Archiving logs to object storage is a collector's job, and
+# a container init that carries an S3 client by default is carrying it for
+# every image built on it.
+default = []
 s3 = ["dep:rust-s3"]

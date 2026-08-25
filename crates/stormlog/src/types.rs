@@ -175,6 +175,29 @@ pub struct StormLogConfig {
     pub syslog: SyslogConfig,
     #[serde(default)]
     pub terminal: TerminalConfig,
+    #[serde(default)]
+    pub mcast: McastConfig,
+}
+
+/// Where this container's lines go on the network.
+///
+/// Emitting only. A container init has no business holding a log database —
+/// receiving, storing, indexing and searching is a collector's job, and doing
+/// it in both places means two stores, two schemas, and a fleet view that sees
+/// half the nodes.
+#[derive(Debug, Clone, Deserialize)]
+pub struct McastConfig {
+    /// `host:port`, or `off`. Defaults to the fleet group, because a node that
+    /// must be configured before anyone can see its logs is a node whose first
+    /// failure is invisible.
+    #[serde(default)]
+    pub group: Option<String>,
+}
+
+impl Default for McastConfig {
+    fn default() -> Self {
+        Self { group: None }
+    }
 }
 
 impl Default for StormLogConfig {
@@ -184,6 +207,7 @@ impl Default for StormLogConfig {
             minio: MinioConfig::default(),
             syslog: SyslogConfig::default(),
             terminal: TerminalConfig::default(),
+            mcast: McastConfig::default(),
         }
     }
 }

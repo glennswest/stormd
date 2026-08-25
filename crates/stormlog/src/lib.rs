@@ -6,6 +6,7 @@ pub mod storage;
 #[path = "storage_stub.rs"]
 pub mod storage;
 pub mod stream;
+pub mod mcast;
 pub mod syslog;
 pub mod terminal;
 pub mod types;
@@ -72,6 +73,9 @@ pub struct StormLog {
     stream_manager: StreamManager,
     storage: Arc<LogStorage>,
     file_logger: FileLogger,
+    /// The fleet's multicast group, when one is configured. Emitting only —
+    /// receiving and storing belongs to a collector, not to a container init.
+    mcast: Option<mcast::Emitter>,
     ingest_tx: mpsc::Sender<LogEntry>,
     ingest_rx: Mutex<Option<mpsc::Receiver<LogEntry>>>,
     /// Active run IDs per process — set when spawn_capture is called.
@@ -89,13 +93,28 @@ impl StormLog {
         let file_logger = FileLogger::new(config.file.clone());
         let (ingest_tx, ingest_rx) = mpsc::channel(1024);
 
+        // The fleet group, unless this container was told otherwise. On by
+        // default: a node that has to be configured before anyone can see its
+        // logs is a node whose first failure is invisible.
+        let name = container_name.into();
+        let mcast = config
+            .mcast
+            .group
+            .as_deref()
+            .filter(|g| !g.is_empty() && *g != "off")
+            .unwrap_or(mcast::DEFAULT_GROUP)
+            .parse()
+            .ok()
+            .and_then(|addr| mcast::Emitter::new(addr, name.clone()));
+
         Self {
             config,
-            container_name: container_name.into(),
+            container_name: name,
             terminal_manager,
             stream_manager,
             storage,
             file_logger,
+            mcast,
             ingest_tx,
             ingest_rx: Mutex::new(Some(ingest_rx)),
             run_ids: Mutex::new(HashMap::new()),
@@ -261,6 +280,15 @@ impl StormLog {
     pub async fn write_entry(&self, entry: LogEntry) {
         // Write to local file
         self.file_logger.write(&entry).await;
+
+        // Put it on the fleet's multicast group.
+        //
+        // Here, because this is the one funnel every line passes through, and
+        // because a datagram cannot block: the local file is the record and
+        // the group is how anyone sees it without being on this node.
+        if let Some(m) = &self.mcast {
+            m.send(&entry);
+        }
 
         // Publish to broadcast streams
         self.stream_manager.publish(entry.clone()).await;
