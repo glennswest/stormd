@@ -86,6 +86,18 @@ impl StormLog {
         // default: a node that has to be configured before anyone can see its
         // logs is a node whose first failure is invisible.
         let name = container_name.into();
+        // The node, then this container's name. See `McastConfig::host`.
+        //
+        // A container gets its own UTS namespace, which is *copied* from the
+        // parent's — so this reads the node's hostname without needing the
+        // namespace shared.
+        let host = config.mcast.host.clone().unwrap_or_else(|| {
+            std::fs::read_to_string("/proc/sys/kernel/hostname")
+                .map(|h| h.trim().to_owned())
+                .ok()
+                .filter(|h| !h.is_empty() && h != "localhost")
+                .unwrap_or_else(|| name.clone())
+        });
         let mcast = config
             .mcast
             .group
@@ -94,7 +106,7 @@ impl StormLog {
             .unwrap_or(mcast::DEFAULT_GROUP)
             .parse()
             .ok()
-            .and_then(|addr| mcast::Emitter::new(addr, name.clone()));
+            .and_then(|addr| mcast::Emitter::new(addr, host));
 
         Self {
             config,

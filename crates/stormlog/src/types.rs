@@ -198,11 +198,21 @@ pub struct McastConfig {
     /// failure is invisible.
     #[serde(default)]
     pub group: Option<String>,
+    /// What to put in the syslog HOSTNAME field. Defaults to this machine's
+    /// hostname.
+    ///
+    /// The node, not the container. A viewer groups by this field, and a node
+    /// running four supervised components would otherwise appear as four hosts
+    /// — worse, four *different* nodes running the same component would
+    /// collapse into one row called "fastetcd". Which component said it is the
+    /// tag, which is a separate field and already carries it.
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 impl Default for McastConfig {
     fn default() -> Self {
-        Self { group: None }
+        Self { group: None, host: None }
     }
 }
 
