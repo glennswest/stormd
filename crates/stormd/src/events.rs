@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
-use tracing::{error, info};
+use tracing::error;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Event {
@@ -137,14 +137,6 @@ impl EventBus {
         if !self.config.enabled {
             return;
         }
-
-        let json = match serde_json::to_vec(&event) {
-            Ok(j) => j,
-            Err(e) => {
-                error!(error = %e, "failed to serialize event");
-                return;
-            }
-        };
 
 
         // Webhook POST
