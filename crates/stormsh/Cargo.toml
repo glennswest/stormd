@@ -21,5 +21,4 @@ chrono.workspace = true
 tracing.workspace = true
 
 [features]
-default = ["s3"]
-s3 = ["stormlog/s3"]
+default = []
