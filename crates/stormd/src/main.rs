@@ -58,13 +58,27 @@ async fn main() {
         std::process::exit(exit_code);
     }
 
-    // Initialize tracing
+    // Plain lines, not JSON.
+    //
+    // Everything stormd writes is read through an envelope that already carries
+    // the timestamp, the severity and who said it — syslog on the wire, and a
+    // supervisor's prefix on the console. JSON repeats all three inside the
+    // message and adds a `target` that, in a container whose whole job is one
+    // process, is always the same word. What reaches a reader is then twice the
+    // bytes for the same facts, and a console nobody can skim.
+    //
+    // No timestamp and no ANSI for the same reason: the envelope stamps it, and
+    // colour codes are litter by the time they have crossed a serial line and a
+    // datagram. A line here is the message and the fields that qualify it.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "info,stormd=debug".parse().unwrap()),
         )
-        .json()
+        .with_target(false)
+        .without_time()
+        .with_ansi(false)
+        .compact()
         .init();
 
     let cli = Cli::parse();
