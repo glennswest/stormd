@@ -214,9 +214,6 @@ pub struct EventsConfig {
     pub enabled: bool,
     #[serde(default)]
     pub transport: EventTransport,
-    pub nats_url: Option<String>,
-    #[serde(default = "default_nats_subject")]
-    pub nats_subject: String,
     pub webhook_url: Option<String>,
     #[serde(default)]
     pub webhook_headers: HashMap<String, String>,
@@ -227,8 +224,6 @@ impl Default for EventsConfig {
         Self {
             enabled: false,
             transport: EventTransport::None,
-            nats_url: None,
-            nats_subject: default_nats_subject(),
             webhook_url: None,
             webhook_headers: HashMap::new(),
         }
@@ -240,9 +235,7 @@ impl Default for EventsConfig {
 pub enum EventTransport {
     #[default]
     None,
-    Nats,
     Webhook,
-    Both,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -404,7 +397,6 @@ fn default_max_restarts() -> u32 { 10 }
 fn default_restart_window_secs() -> u64 { 3600 }
 fn default_startup_delay_secs() -> u64 { 0 }
 fn default_cron_timeout_secs() -> u64 { 300 }
-fn default_nats_subject() -> String { "stormd.events".to_string() }
 fn default_max_size_bytes() -> u64 { 100 * 1024 * 1024 }
 fn default_max_files() -> u32 { 10 }
 fn default_api_bind() -> String { "0.0.0.0:9080".to_string() }
@@ -446,20 +438,7 @@ impl Config {
         }
         if self.events.enabled {
             match self.events.transport {
-                EventTransport::Nats => {
-                    if self.events.nats_url.is_none() {
-                        anyhow::bail!("NATS transport enabled but nats_url not set");
-                    }
-                }
                 EventTransport::Webhook => {
-                    if self.events.webhook_url.is_none() {
-                        anyhow::bail!("webhook transport enabled but webhook_url not set");
-                    }
-                }
-                EventTransport::Both => {
-                    if self.events.nats_url.is_none() {
-                        anyhow::bail!("NATS transport enabled but nats_url not set");
-                    }
                     if self.events.webhook_url.is_none() {
                         anyhow::bail!("webhook transport enabled but webhook_url not set");
                     }

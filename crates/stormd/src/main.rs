@@ -176,6 +176,9 @@ async fn main() {
         config.general.name.clone(),
     ));
     stormlog.start().await;
+    // The bus can write now. Every event reaches the log from here on, which
+    // is the path that needs no configuration.
+    event_bus.set_log(stormlog.clone()).await;
 
     // Ensure log dir exists for file-based logs
     if let Err(e) = tokio::fs::create_dir_all(&config.general.log_dir).await {
@@ -231,20 +234,6 @@ async fn main() {
             error!(error = %e, "failed to start processes");
         }
     });
-
-    // NATS output publishing: forward all log entries to NATS subjects
-    #[cfg(feature = "nats")]
-    if config.events.enabled {
-        let mut log_rx = stormlog.subscribe_all();
-        let _eb = event_bus.clone();
-        tokio::spawn(async move {
-            while let Ok(entry) = log_rx.recv().await {
-                let subject = format!("stormd.output.{}.{}", entry.process, entry.stream);
-                // Use event bus NATS client indirectly — entries are already on broadcast
-                let _ = subject; // NATS publishing would go here if direct client access was exposed
-            }
-        });
-    }
 
     // Shutdown channel — API handler sends exit code, main loop receives it
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel::<Option<i32>>(None);

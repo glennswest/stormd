@@ -436,7 +436,7 @@ impl Supervisor {
             self.event_bus
                 .emit_simple(EventKind::ProcessRestarting, Some(name.to_string()))
                 .await;
-            tokio::time::sleep(tokio::time::Duration::from_secs(restart_delay)).await;
+            tokio::time::sleep(cooloff(restart_delay, restarts_in_window)).await;
             if let Err(e) = self.spawn_process(name).await {
                 error!(process = %name, error = %e, "failed to restart process after clean exit");
                 let mut proc = proc_arc.lock().await;
@@ -477,15 +477,24 @@ impl Supervisor {
                         proc.restarts += 1;
                         proc.restart_timestamps.push(Utc::now());
                     }
+                    let wait = cooloff(restart_delay, restarts_in_window);
                     info!(
                         process = %name,
-                        delay_secs = restart_delay,
+                        delay_secs = wait.as_secs(),
+                        restarts = restarts_in_window,
                         "restarting process"
                     );
+                    let mut detail = std::collections::HashMap::new();
+                    detail.insert("restart".to_string(), restarts_in_window.to_string());
+                    detail.insert("cooloff_secs".to_string(), wait.as_secs().to_string());
                     self.event_bus
-                        .emit_simple(EventKind::ProcessRestarting, Some(name.to_string()))
+                        .emit(
+                            EventKind::ProcessRestarting,
+                            Some(name.to_string()),
+                            detail,
+                        )
                         .await;
-                    tokio::time::sleep(tokio::time::Duration::from_secs(restart_delay)).await;
+                    tokio::time::sleep(wait).await;
                     if let Err(e) = self.spawn_process(name).await {
                         error!(process = %name, error = %e, "failed to restart process");
                         let mut proc = proc_arc.lock().await;
@@ -698,5 +707,58 @@ async fn execute_probe(probe: &LivenessProbe) -> bool {
                 Ok(Ok(_))
             )
         }
+    }
+}
+
+/// How long to wait before starting a process again.
+///
+/// `base`, doubled per restart already made inside the window, capped. The
+/// count comes from the restart window, so it falls back to nothing on its own
+/// once a process has stayed up — there is no separate "healthy" timer to keep
+/// in step with it.
+///
+/// A flat delay is what was here, and against a process that will never start
+/// it is simply a loop: the apiserver in this stack restarted once a second
+/// for as long as it was left, which is a core spent and a log filled with one
+/// line. Capped rather than given up on, because a supervised process is part
+/// of what the container is — the answer to "it keeps failing" is to keep
+/// trying and keep saying so, not to stop quietly and look healthy.
+fn cooloff(base: u64, restarts_in_window: u32) -> std::time::Duration {
+    const CEILING: u64 = 30;
+    let base = base.max(1);
+    let shift = restarts_in_window.saturating_sub(1).min(16);
+    let secs = base.saturating_mul(1u64 << shift).min(CEILING);
+    std::time::Duration::from_secs(secs)
+}
+
+#[cfg(test)]
+mod cooloff_tests {
+    use super::cooloff;
+    use std::time::Duration;
+
+    #[test]
+    fn it_escalates_and_settles() {
+        // The first is quick, because a crash on start is usually a race with
+        // something that has since come up.
+        assert_eq!(cooloff(1, 1), Duration::from_secs(1));
+        assert_eq!(cooloff(1, 2), Duration::from_secs(2));
+        assert_eq!(cooloff(1, 3), Duration::from_secs(4));
+        assert_eq!(cooloff(1, 5), Duration::from_secs(16));
+        // And settles, rather than growing without bound or giving up.
+        assert_eq!(cooloff(1, 6), Duration::from_secs(30));
+        assert_eq!(cooloff(1, 500), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn a_longer_base_is_respected_and_still_capped() {
+        assert_eq!(cooloff(5, 1), Duration::from_secs(5));
+        assert_eq!(cooloff(5, 3), Duration::from_secs(20));
+        assert_eq!(cooloff(5, 4), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn a_zero_base_still_waits() {
+        // A configured zero would be the loop this exists to stop.
+        assert_eq!(cooloff(0, 1), Duration::from_secs(1));
     }
 }

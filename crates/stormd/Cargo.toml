@@ -22,7 +22,6 @@ tower-http.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 cron.workspace = true
-async-nats = { workspace = true, optional = true }
 clap.workspace = true
 flate2.workspace = true
 tar.workspace = true
@@ -42,5 +41,4 @@ nix = { version = "0.29", features = ["signal", "process", "fs", "user"] }
 libc = "0.2"
 
 [features]
-default = ["nats"]
-nats = ["async-nats"]
+default = []

@@ -54,8 +54,18 @@ pub struct EventBus {
     config: EventsConfig,
     container_name: String,
     tx: broadcast::Sender<Event>,
-    #[cfg(feature = "nats")]
-    nats_client: tokio::sync::RwLock<Option<async_nats::Client>>,
+    /// The log, once there is one.
+    ///
+    /// Every event goes here as well, and this is the path that needs no
+    /// configuration: it reaches the file, the fleet's multicast group and
+    /// anyone following, so "what restarted, where, and how often" is one
+    /// query against a collector rather than a thing each node keeps to
+    /// itself. A webhook stays what it was — optional, for people who want
+    /// events somewhere specific as well.
+    ///
+    /// Set after construction because the first event — the container
+    /// starting — happens before there is a log to put it in.
+    log: tokio::sync::RwLock<Option<std::sync::Arc<stormlog::StormLog>>>,
     http_client: reqwest::Client,
 }
 
@@ -66,24 +76,12 @@ impl EventBus {
             config,
             container_name,
             tx,
-            #[cfg(feature = "nats")]
-            nats_client: tokio::sync::RwLock::new(None),
+            log: tokio::sync::RwLock::new(None),
             http_client: reqwest::Client::new(),
         }
     }
 
     pub async fn connect(&self) -> anyhow::Result<()> {
-        #[cfg(feature = "nats")]
-        if matches!(
-            self.config.transport,
-            EventTransport::Nats | EventTransport::Both
-        ) {
-            if let Some(url) = &self.config.nats_url {
-                let client = async_nats::connect(url).await?;
-                *self.nats_client.write().await = Some(client);
-                info!(url = %url, "connected to NATS");
-            }
-        }
         Ok(())
     }
 
@@ -103,6 +101,33 @@ impl EventBus {
 
         let _ = self.tx.send(event.clone());
 
+        // To the log first, and unconditionally.
+        //
+        // An event that is only delivered when someone configured a transport
+        // is an event that is missing exactly on the node nobody had set up —
+        // and a crash loop nobody can see is the case this exists for.
+        if let Some(log) = self.log.read().await.as_ref() {
+            let mut line = format!("event={}", event.kind);
+            if let Some(p) = &event.process {
+                line.push_str(&format!(" process={p}"));
+            }
+            line.push_str(&format!(" container={}", event.container));
+            let mut keys: Vec<&String> = event.detail.keys().collect();
+            keys.sort();
+            for k in keys {
+                if let Some(v) = event.detail.get(k) {
+                    line.push_str(&format!(" {k}={v}"));
+                }
+            }
+            let entry = stormlog::types::LogEntry::new(
+                "event",
+                stormlog::types::LogStream::Ingest,
+                line,
+            )
+            .with_severity(severity_of(&event.kind));
+            log.write_entry(entry).await;
+        }
+
         if !self.config.enabled {
             return;
         }
@@ -115,28 +140,9 @@ impl EventBus {
             }
         };
 
-        // NATS publish
-        #[cfg(feature = "nats")]
-        if matches!(
-            self.config.transport,
-            EventTransport::Nats | EventTransport::Both
-        ) {
-            if let Some(client) = self.nats_client.read().await.as_ref() {
-                let subject = format!("{}.{}", self.config.nats_subject, event.kind);
-                if let Err(e) = client
-                    .publish(subject, json.clone().into())
-                    .await
-                {
-                    error!(error = %e, "NATS publish failed");
-                }
-            }
-        }
 
         // Webhook POST
-        if matches!(
-            self.config.transport,
-            EventTransport::Webhook | EventTransport::Both
-        ) {
+        if self.config.transport == EventTransport::Webhook {
             if let Some(url) = &self.config.webhook_url {
                 let mut req = self.http_client.post(url).json(&event);
                 for (k, v) in &self.config.webhook_headers {
@@ -151,5 +157,31 @@ impl EventBus {
 
     pub async fn emit_simple(&self, kind: EventKind, process: Option<String>) {
         self.emit(kind, process, HashMap::new()).await;
+    }
+
+    /// Give the bus somewhere to write. Called once the log exists.
+    pub async fn set_log(&self, log: std::sync::Arc<stormlog::StormLog>) {
+        *self.log.write().await = Some(log);
+    }
+}
+
+/// How loudly an event should read.
+///
+/// A restart is a warning and not an error: it is the supervisor doing its
+/// job, and a viewer filtered to errors should show the crash that caused it
+/// rather than the response to it.
+fn severity_of(kind: &EventKind) -> stormlog::types::Severity {
+    use stormlog::types::Severity as S;
+    match kind {
+        EventKind::ContainerFailing => S::Critical,
+        EventKind::ProcessCrashed
+        | EventKind::CronFailed
+        | EventKind::BackupFailed
+        | EventKind::UpdateFailed => S::Error,
+        EventKind::ProcessRestarting
+        | EventKind::LivenessCheckFailed
+        | EventKind::ContainerStopping
+        | EventKind::ProcessStopped => S::Warning,
+        _ => S::Info,
     }
 }
