@@ -132,7 +132,7 @@ depends_on = ["api"]
 Per-process logging:
 - Separate log files: `/var/stormd/logs/api.log`, `/var/stormd/logs/worker.log`
 - Separate VT100 terminals viewable in web UI or via `attach api` in SSH
-- Separate archive runs in MinIO (per-process, per-run)
+- Separate archived runs on the log volume (per-process, per-run)
 - Filterable in logs UI: `?process=api` or `?process=worker`
 
 SSH shell usage:
@@ -180,8 +180,8 @@ podman manifest push --all --tls-verify=false stormdbase:latest registry.gt.lo:5
 - **Plugin UI** — managed processes add custom tabs to the web UI via `[process.ui]` config, with reverse proxy and style guide
 - **SSH server** — built-in SSH with a bash-like management shell (process control, log tailing, tab completion)
 - **VT100 terminals** — per-process terminal emulation, viewable via SSH, WebSocket, or web UI
-- **Structured logging** — severity auto-detection, MinIO S3 storage, syslog receiver, broadcast streams
-- **Log archival** — process logs archived to MinIO on exit with failed/exited distinction, run history browsable in UI
+- **Structured logging** — severity detection shared with the fleet ([stormcast](https://github.com/glennswest/stormcast)), a rotated file per process on the log volume, RFC 5424 multicast to the fleet group, broadcast streams to follow
+- **Log archival** — a run's file is named after the run on exit, failed or exited, and the run history is browsable in the UI. Old runs are pruned so a crash loop cannot fill the volume with the record of what went wrong.
 - **Stdio capture** — captures stdout/stderr with automatic severity detection (PANIC/FATAL/ERROR/WARN)
 - **Cron scheduler** — run commands on cron schedules
 - **OCI image updater** — automatic image updates with blue/green rootfs pivot via stormpull
@@ -203,7 +203,7 @@ stormd/
   Cargo.toml                   # workspace root
   crates/
     stormd/                    # main binary — init, supervisor, API, SSH server, web UI
-    stormlog/                  # library — VT100, file logging, MinIO storage, syslog, streams
+    stormlog/                  # library — VT100, rotated files, multicast emit, streams
     stormsh/                   # CLI — TUI console client
 ```
 
@@ -352,30 +352,16 @@ enabled = true
 bind = "0.0.0.0:22"
 password = "changeme"
 
-# MinIO for log storage (optional)
-[stormlog.minio]
-enabled = true
-endpoint = "http://127.0.0.1:9000"
-bucket = "logs"
-access_key = "stormd"
-secret_key = "stormdpass"
+# Logs. Point log_dir at a volume and they outlive the container.
+[stormlog.file]
+log_dir = "/var/stormd/logs"
 
-# Start MinIO first for log storage
-[[process]]
-name = "minio"
-command = "/miniminio"
-args = ["--data-dir", "/data/minio"]
-env = { MINIO_ROOT_USER = "stormd", MINIO_ROOT_PASSWORD = "stormdpass" }
-on_failure = "restart"
-
-# Main application depends on MinIO
 [[process]]
 name = "api-server"
 command = "/app/server"
 args = ["--port", "8080"]
 on_failure = "restart"
 on_exit = "restart"
-depends_on = ["minio"]
 
 # Worker process depends on main API
 [[process]]
@@ -396,13 +382,12 @@ command = "/app/cleanup"
 ```dockerfile
 FROM scratch
 COPY stormd /stormd
-COPY miniminio /miniminio
 COPY server /app/server
 COPY worker /app/worker
 COPY cleanup /app/cleanup
 COPY config.toml /etc/stormd/config.toml
-VOLUME /data/minio
-EXPOSE 9080 8080 9000 22
+VOLUME /var/stormd/logs
+EXPOSE 9080 8080 22
 ENTRYPOINT ["/stormd"]
 ```
 
@@ -639,15 +624,8 @@ enabled = false                        # enable OCI image updater
 # registry = "registry.example.com"
 # poll_interval_secs = 300
 
-[stormlog.minio]
-enabled = false                        # enable MinIO log storage
-endpoint = "http://127.0.0.1:9000"
-bucket = "logs"
-access_key = "stormd"
-secret_key = "stormdpass"
-
-[stormlog.syslog]
-enabled = false                        # enable syslog receiver
+[stormlog.mcast]
+# group = "239.255.42.1:5514"          # the fleet group; "off" to stay quiet
 
 [stormlog.terminal]
 rows = 24                              # VT100 terminal rows
@@ -656,7 +634,8 @@ scrollback = 1000                      # scrollback buffer size
 
 [stormlog.file]
 max_size_bytes = 104857600             # 100 MiB per log file before rotation
-max_files = 10                         # rotated files to keep
+max_files = 10                         # rotated generations to keep, per process
+max_runs = 10                          # finished runs to keep, per process
 
 [[process]]
 name = "my-app"                        # process name (must be unique)
@@ -786,7 +765,7 @@ curl http://localhost:8080/health > /tmp/health.txt
 | GET | `/api/v1/logs/{process}/runs` | List historical runs for a process |
 | GET | `/api/v1/logs/files` | List archived log files with sizes |
 | GET | `/api/v1/logs/files/{filename}` | Read a specific archived log file |
-| GET | `/api/v1/logs/stored` | Query MinIO-stored logs (`?run_id=X`) |
+| GET | `/api/v1/logs/stored` | Query what is on the log volume (`?run_id=X`) |
 | POST | `/api/v1/logs/ingest` | Structured log ingestion |
 | GET | `/api/v1/mounts` | Disk/mount usage |
 | GET | `/api/v1/memory/history` | Memory RSS/VMS history samples |
