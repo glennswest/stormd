@@ -5,6 +5,7 @@ pub mod config;
 pub mod cron;
 pub mod debug;
 pub mod events;
+pub mod nodevars;
 pub mod sftp;
 pub mod shell;
 pub mod ssh;

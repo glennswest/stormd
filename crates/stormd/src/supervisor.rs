@@ -191,14 +191,25 @@ impl Supervisor {
             proc.config.clone()
         };
 
+        // Fill in what only this node knows — its address above all. See
+        // `nodevars`: an image is built once and runs everywhere, so anything
+        // naming *this* node cannot be written into the config, and a control
+        // plane that advertises 127.0.0.1 is a cluster of one per machine.
+        //
+        // At spawn rather than at load, so a node that changes address picks
+        // the new one up on the next restart rather than at the next boot.
+        let vars = crate::nodevars::vars();
+        let args: Vec<String> =
+            config.args.iter().map(|a| crate::nodevars::expand(a, &vars)).collect();
+
         let mut cmd = Command::new(&config.command);
-        cmd.args(&config.args);
+        cmd.args(&args);
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
         for (k, v) in &config.env {
-            cmd.env(k, v);
+            cmd.env(k, crate::nodevars::expand(v, &vars));
         }
         if let Some(dir) = &config.working_dir {
             cmd.current_dir(dir);
