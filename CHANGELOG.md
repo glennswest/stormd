@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### 2026-08-25
+- **refactor:** the log wire — severities, RFC 5424 framing, the multicast
+  socket, escape stripping and the two volume limits — moved to
+  [`stormcast`](https://github.com/glennswest/stormcast), shared with
+  `stormpump`. It was written out in both, and one of them was going to drift;
+  the drift shows up as a viewer that cannot read a node.
+- **BREAKING:** removed the object-store half of `stormlog` — the MinIO client,
+  bucket, credentials, entry buffer and flush loop — and the syslog receivers
+  on UDP, TCP and `/dev/log`. Receiving, storing and indexing a fleet's logs is
+  a collector's job (`mcastsyslog`); doing it in a container's init as well
+  meant two stores, two schemas and a view that saw half the nodes, and it made
+  the logs a node keeps depend on a service elsewhere being up — when the logs
+  anyone wants are from the failure that took the network out. The `s3` feature
+  and the `[stormlog.minio]` / `[stormlog.syslog]` config sections are gone.
+- **feat:** `stormlog::store` answers queries and lists runs by reading the log
+  files back, so `/api/v1/logs/stored` and the run picker work with no service
+  behind them. The on-disk line format is written and parsed side by side, for
+  the same reason the wire moved to one crate.
+- **feat:** finished runs are pruned per process (`file.max_runs`, default 10).
+  A process restarting in a loop writes one archive per restart, and without
+  this the thing that fills the log volume is the record of what went wrong.
+- **fix:** following with `severity=error` compared the name for equality, so a
+  viewer watching for errors was not shown emergencies — the filter hid exactly
+  what it existed to surface. It now means "at least this severe".
+- **fix:** a WebSocket follower that fell behind had its dropped lines skipped
+  in silence. The gap is now reported in the stream.
+
 ### 2026-08-19
 - **fix:** the applet symlinks are relative (`../stormd`, `../../stormd`)
   instead of absolute (`/stormd`), in all three architecture Containerfiles.
