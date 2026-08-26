@@ -255,7 +255,7 @@ If a documentation file doesn't exist yet and should, create it.
 
 ## Work Plan
 
-### Current Version: stormd `v0.4.0` · stormsh `v0.3.0` · stormlog `v0.3.0`
+### Current Version: stormd `v0.5.0` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.1.0` (own repo)
 
 ### Current Sprint / Active Tasks
 
@@ -283,6 +283,19 @@ All five phases shipped in v0.4.0 (2026-08-26), verified end-to-end on dev
 (build, tests, live smoke of /api/v1/components, /ui/, legacy redirects, and
 the plugin summary merge).
 
+**Follow-on (v0.5.0, same day):**
+- [x] Six themes as token-override blocks (Storm/Midnight/Nord/Solar/
+      Phosphor/Light), nav picker, localStorage persistence; ANSI palette
+      and chart re-color per theme
+- [x] Login system — `[api] password`/`auth_token`, session cookies +
+      bearer middleware, UI login screen, stormsh `--token`/`STORMD_TOKEN`
+- [x] Typed relations (`has_one`/`has_many`/`belongs_to`) in the contract;
+      dashboard grid view: nested DataGrid, multi-select bulk actions,
+      RelationPicker ("select from a relationship")
+- [x] Contract extracted to the `stormview` crate in its OWN repo
+      (github.com/glennswest/stormview, private, v0.1.0) — stormd and
+      stormsh consume it via git dependency; stormdrive/stormconsole will too
+
 ### In Progress
 
 (nothing)
@@ -308,6 +321,7 @@ the plugin summary merge).
 | v0.2.0 | 2026-02-28 | Events, cron, backup, web terminal |
 | v0.3.0 | 2026-03-01 | Web dashboard, MinIO archival, run segmentation |
 | v0.4.0 | 2026-08-26 | Component feed + both dashboards, liveness, busybox, CloudID, updater, stormcast wire |
+| v0.5.0 | 2026-08-26 | Themes, login system, relations + grid view, stormview crate extraction |
 
 ---
 

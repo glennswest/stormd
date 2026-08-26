@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+<!-- New unreleased changes go here -->
+
+## [v0.5.0] — 2026-08-26
 
 ### 2026-08-26
 - **feat:** themes — Storm (default), Midnight, Nord, Solar, Phosphor, and
