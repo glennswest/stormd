@@ -3,6 +3,16 @@
 ## [Unreleased]
 
 ### 2026-08-26
+- **feat:** named users — `[[api.users]]` entries (name + password) behind
+  the login screen, which now asks user + password; the signed-in user shows
+  in the nav and on the session endpoint. `[api] password` remains as the
+  legacy "admin" user, and the bearer token still doubles as admin's login.
+  Credential checks compare every configured pair in constant time, so
+  timing reveals neither passwords nor which usernames exist.
+- **feat:** four new themes from stormview v0.4.0 — One (One Dark) and
+  Gruvbox dark, Frost (cool nordic) and Paper (warm sepia) light — twelve
+  total, and Catppuccin's brand color is peach instead of the mauve that
+  read as washed-out purple.
 - **feat:** `[general] theme` sets the instance's default web UI theme,
   served on the open session endpoint (with the container name, so the
   login screen is branded and themed before auth). A viewer's own pick,

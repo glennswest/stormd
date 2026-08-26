@@ -1,7 +1,8 @@
-//! Authentication hooks for the API and UI. Off unless `[api]` configures a
-//! `password` (interactive login) or `auth_token` (machine bearer token) —
-//! then everything except the health check, metrics, the auth endpoints and
-//! the static UI assets requires a session cookie or a bearer token.
+//! Authentication hooks for the API and UI. Off unless `[api]` configures
+//! `[[api.users]]` (name + password), a legacy `password` (the "admin"
+//! user), or `auth_token` (machine bearer token) — then everything except
+//! the health check, metrics, the auth endpoints and the static UI assets
+//! requires a session cookie or a bearer token.
 //!
 //! Sessions live in memory: a restart signs everyone out, which for a
 //! container's init is the right default. Anything longer-lived (users,
@@ -23,52 +24,93 @@ use tokio::sync::RwLock;
 const SESSION_TTL: Duration = Duration::from_secs(24 * 3600);
 const COOKIE: &str = "stormd_session";
 
+struct Session {
+    user: String,
+    created: Instant,
+}
+
 pub struct AuthState {
-    password: Option<String>,
+    /// (name, password) pairs — [[api.users]], plus legacy `password` as
+    /// the "admin" user.
+    users: Vec<(String, String)>,
     token: Option<String>,
-    sessions: RwLock<HashMap<String, Instant>>,
+    sessions: RwLock<HashMap<String, Session>>,
 }
 
 impl AuthState {
     /// None when no credential is configured — auth disabled, everything open.
     pub fn from_config(api: &crate::config::ApiConfig) -> Option<Arc<Self>> {
-        if api.password.is_none() && api.auth_token.is_none() {
+        let mut users: Vec<(String, String)> = api
+            .users
+            .iter()
+            .map(|u| (u.name.clone(), u.password.clone()))
+            .collect();
+        if let Some(p) = &api.password {
+            users.push(("admin".to_string(), p.clone()));
+        }
+        if users.is_empty() && api.auth_token.is_none() {
             return None;
         }
         Some(Arc::new(Self {
-            password: api.password.clone(),
+            users,
             token: api.auth_token.clone(),
             sessions: RwLock::new(HashMap::new()),
         }))
     }
 
-    fn password_matches(&self, given: &str) -> bool {
-        // The bearer token doubles as a valid login password, so a machine
-        // credential also opens the UI.
-        [self.password.as_deref(), self.token.as_deref()]
-            .into_iter()
-            .flatten()
-            .any(|expect| ct_eq(given, expect))
+    /// The user whose credentials these are, if any. Every configured pair
+    /// is compared — never an early exit on a name match — so timing says
+    /// nothing about which usernames exist. The bearer token doubles as the
+    /// "admin" login, so a machine credential also opens the UI.
+    fn check_credentials(&self, username: &str, password: &str) -> Option<String> {
+        let mut matched: Option<String> = None;
+        for (name, expect) in &self.users {
+            let name_ok = ct_eq(username, name);
+            let pass_ok = ct_eq(password, expect);
+            if name_ok && pass_ok {
+                matched = Some(name.clone());
+            }
+        }
+        if matched.is_none() {
+            if let Some(token) = &self.token {
+                let admin = username.is_empty() || username == "admin";
+                if ct_eq(password, token) && admin {
+                    matched = Some("admin".to_string());
+                }
+            }
+        }
+        matched
     }
 
-    async fn new_session(&self) -> String {
+    async fn new_session(&self, user: &str) -> String {
         let id = format!(
             "{}{}",
             uuid::Uuid::new_v4().simple(),
             uuid::Uuid::new_v4().simple()
         );
         let mut sessions = self.sessions.write().await;
-        sessions.retain(|_, created| created.elapsed() < SESSION_TTL);
-        sessions.insert(id.clone(), Instant::now());
+        sessions.retain(|_, s| s.created.elapsed() < SESSION_TTL);
+        sessions.insert(
+            id.clone(),
+            Session {
+                user: user.to_string(),
+                created: Instant::now(),
+            },
+        );
         id
     }
 
-    async fn session_valid(&self, id: &str) -> bool {
+    /// The session's user, if the session exists and is fresh.
+    async fn session_user(&self, id: &str) -> Option<String> {
         let sessions = self.sessions.read().await;
         sessions
             .get(id)
-            .map(|created| created.elapsed() < SESSION_TTL)
-            .unwrap_or(false)
+            .filter(|s| s.created.elapsed() < SESSION_TTL)
+            .map(|s| s.user.clone())
+    }
+
+    async fn session_valid(&self, id: &str) -> bool {
+        self.session_user(id).await.is_some()
     }
 
     async fn drop_session(&self, id: &str) {
@@ -152,6 +194,8 @@ pub async fn require_auth(State(state): State<Arc<AppState>>, req: Request, next
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
+    #[serde(default)]
+    username: String,
     password: String,
 }
 
@@ -162,14 +206,14 @@ pub async fn login(
     let Some(auth) = &state.auth else {
         return Json(serde_json::json!({ "ok": true, "required": false })).into_response();
     };
-    if !auth.password_matches(&body.password) {
+    let Some(user) = auth.check_credentials(&body.username, &body.password) else {
         return (
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "wrong password" })),
+            Json(serde_json::json!({ "error": "wrong user or password" })),
         )
             .into_response();
-    }
-    let id = auth.new_session().await;
+    };
+    let id = auth.new_session(&user).await;
     (
         [(
             header::SET_COOKIE,
@@ -180,7 +224,7 @@ pub async fn login(
                 SESSION_TTL.as_secs()
             ),
         )],
-        Json(serde_json::json!({ "ok": true })),
+        Json(serde_json::json!({ "ok": true, "user": user })),
     )
         .into_response()
 }
@@ -204,16 +248,18 @@ pub async fn logout(State(state): State<Arc<AppState>>, req: Request) -> Respons
 /// instance name and the configured default theme — since everything else
 /// is behind the gate at that point.
 pub async fn session(State(state): State<Arc<AppState>>, req: Request) -> Response {
-    let authenticated = match &state.auth {
-        None => true,
+    let user = match &state.auth {
+        None => None,
         Some(auth) => match session_cookie(&req) {
-            Some(id) => auth.session_valid(&id).await,
-            None => false,
+            Some(id) => auth.session_user(&id).await,
+            None => None,
         },
     };
+    let authenticated = state.auth.is_none() || user.is_some();
     Json(serde_json::json!({
         "required": state.auth.is_some(),
         "authenticated": authenticated,
+        "user": user,
         "container": state.container_name,
         "theme": state.ui_theme,
     }))

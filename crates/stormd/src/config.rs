@@ -307,9 +307,14 @@ pub struct ApiConfig {
     /// or `password` turns authentication on.
     #[serde(default)]
     pub auth_token: Option<String>,
-    /// Interactive credential: the UI's login screen asks for this.
+    /// Legacy interactive credential — equivalent to a user named "admin"
+    /// with this password. Prefer [[api.users]].
     #[serde(default)]
     pub password: Option<String>,
+    /// Named users for the UI login. Any user (or `password`/`auth_token`
+    /// above) being configured turns authentication on.
+    #[serde(default)]
+    pub users: Vec<ApiUser>,
     /// Reusable, config-driven host-based routing: `Host:` header -> redirect
     /// target path (e.g. "manager.mob.lo" = "/ui/", "api.x" = "/api/v1/health").
     #[serde(default)]
@@ -322,9 +327,16 @@ impl Default for ApiConfig {
             bind: default_api_bind(),
             auth_token: None,
             password: None,
+            users: Vec::new(),
             hosts: std::collections::HashMap::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiUser {
+    pub name: String,
+    pub password: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

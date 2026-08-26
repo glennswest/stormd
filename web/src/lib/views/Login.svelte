@@ -3,4 +3,8 @@
   import { nav, login } from '../stores.svelte.js'
 </script>
 
-<LoginPanel title={nav.container} subtitle="stormd · sign in" onsubmit={login} />
+<LoginPanel
+  title={nav.container}
+  subtitle="stormd · sign in"
+  onsubmit={(username, password) => login(username, password)}
+/>

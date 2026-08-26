@@ -467,12 +467,14 @@ so stormdrive and stormconsole consume the identical UI system. stormd's
 `web/` keeps only the app: routing, stores, auth, and views. After pushing a
 stormview change, run `npm update stormview` here to pick up the new commit.
 
-**Login** — off by default. Setting `[api] password` (interactive) and/or
-`[api] auth_token` (machine bearer token) turns authentication on: the UI
-shows a login screen, sessions are HttpOnly cookies (in-memory, 24h), and
-every endpoint except `/api/v1/health`, `/metrics`, the auth endpoints and
-the static assets requires a session or `Authorization: Bearer <token>`. The
-plugin proxy is protected. stormsh passes the token with `-t`/`--token` or
+**Login** — off by default. Configuring `[[api.users]]` (name + password),
+the legacy `[api] password` (the "admin" user), and/or `[api] auth_token`
+(machine bearer token, also valid as admin's login) turns authentication on:
+the UI shows a user/password screen, sessions are HttpOnly cookies
+(in-memory, 24h), the signed-in user shows in the nav, and every endpoint
+except `/api/v1/health`, `/metrics`, the auth endpoints and the static
+assets requires a session or `Authorization: Bearer <token>`. The plugin
+proxy is protected. stormsh passes the token with `-t`/`--token` or
 `STORMD_TOKEN`.
 
 ### Plugin UI
@@ -662,9 +664,11 @@ log_dir = "/var/stormd/logs"           # log file directory
 
 [api]
 bind = "0.0.0.0:9080"                 # REST API + web UI bind address
-# password = "changeme"               # UI login password — setting this (or
-                                       # auth_token) turns authentication on
 # auth_token = "s3cret"               # machine credential: Authorization: Bearer <token>
+# password = "changeme"               # legacy: equivalent to user "admin" below
+# [[api.users]]                       # named users for the UI login — any user,
+# name = "glenn"                      # password, or auth_token being set turns
+# password = "changeme"               # authentication on
 
 [ssh]
 enabled = true                         # enable built-in SSH server
@@ -824,7 +828,7 @@ curl http://localhost:8080/health > /tmp/health.txt
 | GET | `/api/v1/health` | Health check |
 | GET | `/api/v1/status` | Full status (processes, cron, stats) |
 | GET | `/api/v1/components` | Component summaries — every part of the system in one uniform shape (id, kind, label, health, detail, metrics, actions, relations); live push on `/ws/components` |
-| POST | `/api/v1/auth/login` | Start a session (`{"password": "..."}`) — sets the session cookie |
+| POST | `/api/v1/auth/login` | Start a session (`{"username": "...", "password": "..."}`) — sets the session cookie |
 | POST | `/api/v1/auth/logout` | End the session |
 | GET | `/api/v1/auth/session` | `{required, authenticated}` — whether login is needed/held |
 | GET | `/api/v1/stats` | System stats (uptime, memory, counts) |

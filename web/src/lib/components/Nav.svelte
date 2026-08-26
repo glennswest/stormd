@@ -38,6 +38,7 @@
     <span class="live" class:on={feed.connected} title={feed.connected ? 'live' : 'reconnecting'}></span>
     stormd
     {#if auth.required}
+      {#if auth.user}<span class="user">{auth.user}</span>{/if}
       <button class="signout" title="Sign out" onclick={logout}>⏻</button>
     {/if}
   </span>
@@ -101,6 +102,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
   }
+  .user { color: var(--accent); font-weight: 600; }
   .signout {
     padding: 2px 8px;
     font-size: 13px;

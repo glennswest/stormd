@@ -19,6 +19,7 @@ export const auth = $state({
   checked: false,
   required: false,
   authenticated: true,
+  user: null,
 })
 
 export async function checkAuth() {
@@ -26,6 +27,7 @@ export async function checkAuth() {
     const s = await get('/api/v1/auth/session')
     auth.required = !!s.required
     auth.authenticated = !!s.authenticated
+    auth.user = s.user || null
     // The session endpoint is the one open door, so it also carries what
     // the login screen needs: the instance name and the configured default
     // theme (which yields to this browser's own pick).
@@ -37,9 +39,10 @@ export async function checkAuth() {
   auth.checked = true
 }
 
-export async function login(password) {
-  await postJson('/api/v1/auth/login', { password })
+export async function login(username, password) {
+  const r = await postJson('/api/v1/auth/login', { username, password })
   auth.authenticated = true
+  auth.user = r.user || username || null
   startFeed()
 }
 
