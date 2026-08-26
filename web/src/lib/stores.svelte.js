@@ -3,13 +3,46 @@
 // for the very first paint), so every consumer always holds a complete
 // picture and there is no client-side merging.
 
-import { get, reconnectingSocket } from './api.js'
+import { get, postJson, reconnectingSocket } from './api.js'
 
 export const feed = $state({
   components: [],
   connected: false,
   loaded: false,
 })
+
+// Auth is a gate in front of the app: `session` says whether a login is
+// required and whether this browser already has one. With auth off
+// server-side, the gate never appears.
+export const auth = $state({
+  checked: false,
+  required: false,
+  authenticated: true,
+})
+
+export async function checkAuth() {
+  try {
+    const s = await get('/api/v1/auth/session')
+    auth.required = !!s.required
+    auth.authenticated = !!s.authenticated
+  } catch {
+    // Can't tell — let the app try; data requests will 401 if auth is on.
+  }
+  auth.checked = true
+}
+
+export async function login(password) {
+  await postJson('/api/v1/auth/login', { password })
+  auth.authenticated = true
+  startFeed()
+}
+
+export async function logout() {
+  try {
+    await postJson('/api/v1/auth/logout', {})
+  } catch {}
+  location.reload()
+}
 
 export const nav = $state({
   container: 'stormd',

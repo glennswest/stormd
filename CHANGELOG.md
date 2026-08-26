@@ -1,7 +1,32 @@
 # Changelog
 
 ## [Unreleased]
-<!-- New unreleased changes go here -->
+
+### 2026-08-26
+- **feat:** themes — Storm (default), Midnight, Nord, Solar, Phosphor, and
+  Light, picked from the nav bar and remembered per browser. A theme is one
+  block of CSS token overrides: the ANSI palette for rendered process output
+  and the memory chart re-color with it.
+- **feat:** login system, off by default. `[api] password` (interactive) or
+  `auth_token` (bearer) turns it on: login screen in the UI, HttpOnly
+  in-memory sessions (24h), constant-time comparisons, and middleware that
+  guards everything except health, metrics, the auth endpoints and static
+  assets — the plugin proxy included. stormsh sends the token via
+  `-t`/`--token` or `STORMD_TOKEN`.
+- **feat:** typed component relations — `has_one`, `has_many`, `belongs_to`
+  edges between component ids in the feed — and a relational grid view on
+  the dashboard: nested grids along downward edges, sortable columns,
+  multi-select with bulk start/stop/restart, and `has_many` edges as
+  "select from a relationship" pickers. Cards grew relation chips. The
+  `DataGrid`/`RelationPicker` Svelte components know nothing about stormd,
+  in prep for stormdrive and stormconsole.
+- **refactor:** the view contract (`ComponentSummary`, `Metric`, `Action`,
+  `Relation`, `Health`, format helpers) moved to the shared
+  [`stormview`](https://github.com/glennswest/stormview) crate; stormd
+  assembles and serves it, stormsh deserializes the same types, so the two
+  cannot disagree about the wire.
+- **fix:** stormsh's default port is 9080 — stormd's actual API default —
+  instead of 8080.
 
 ## [v0.4.0] — 2026-08-26
 

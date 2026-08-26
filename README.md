@@ -438,9 +438,33 @@ their hash routes, so old bookmarks keep working.
 The dashboard renders the component-summary feed (`/api/v1/components`, pushed
 live over `/ws/components`) generically: a subsystem that reports a summary
 appears as a card with no frontend changes, and stormsh's dashboard renders
-the same feed as TUI tiles. To develop the UI against a running stormd:
-`cd web && STORMD_URL=http://host:9080 npm run dev`; `npm run build` writes
-`web/dist`, which is committed and embedded at the next cargo build.
+the same feed as TUI tiles. The contract types live in the shared
+[stormview](https://github.com/glennswest/stormview) crate. To develop the UI
+against a running stormd: `cd web && STORMD_URL=http://host:9080 npm run dev`;
+`npm run build` writes `web/dist`, which is committed and embedded at the next
+cargo build.
+
+**Themes** — six built in (Storm, Midnight, Nord, Solar, Phosphor, Light),
+picked from the nav bar and remembered per browser. A theme is one block of
+CSS token overrides in `web/src/app.css` — colors, ANSI palette for rendered
+output, chart colors — so adding a theme is adding a block.
+
+**Grid view** — the dashboard toggles between cards and a relational grid.
+Components carry typed relations (`has_one`, `has_many`, `belongs_to`) between
+ids in the feed; the grid nests child grids along `has_many`/`has_one` edges
+(system → processes → their update images), rows multi-select for bulk
+start/stop/restart, and `has_many` edges render as "select from a
+relationship" pickers. The `DataGrid` / `RelationPicker` Svelte components in
+`web/src/lib/components/` are written against the stormview contract only, so
+stormdrive and stormconsole can lift them unchanged.
+
+**Login** — off by default. Setting `[api] password` (interactive) and/or
+`[api] auth_token` (machine bearer token) turns authentication on: the UI
+shows a login screen, sessions are HttpOnly cookies (in-memory, 24h), and
+every endpoint except `/api/v1/health`, `/metrics`, the auth endpoints and
+the static assets requires a session or `Authorization: Bearer <token>`. The
+plugin proxy is protected. stormsh passes the token with `-t`/`--token` or
+`STORMD_TOKEN`.
 
 ### Plugin UI
 
@@ -628,6 +652,9 @@ log_dir = "/var/stormd/logs"           # log file directory
 
 [api]
 bind = "0.0.0.0:9080"                 # REST API + web UI bind address
+# password = "changeme"               # UI login password — setting this (or
+                                       # auth_token) turns authentication on
+# auth_token = "s3cret"               # machine credential: Authorization: Bearer <token>
 
 [ssh]
 enabled = true                         # enable built-in SSH server
@@ -786,7 +813,10 @@ curl http://localhost:8080/health > /tmp/health.txt
 | GET | `/api/v1/cloudid` | Instance cloud ID and container name |
 | GET | `/api/v1/health` | Health check |
 | GET | `/api/v1/status` | Full status (processes, cron, stats) |
-| GET | `/api/v1/components` | Component summaries — every part of the system in one uniform shape (id, kind, label, health, detail, metrics, actions); live push on `/ws/components` |
+| GET | `/api/v1/components` | Component summaries — every part of the system in one uniform shape (id, kind, label, health, detail, metrics, actions, relations); live push on `/ws/components` |
+| POST | `/api/v1/auth/login` | Start a session (`{"password": "..."}`) — sets the session cookie |
+| POST | `/api/v1/auth/logout` | End the session |
+| GET | `/api/v1/auth/session` | `{required, authenticated}` — whether login is needed/held |
 | GET | `/api/v1/stats` | System stats (uptime, memory, counts) |
 | GET | `/api/v1/processes` | List all processes |
 | GET | `/api/v1/processes/{name}` | Get process status |

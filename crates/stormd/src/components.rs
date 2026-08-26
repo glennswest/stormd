@@ -1,98 +1,28 @@
-//! The component summary contract — one uniform shape that every part of the
-//! system reports itself in, and the only thing the dashboards know how to
-//! render. The web UI and stormsh both draw from this feed, so a subsystem
-//! that implements a summary here appears in both, and neither UI can drift
-//! from the other because neither owns the model.
+//! Assembling this stormd's component summaries — the one feed both
+//! dashboards render from. The shapes themselves live in the shared
+//! `stormview` crate (github.com/glennswest/stormview), the contract every
+//! storm daemon serves and every storm UI renders; this module only knows
+//! how THIS daemon's parts map onto it.
 
 use crate::api::AppState;
 use crate::supervisor::ProcessState;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-/// Component health, in the order a viewer sorts by: broken first.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Health {
-    Error,
-    Warn,
-    Ok,
-    Idle,
-    Unknown,
-}
+pub use stormview::{
+    format_bytes, format_duration, Action, ComponentSummary, Health, Metric, Relation,
+    RelationKind,
+};
 
-/// One headline number on a component's card. `tone` is a rendering hint
-/// ("ok" | "warn" | "error" | "muted" | "accent"), not a semantic — health
-/// lives on the component.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Metric {
-    pub label: String,
-    pub value: String,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub unit: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub tone: Option<String>,
-}
-
-impl Metric {
-    fn new(label: &str, value: impl Into<String>) -> Self {
-        Self {
-            label: label.to_string(),
-            value: value.into(),
-            unit: None,
-            tone: None,
-        }
+/// A start/stop/restart button on a process card.
+fn process_action(id: &str, label: &str, process: &str, enabled: bool, danger: bool) -> Action {
+    Action {
+        id: id.to_string(),
+        label: label.to_string(),
+        method: "POST".to_string(),
+        path: format!("/api/v1/processes/{}/{}", process, id),
+        enabled,
+        danger,
     }
-
-    fn unit(mut self, unit: &str) -> Self {
-        self.unit = Some(unit.to_string());
-        self
-    }
-
-    fn tone(mut self, tone: &str) -> Self {
-        self.tone = Some(tone.to_string());
-        self
-    }
-}
-
-/// An operation a viewer may invoke on a component. The path is a real API
-/// path, so a renderer needs no per-kind knowledge to wire a button.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Action {
-    pub id: String,
-    pub label: String,
-    pub method: String,
-    pub path: String,
-    pub enabled: bool,
-    pub danger: bool,
-}
-
-impl Action {
-    fn process(id: &str, label: &str, process: &str, enabled: bool, danger: bool) -> Self {
-        Self {
-            id: id.to_string(),
-            label: label.to_string(),
-            method: "POST".to_string(),
-            path: format!("/api/v1/processes/{}/{}", process, id),
-            enabled,
-            danger,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ComponentSummary {
-    /// Stable identity, e.g. "system", "process:web", "cron:backup".
-    pub id: String,
-    /// "system" | "process" | "plugin" | "cron" | "storage" | "logs" | "updater"
-    pub kind: String,
-    pub label: String,
-    pub health: Health,
-    /// One human line: what a viewer would say this component is doing.
-    pub detail: String,
-    pub metrics: Vec<Metric>,
-    pub actions: Vec<Action>,
-    /// UI route within the SPA (hash route); a TUI ignores it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub link: Option<String>,
 }
 
 /// Assemble the summary of every component in the system, in display order:
@@ -136,6 +66,7 @@ pub async fn collect(state: &AppState) -> Vec<ComponentSummary> {
         ),
         metrics,
         actions: Vec::new(),
+        relations: Vec::new(),
         link: None,
     });
 
@@ -188,9 +119,9 @@ pub async fn collect(state: &AppState) -> Vec<ComponentSummary> {
             ProcessState::Stopped | ProcessState::Failed | ProcessState::Pending
         );
         let actions = vec![
-            Action::process("start", "Start", &p.name, stopped, false),
-            Action::process("stop", "Stop", &p.name, !stopped, true),
-            Action::process("restart", "Restart", &p.name, !stopped, false),
+            process_action("start", "Start", &p.name, stopped, false),
+            process_action("stop", "Stop", &p.name, !stopped, true),
+            process_action("restart", "Restart", &p.name, !stopped, false),
         ];
 
         out.push(ComponentSummary {
@@ -201,6 +132,7 @@ pub async fn collect(state: &AppState) -> Vec<ComponentSummary> {
             detail,
             metrics,
             actions,
+            relations: Vec::new(),
             link: Some(match plugin {
                 Some(u) => format!("#/ext/{}", u.name),
                 None => format!("#/process/{}", p.name),
@@ -234,6 +166,7 @@ pub async fn collect(state: &AppState) -> Vec<ComponentSummary> {
                     .tone(if job.fail_count > 0 { "error" } else { "muted" }),
             ],
             actions: Vec::new(),
+            relations: Vec::new(),
             link: None,
         });
     }
@@ -269,6 +202,7 @@ pub async fn collect(state: &AppState) -> Vec<ComponentSummary> {
                 Metric::new("free", format_bytes(m.avail_bytes)),
             ],
             actions: Vec::new(),
+            relations: Vec::new(),
             link: None,
         });
     }
@@ -286,6 +220,7 @@ pub async fn collect(state: &AppState) -> Vec<ComponentSummary> {
             Metric::new("size", format_bytes(bytes)),
         ],
         actions: Vec::new(),
+        relations: Vec::new(),
         link: Some("#/logs".to_string()),
     });
 
@@ -328,8 +263,76 @@ pub async fn collect(state: &AppState) -> Vec<ComponentSummary> {
                         || img.status == UpdateStatus::Failed,
                     danger: false,
                 }],
+                relations: Vec::new(),
                 link: None,
             });
+        }
+    }
+
+    // --- Relations ---
+    // Wired as a pass over the finished list so every edge points at an id
+    // that actually exists in this snapshot. The graph today: the system
+    // has_many processes and mounts and has_one logs; everything belongs_to
+    // the system; a tracked image has_one process and vice versa; a process
+    // has_one logs view filtered to itself.
+    let process_ids: Vec<String> = out
+        .iter()
+        .filter(|c| c.kind == "process" || c.kind == "plugin")
+        .map(|c| c.id.clone())
+        .collect();
+    let mount_ids: Vec<String> = out
+        .iter()
+        .filter(|c| c.kind == "storage")
+        .map(|c| c.id.clone())
+        .collect();
+    let update_ids: Vec<String> = out
+        .iter()
+        .filter(|c| c.kind == "updater")
+        .map(|c| c.id.clone())
+        .collect();
+    let cron_ids: Vec<String> = out
+        .iter()
+        .filter(|c| c.kind == "cron")
+        .map(|c| c.id.clone())
+        .collect();
+
+    for c in out.iter_mut() {
+        match c.kind.as_str() {
+            "system" => {
+                if !process_ids.is_empty() {
+                    c.relations.push(Relation::has_many("processes", process_ids.clone()));
+                }
+                if !cron_ids.is_empty() {
+                    c.relations.push(Relation::has_many("cron", cron_ids.clone()));
+                }
+                if !mount_ids.is_empty() {
+                    c.relations.push(Relation::has_many("storage", mount_ids.clone()));
+                }
+                c.relations.push(Relation::has_one("logs", "logs"));
+            }
+            "process" | "plugin" => {
+                let name = c.id.strip_prefix("process:").unwrap_or(&c.id).to_string();
+                c.relations.push(Relation::belongs_to("system", "system"));
+                c.relations.push(
+                    Relation::has_one("logs", "logs")
+                        .href(format!("#/logs?process={}", name)),
+                );
+                let update_id = format!("update:{}", name);
+                if update_ids.contains(&update_id) {
+                    c.relations.push(Relation::has_one("update", update_id));
+                }
+            }
+            "updater" => {
+                let name = c.id.strip_prefix("update:").unwrap_or(&c.id).to_string();
+                let process_id = format!("process:{}", name);
+                if process_ids.contains(&process_id) {
+                    c.relations.push(Relation::belongs_to("process", process_id));
+                }
+            }
+            "cron" | "storage" | "logs" => {
+                c.relations.push(Relation::belongs_to("system", "system"));
+            }
+            _ => {}
         }
     }
 
@@ -406,57 +409,4 @@ async fn log_dir_totals(dir: &std::path::Path) -> (usize, u64) {
         }
     }
     (files, bytes)
-}
-
-pub fn format_duration(secs: i64) -> String {
-    let secs = secs.max(0);
-    let days = secs / 86400;
-    let hours = (secs % 86400) / 3600;
-    let mins = (secs % 3600) / 60;
-    let s = secs % 60;
-    if days > 0 {
-        format!("{}d {}h", days, hours)
-    } else if hours > 0 {
-        format!("{}h {}m", hours, mins)
-    } else if mins > 0 {
-        format!("{}m {}s", mins, s)
-    } else {
-        format!("{}s", s)
-    }
-}
-
-pub fn format_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{} B", bytes)
-    } else {
-        format!("{:.1} {}", value, UNITS[unit])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn duration_formats_by_magnitude() {
-        assert_eq!(format_duration(42), "42s");
-        assert_eq!(format_duration(90), "1m 30s");
-        assert_eq!(format_duration(3700), "1h 1m");
-        assert_eq!(format_duration(90000), "1d 1h");
-        assert_eq!(format_duration(-5), "0s");
-    }
-
-    #[test]
-    fn bytes_format_by_magnitude() {
-        assert_eq!(format_bytes(512), "512 B");
-        assert_eq!(format_bytes(2048), "2.0 KB");
-        assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MB");
-    }
 }

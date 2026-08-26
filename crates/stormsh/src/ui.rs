@@ -110,17 +110,17 @@ fn draw_dashboard(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-fn health_color(health: &str) -> Color {
+fn health_color(health: stormview::Health) -> Color {
+    use stormview::Health;
     match health {
-        "ok" => Color::Green,
-        "warn" => Color::Yellow,
-        "error" => Color::Red,
-        "idle" => Color::DarkGray,
-        _ => Color::DarkGray,
+        Health::Ok => Color::Green,
+        Health::Warn => Color::Yellow,
+        Health::Error => Color::Red,
+        Health::Idle | Health::Unknown => Color::DarkGray,
     }
 }
 
-fn draw_tile(f: &mut Frame, area: Rect, c: &crate::client::ComponentSummary, selected: bool) {
+fn draw_tile(f: &mut Frame, area: Rect, c: &stormview::ComponentSummary, selected: bool) {
     let border_style = if selected {
         Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
     } else {
@@ -128,7 +128,7 @@ fn draw_tile(f: &mut Frame, area: Rect, c: &crate::client::ComponentSummary, sel
     };
 
     let title = Line::from(vec![
-        Span::styled(" ● ", Style::default().fg(health_color(&c.health))),
+        Span::styled(" ● ", Style::default().fg(health_color(c.health))),
         Span::styled(
             c.label.clone(),
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),

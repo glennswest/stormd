@@ -1,5 +1,6 @@
 /* Design tokens — the entire look and feel lives here. Components reference
-   tokens only, so a re-theme is an edit to this block and nothing else. */
+   tokens only, so a theme is nothing but a block of token overrides below;
+   the picker in the nav sets data-theme on <html> and localStorage keeps it. */
 :root {
   /* surfaces */
   --bg: #0f0f1a;
@@ -32,6 +33,30 @@
   --error-border: #6a2a3a;
   --accent-bg: #1a3a4a;
 
+  /* controls + chrome */
+  --btn-bg: #2a2d50;
+  --nav-hover: #1e2140;
+  --nav-active: #2a2d50;
+  --term-bg: #0a0a14;
+
+  /* ANSI palette for rendered process output */
+  --ansi-black: #555;
+  --ansi-red: #e94560;
+  --ansi-green: #50fa7b;
+  --ansi-yellow: #f1fa8c;
+  --ansi-blue: #6272a4;
+  --ansi-magenta: #ff79c6;
+  --ansi-cyan: #8be9fd;
+  --ansi-white: #ccc;
+  --ansi-br-black: #666;
+  --ansi-br-red: #ff6e6e;
+  --ansi-br-green: #69ff94;
+  --ansi-br-yellow: #ffffa5;
+  --ansi-br-blue: #d6acff;
+  --ansi-br-magenta: #ff92df;
+  --ansi-br-cyan: #a4ffff;
+  --ansi-br-white: #fff;
+
   /* type */
   --font: -apple-system, 'Segoe UI', system-ui, sans-serif;
   --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
@@ -40,6 +65,229 @@
   --radius: 8px;
   --radius-sm: 6px;
   --nav-h: 48px;
+}
+
+/* --- Themes: token overrides only --- */
+
+[data-theme='midnight'] {
+  --bg: #0a0e14;
+  --panel: #0f141c;
+  --panel-raised: #131a24;
+  --border: #1d2635;
+  --border-strong: #2d3b52;
+  --text: #d9e2ec;
+  --text-dim: #7e8b9d;
+  --text-faint: #5c6773;
+  --text-ghost: #47525e;
+  --brand: #ff8f40;
+  --ok: #7fd962;
+  --warn: #ffd173;
+  --warn-strong: #e6a23c;
+  --error: #f26d78;
+  --accent: #39bae6;
+  --purple: #d2a6ff;
+  --ok-bg: #163012;
+  --ok-border: #2b5322;
+  --warn-bg: #33270f;
+  --warn-border: #5c4a1e;
+  --error-bg: #331116;
+  --error-border: #5c2129;
+  --accent-bg: #0e2733;
+  --btn-bg: #1c2736;
+  --nav-hover: #131c29;
+  --nav-active: #1c2b3d;
+  --term-bg: #06090e;
+  --ansi-red: #f26d78;
+  --ansi-green: #7fd962;
+  --ansi-yellow: #ffd173;
+  --ansi-blue: #59c2ff;
+  --ansi-magenta: #d2a6ff;
+  --ansi-cyan: #39bae6;
+}
+
+[data-theme='nord'] {
+  --bg: #2e3440;
+  --panel: #353c4a;
+  --panel-raised: #3b4252;
+  --border: #434c5e;
+  --border-strong: #4c566a;
+  --text: #eceff4;
+  --text-dim: #aeb8c9;
+  --text-faint: #8794a8;
+  --text-ghost: #6b788f;
+  --brand: #b48ead;
+  --ok: #a3be8c;
+  --warn: #ebcb8b;
+  --warn-strong: #d08770;
+  --error: #bf616a;
+  --accent: #88c0d0;
+  --purple: #b48ead;
+  --ok-bg: #3a4438;
+  --ok-border: #4d5c48;
+  --warn-bg: #46402f;
+  --warn-border: #5e553c;
+  --error-bg: #453238;
+  --error-border: #5e4148;
+  --accent-bg: #354550;
+  --btn-bg: #434c5e;
+  --nav-hover: #3b4252;
+  --nav-active: #4c566a;
+  --term-bg: #272c37;
+  --ansi-black: #4c566a;
+  --ansi-red: #bf616a;
+  --ansi-green: #a3be8c;
+  --ansi-yellow: #ebcb8b;
+  --ansi-blue: #81a1c1;
+  --ansi-magenta: #b48ead;
+  --ansi-cyan: #88c0d0;
+  --ansi-white: #d8dee9;
+  --ansi-br-black: #667899;
+  --ansi-br-red: #d0737c;
+  --ansi-br-green: #b5d09e;
+  --ansi-br-yellow: #f5d99f;
+  --ansi-br-blue: #94b2d1;
+  --ansi-br-magenta: #c79fc0;
+  --ansi-br-cyan: #9bd0de;
+  --ansi-br-white: #eceff4;
+}
+
+[data-theme='solar'] {
+  --bg: #002b36;
+  --panel: #073642;
+  --panel-raised: #0a3f4d;
+  --border: #10505f;
+  --border-strong: #1a6274;
+  --text: #cfd8d9;
+  --text-dim: #93a1a1;
+  --text-faint: #657b83;
+  --text-ghost: #586e75;
+  --brand: #d33682;
+  --ok: #859900;
+  --warn: #b58900;
+  --warn-strong: #cb4b16;
+  --error: #dc322f;
+  --accent: #268bd2;
+  --purple: #6c71c4;
+  --ok-bg: #173300;
+  --ok-border: #3d5200;
+  --warn-bg: #332600;
+  --warn-border: #5c4700;
+  --error-bg: #38100f;
+  --error-border: #5e1f1e;
+  --accent-bg: #0a2f47;
+  --btn-bg: #0e4a5a;
+  --nav-hover: #08404e;
+  --nav-active: #11525f;
+  --term-bg: #00212a;
+  --ansi-black: #586e75;
+  --ansi-red: #dc322f;
+  --ansi-green: #859900;
+  --ansi-yellow: #b58900;
+  --ansi-blue: #268bd2;
+  --ansi-magenta: #d33682;
+  --ansi-cyan: #2aa198;
+  --ansi-white: #eee8d5;
+  --ansi-br-black: #657b83;
+  --ansi-br-red: #e35d5b;
+  --ansi-br-green: #a3bb00;
+  --ansi-br-yellow: #d9a400;
+  --ansi-br-blue: #4ea5e0;
+  --ansi-br-magenta: #dd5f9c;
+  --ansi-br-cyan: #35c9be;
+  --ansi-br-white: #fdf6e3;
+}
+
+[data-theme='phosphor'] {
+  --bg: #000500;
+  --panel: #001a0d;
+  --panel-raised: #002613;
+  --border: #003d1f;
+  --border-strong: #00602f;
+  --text: #33ff77;
+  --text-dim: #1fb355;
+  --text-faint: #158040;
+  --text-ghost: #0d5c2e;
+  --brand: #66ffaa;
+  --ok: #33ff77;
+  --warn: #b3ff66;
+  --warn-strong: #d9ff4d;
+  --error: #ff5555;
+  --accent: #66ffcc;
+  --purple: #99ffbb;
+  --ok-bg: #002613;
+  --ok-border: #00602f;
+  --warn-bg: #1e2600;
+  --warn-border: #3f5200;
+  --error-bg: #260000;
+  --error-border: #5c0000;
+  --accent-bg: #00261f;
+  --btn-bg: #002613;
+  --nav-hover: #001f10;
+  --nav-active: #003d1f;
+  --term-bg: #000800;
+  --ansi-black: #0d5c2e;
+  --ansi-red: #ff5555;
+  --ansi-green: #33ff77;
+  --ansi-yellow: #b3ff66;
+  --ansi-blue: #33ddaa;
+  --ansi-magenta: #99ffbb;
+  --ansi-cyan: #66ffcc;
+  --ansi-white: #ccffdd;
+  --ansi-br-black: #158040;
+  --ansi-br-red: #ff8080;
+  --ansi-br-green: #80ffaa;
+  --ansi-br-yellow: #d9ff99;
+  --ansi-br-blue: #80ffd4;
+  --ansi-br-magenta: #bbffd4;
+  --ansi-br-cyan: #a3ffe0;
+  --ansi-br-white: #eafff2;
+  --font: 'SF Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+}
+
+[data-theme='light'] {
+  --bg: #f4f5f8;
+  --panel: #ffffff;
+  --panel-raised: #eef0f4;
+  --border: #dcdfe8;
+  --border-strong: #c3c8d6;
+  --text: #1c2130;
+  --text-dim: #5a6272;
+  --text-faint: #7d8593;
+  --text-ghost: #a2a9b6;
+  --brand: #d0245c;
+  --ok: #1a7f37;
+  --warn: #9a6700;
+  --warn-strong: #bc4c00;
+  --error: #cf222e;
+  --accent: #0969da;
+  --purple: #8250df;
+  --ok-bg: #dcf2e2;
+  --ok-border: #a8d8b5;
+  --warn-bg: #f7ecd0;
+  --warn-border: #e0cc94;
+  --error-bg: #fbe0e2;
+  --error-border: #f0b2b7;
+  --accent-bg: #dcebfb;
+  --btn-bg: #e6e9f0;
+  --nav-hover: #eef0f4;
+  --nav-active: #dfe3ec;
+  --term-bg: #fbfcfe;
+  --ansi-black: #57606a;
+  --ansi-red: #cf222e;
+  --ansi-green: #1a7f37;
+  --ansi-yellow: #9a6700;
+  --ansi-blue: #0969da;
+  --ansi-magenta: #8250df;
+  --ansi-cyan: #1b7c83;
+  --ansi-white: #6e7781;
+  --ansi-br-black: #7d8593;
+  --ansi-br-red: #a40e26;
+  --ansi-br-green: #116329;
+  --ansi-br-yellow: #7d4e00;
+  --ansi-br-blue: #0550ae;
+  --ansi-br-magenta: #6639ba;
+  --ansi-br-cyan: #136066;
+  --ansi-br-white: #24292f;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -72,29 +320,29 @@ select, input[type="text"], input[type="search"] {
 select:focus, input:focus { border-color: var(--border-strong); }
 
 button {
-  background: #2a2d50;
+  background: var(--btn-bg);
   color: var(--text);
   border: 1px solid var(--border-strong);
   padding: 6px 14px;
   border-radius: var(--radius-sm);
   font-size: 13px;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s, filter 0.15s;
   font-family: var(--font);
 }
 button:hover:not(:disabled) { background: var(--border-strong); }
 button:disabled { opacity: 0.35; cursor: default; }
 
 button.ok { background: var(--ok-bg); border-color: var(--ok-border); color: var(--ok); }
-button.ok:hover:not(:disabled) { background: #2a5a3a; }
 button.danger { background: var(--error-bg); border-color: var(--error-border); color: var(--error); }
-button.danger:hover:not(:disabled) { background: #5a2a3a; }
 button.warn { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn); }
-button.warn:hover:not(:disabled) { background: #5a4a2a; }
+button.ok:hover:not(:disabled) { background: var(--ok-bg); filter: brightness(1.2); }
+button.danger:hover:not(:disabled) { background: var(--error-bg); filter: brightness(1.2); }
+button.warn:hover:not(:disabled) { background: var(--warn-bg); filter: brightness(1.2); }
 
 /* the terminal/log pane */
 .term-output {
-  background: #0a0a14;
+  background: var(--term-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 12px;

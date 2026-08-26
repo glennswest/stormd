@@ -13,6 +13,17 @@ export async function post(path) {
   return resp.json()
 }
 
+export async function postJson(path, body) {
+  const resp = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = await resp.json().catch(() => ({}))
+  if (!resp.ok) throw new Error(data.error || `${resp.status} ${resp.statusText}`)
+  return data
+}
+
 export function wsUrl(path) {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${proto}//${location.host}${path}`
@@ -100,27 +111,29 @@ export function escapeHtml(s) {
     .replace(/"/g, '&quot;')
 }
 
+// Colors come from the theme's --ansi-* tokens (inline styles may reference
+// CSS variables), so rendered output re-colors with the theme.
 const ANSI_STYLES = {
   1: 'font-weight:bold',
   2: 'opacity:0.7',
   3: 'font-style:italic',
   4: 'text-decoration:underline',
-  30: 'color:#555',
-  31: 'color:#e94560',
-  32: 'color:#50fa7b',
-  33: 'color:#f1fa8c',
-  34: 'color:#6272a4',
-  35: 'color:#ff79c6',
-  36: 'color:#8be9fd',
-  37: 'color:#ccc',
-  90: 'color:#666',
-  91: 'color:#ff6e6e',
-  92: 'color:#69ff94',
-  93: 'color:#ffffa5',
-  94: 'color:#d6acff',
-  95: 'color:#ff92df',
-  96: 'color:#a4ffff',
-  97: 'color:#fff',
+  30: 'color:var(--ansi-black)',
+  31: 'color:var(--ansi-red)',
+  32: 'color:var(--ansi-green)',
+  33: 'color:var(--ansi-yellow)',
+  34: 'color:var(--ansi-blue)',
+  35: 'color:var(--ansi-magenta)',
+  36: 'color:var(--ansi-cyan)',
+  37: 'color:var(--ansi-white)',
+  90: 'color:var(--ansi-br-black)',
+  91: 'color:var(--ansi-br-red)',
+  92: 'color:var(--ansi-br-green)',
+  93: 'color:var(--ansi-br-yellow)',
+  94: 'color:var(--ansi-br-blue)',
+  95: 'color:var(--ansi-br-magenta)',
+  96: 'color:var(--ansi-br-cyan)',
+  97: 'color:var(--ansi-br-white)',
 }
 
 export function ansiToHtml(text) {

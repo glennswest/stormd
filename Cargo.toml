@@ -35,6 +35,7 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 async-trait = "0.1"
 stormpull = { git = "ssh://git@github.com/glennswest/stormbase" }
+stormview = { git = "https://github.com/glennswest/stormview", branch = "main" }
 oci-spec = "0.7"
 sha2 = "0.10"
 hex = "0.4"

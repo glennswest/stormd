@@ -1,10 +1,13 @@
 use anyhow::Result;
 use serde::Deserialize;
 
-/// HTTP + WebSocket client for connecting to stormd.
+/// HTTP + WebSocket client for connecting to stormd. When stormd has auth
+/// enabled (`[api] auth_token` / `password`), pass the token — every request
+/// carries it as a bearer credential.
 pub struct StormClient {
     base_url: String,
     http: reqwest::Client,
+    token: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -22,129 +25,100 @@ pub struct HealthResponse {
     pub status: String,
 }
 
-// The component summary contract — the same shape /api/v1/components serves
-// the web dashboard. See stormd's components.rs for the authoritative types.
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Metric {
-    pub label: String,
-    pub value: String,
-    #[serde(default)]
-    pub unit: Option<String>,
-    #[serde(default)]
-    pub tone: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ComponentAction {
-    pub id: String,
-    pub label: String,
-    pub method: String,
-    pub path: String,
-    pub enabled: bool,
-    pub danger: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ComponentSummary {
-    pub id: String,
-    pub kind: String,
-    pub label: String,
-    pub health: String,
-    pub detail: String,
-    #[serde(default)]
-    pub metrics: Vec<Metric>,
-    #[serde(default)]
-    pub actions: Vec<ComponentAction>,
-    #[serde(default)]
-    pub link: Option<String>,
-}
+// The component summary shapes come from the shared stormview crate — the
+// same types stormd serializes, so the two cannot disagree about the wire.
+pub use stormview::ComponentSummary;
 
 impl StormClient {
-    pub fn new(host: &str, port: u16) -> Self {
+    pub fn new(host: &str, port: u16, token: Option<String>) -> Self {
         Self {
             base_url: format!("http://{}:{}", host, port),
             http: reqwest::Client::new(),
+            token,
+        }
+    }
+
+    fn get(&self, path: &str) -> reqwest::RequestBuilder {
+        self.authed(self.http.get(format!("{}{}", self.base_url, path)))
+    }
+
+    fn post(&self, path: &str) -> reqwest::RequestBuilder {
+        self.authed(self.http.post(format!("{}{}", self.base_url, path)))
+    }
+
+    fn authed(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.token {
+            Some(t) => req.bearer_auth(t),
+            None => req,
         }
     }
 
     pub async fn health(&self) -> Result<HealthResponse> {
-        let resp = self
-            .http
-            .get(format!("{}/api/v1/health", self.base_url))
-            .send()
-            .await?
-            .json()
-            .await?;
-        Ok(resp)
+        Ok(self.get("/api/v1/health").send().await?.json().await?)
     }
 
     pub async fn processes(&self) -> Result<Vec<ProcessStatus>> {
-        let resp = self
-            .http
-            .get(format!("{}/api/v1/processes", self.base_url))
+        Ok(self
+            .get("/api/v1/processes")
             .send()
             .await?
+            .error_for_status()?
             .json()
-            .await?;
-        Ok(resp)
+            .await?)
     }
 
     pub async fn components(&self) -> Result<Vec<ComponentSummary>> {
-        let resp = self
-            .http
-            .get(format!("{}/api/v1/components", self.base_url))
+        Ok(self
+            .get("/api/v1/components")
             .send()
             .await?
+            .error_for_status()?
             .json()
-            .await?;
-        Ok(resp)
+            .await?)
     }
 
     /// Invoke a component action by the method+path the summary handed us.
     pub async fn invoke(&self, method: &str, path: &str) -> Result<()> {
-        let url = format!("{}{}", self.base_url, path);
         let req = match method {
-            "GET" => self.http.get(url),
-            _ => self.http.post(url),
+            "GET" => self.get(path),
+            _ => self.post(path),
         };
         req.send().await?.error_for_status()?;
         Ok(())
     }
 
     pub async fn start_process(&self, name: &str) -> Result<()> {
-        self.http
-            .post(format!("{}/api/v1/processes/{}/start", self.base_url, name))
+        self.post(&format!("/api/v1/processes/{}/start", name))
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
     pub async fn stop_process(&self, name: &str) -> Result<()> {
-        self.http
-            .post(format!("{}/api/v1/processes/{}/stop", self.base_url, name))
+        self.post(&format!("/api/v1/processes/{}/stop", name))
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
     pub async fn restart_process(&self, name: &str) -> Result<()> {
-        self.http
-            .post(format!("{}/api/v1/processes/{}/restart", self.base_url, name))
+        self.post(&format!("/api/v1/processes/{}/restart", name))
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
     pub async fn terminal_snapshot(&self, process: &str) -> Result<serde_json::Value> {
-        let resp = self
-            .http
-            .get(format!("{}/api/v1/terminal/{}", self.base_url, process))
+        Ok(self
+            .get(&format!("/api/v1/terminal/{}", process))
             .send()
             .await?
+            .error_for_status()?
             .json()
-            .await?;
-        Ok(resp)
+            .await?)
     }
 
     /// Get the WebSocket URL for console streaming.

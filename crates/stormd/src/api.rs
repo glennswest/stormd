@@ -41,6 +41,8 @@ pub struct AppState {
     pub ui_plugins: Vec<UiPlugin>,
     /// Host: header -> redirect target path (name-based routing on the API port).
     pub host_routes: std::collections::HashMap<String, String>,
+    /// None = auth off (no credential configured), everything open.
+    pub auth: Option<Arc<crate::auth::AuthState>>,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -58,6 +60,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/cloudid", get(get_cloud_id))
         // Component summaries — the one feed both dashboards render from
         .route("/api/v1/components", get(components))
+        // Auth — open endpoints; the middleware guards everything else
+        .route("/api/v1/auth/login", post(crate::auth::login))
+        .route("/api/v1/auth/logout", post(crate::auth::logout))
+        .route("/api/v1/auth/session", get(crate::auth::session))
         // Processes
         .route("/api/v1/processes", get(list_processes))
         .route("/api/v1/processes/{name}", get(get_process))
@@ -122,7 +128,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         }
     }
 
-    router.with_state(state)
+    router
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::require_auth,
+        ))
+        .with_state(state)
 }
 
 // --- Health & Status ---

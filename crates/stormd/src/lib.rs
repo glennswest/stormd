@@ -1,4 +1,5 @@
 pub mod api;
+pub mod auth;
 pub mod backup;
 pub mod cloudid;
 pub mod components;

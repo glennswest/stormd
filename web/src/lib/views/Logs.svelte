@@ -46,9 +46,9 @@
     pane.insertAdjacentHTML(
       'beforeend',
       `<div class="log-entry" style="${style}">` +
-        (ts ? `<span style="color:#666">${escapeHtml(ts)}</span> ` : '') +
-        `<span style="color:#8be9fd">${escapeHtml(entry.process || '')}</span> ` +
-        `<span style="color:#555">[${escapeHtml(entry.stream || '')}]</span> ` +
+        (ts ? `<span style="color:var(--text-faint)">${escapeHtml(ts)}</span> ` : '') +
+        `<span style="color:var(--accent)">${escapeHtml(entry.process || '')}</span> ` +
+        `<span style="color:var(--text-ghost)">[${escapeHtml(entry.stream || '')}]</span> ` +
         ansiToHtml(entry.line || '') +
         '</div>'
     )
@@ -90,7 +90,7 @@
       const data = await get('/api/v1/logs/' + encodeURIComponent(process) + '?tail=100')
       for (const line of data.lines || []) appendRaw(line, 'color:var(--text-ghost)')
       if ((data.lines || []).length) {
-        appendRaw('--- recent history above, live stream below ---', 'color:#666;font-size:11px')
+        appendRaw('--- recent history above, live stream below ---', 'color:var(--text-faint);font-size:11px')
         if (follow && pane) pane.scrollTop = pane.scrollHeight
       }
     } catch {}

@@ -41,16 +41,16 @@
       if (msg.type === 'snapshot') {
         if (pane)
           pane.innerHTML =
-            '<div style="color:#666">--- terminal snapshot ---</div>' +
+            '<div style="color:var(--text-faint)">--- terminal snapshot ---</div>' +
             ansiToHtml(msg.data.contents || '') +
-            '<div style="color:#666">--- live output ---</div>\n'
+            '<div style="color:var(--text-faint)">--- live output ---</div>\n'
       } else if (msg.type === 'entry') {
         const cls = msg.data.stream || 'stdout'
         const ts = new Date(msg.data.timestamp).toLocaleTimeString()
         const color = cls === 'stderr' ? 'color:var(--error)' : ''
         append(
-          `<div class="log-entry" style="${color}"><span style="color:#666">${escapeHtml(ts)}</span> ` +
-            `<span style="color:#555">[${escapeHtml(cls)}]</span> ${ansiToHtml(msg.data.line || '')}</div>`
+          `<div class="log-entry" style="${color}"><span style="color:var(--text-faint)">${escapeHtml(ts)}</span> ` +
+            `<span style="color:var(--text-ghost)">[${escapeHtml(cls)}]</span> ${ansiToHtml(msg.data.line || '')}</div>`
         )
       } else if (msg.type === 'lagged') {
         append(`<div style="color:var(--warn-strong)">--- skipped ${msg.skipped} entries ---</div>`)
@@ -58,7 +58,7 @@
     }
     ws.onclose = () => {
       status = 'disconnected'
-      append('<div style="color:#666">--- disconnected ---</div>')
+      append('<div style="color:var(--text-faint)">--- disconnected ---</div>')
     }
   }
 

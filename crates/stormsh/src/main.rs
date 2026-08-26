@@ -20,14 +20,20 @@ struct Cli {
     host: String,
 
     /// Port to connect to
-    #[arg(short, long, default_value = "8080")]
+    #[arg(short, long, default_value = "9080")]
     port: u16,
+
+    /// Bearer token when stormd has auth enabled ([api] auth_token).
+    /// Falls back to the STORMD_TOKEN environment variable.
+    #[arg(short = 't', long)]
+    token: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let client = client::StormClient::new(&cli.host, cli.port);
+    let token = cli.token.clone().or_else(|| std::env::var("STORMD_TOKEN").ok());
+    let client = client::StormClient::new(&cli.host, cli.port, token);
 
     let mut app = App::new(client);
 

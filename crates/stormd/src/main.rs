@@ -283,6 +283,12 @@ async fn main() {
         None
     };
 
+    // Auth: on only when [api] configures password or auth_token
+    let auth_state = stormd::auth::AuthState::from_config(&config.api);
+    if auth_state.is_some() {
+        info!("API authentication enabled");
+    }
+
     // Start SSH server
     let ssh_config = config.ssh.clone();
     let ssh_state = Arc::new(api::AppState {
@@ -301,6 +307,7 @@ async fn main() {
         cloud_id: cloud_id.clone(),
         ui_plugins: ui_plugins.clone(),
         host_routes: host_routes.clone(),
+        auth: auth_state.clone(),
     });
     let ssh_container = config.general.name.clone();
     let ssh_keys = cloudid_keys.clone();
@@ -325,6 +332,7 @@ async fn main() {
         cloud_id,
         ui_plugins,
         host_routes,
+        auth: auth_state,
     });
 
     let router = api::build_router(app_state);

@@ -2,10 +2,28 @@
   // Renders any ComponentSummary from /api/v1/components — the card knows
   // nothing about kinds beyond an icon; a new subsystem needs no UI work.
   import HealthDot from './HealthDot.svelte'
+  import RelationPicker from './RelationPicker.svelte'
   import { post } from '../api.js'
+  import { feed } from '../stores.svelte.js'
+  import { navigate } from '../router.svelte.js'
 
   let { component } = $props()
   let busy = $state(false)
+
+  const resolve = (id) => feed.components.find((c) => c.id === id)
+
+  function followRelation(r) {
+    if (r.href) return navigate(r.href)
+    const target = resolve(r.targets[0])
+    if (target?.link) navigate(target.link)
+  }
+
+  const chipRelations = $derived(
+    (component.relations || []).filter((r) => r.kind !== 'has_many')
+  )
+  const manyRelations = $derived(
+    (component.relations || []).filter((r) => r.kind === 'has_many')
+  )
 
   const icons = {
     system: '⛈',
@@ -55,6 +73,19 @@
           <span class="mlabel">{m.label}</span>
           <span class="mvalue {toneClass(m.tone)}">{m.value}{m.unit || ''}</span>
         </div>
+      {/each}
+    </div>
+  {/if}
+
+  {#if chipRelations.length || manyRelations.length}
+    <div class="relations">
+      {#each chipRelations as r}
+        <button class="chip" title={r.kind} onclick={() => followRelation(r)}>
+          {r.kind === 'belongs_to' ? '↖' : '→'} {r.name}
+        </button>
+      {/each}
+      {#each manyRelations as r}
+        <RelationPicker relation={r} {resolve} />
       {/each}
     </div>
   {/if}
@@ -132,6 +163,17 @@
   .mvalue.error { color: var(--error); }
   .mvalue.muted { color: var(--text-dim); font-weight: 400; }
   .mvalue.accent { color: var(--accent); }
+
+  .relations { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .chip {
+    padding: 2px 9px;
+    font-size: 11px;
+    border-radius: 10px;
+    background: var(--panel-raised);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .chip:hover { color: var(--accent); border-color: var(--border-strong); }
 
   .actions { display: flex; gap: 6px; padding-top: 4px; }
   .actions button { padding: 4px 12px; font-size: 12px; }

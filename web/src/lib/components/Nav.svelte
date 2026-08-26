@@ -1,6 +1,7 @@
 <script>
   import { route } from '../router.svelte.js'
-  import { feed, nav } from '../stores.svelte.js'
+  import { auth, feed, nav, logout } from '../stores.svelte.js'
+  import { THEMES, theme, applyTheme } from '../theme.svelte.js'
 
   const links = [
     { href: '#/', label: 'Dashboard', name: 'dashboard' },
@@ -24,8 +25,21 @@
     {/each}
   </div>
   <span class="right">
+    <select
+      class="theme-pick"
+      title="Theme"
+      value={theme.current}
+      onchange={(e) => applyTheme(e.target.value)}
+    >
+      {#each THEMES as t}
+        <option value={t.id}>{t.label}</option>
+      {/each}
+    </select>
     <span class="live" class:on={feed.connected} title={feed.connected ? 'live' : 'reconnecting'}></span>
     stormd
+    {#if auth.required}
+      <button class="signout" title="Sign out" onclick={logout}>⏻</button>
+    {/if}
   </span>
 </nav>
 
@@ -58,8 +72,8 @@
     transition: all 0.15s;
     white-space: nowrap;
   }
-  .links a:hover { color: var(--text); background: #1e2140; text-decoration: none; }
-  .links a.active { color: #fff; background: #2a2d50; }
+  .links a:hover { color: var(--text); background: var(--nav-hover); text-decoration: none; }
+  .links a.active { color: var(--text); background: var(--nav-active); }
   .right {
     margin-left: auto;
     font-size: 12px;
@@ -78,4 +92,20 @@
     transition: background 0.3s;
   }
   .live.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .theme-pick {
+    padding: 3px 6px;
+    font-size: 12px;
+    background: var(--panel-raised);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .signout {
+    padding: 2px 8px;
+    font-size: 13px;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .signout:hover { color: var(--error); border-color: var(--error-border); }
 </style>

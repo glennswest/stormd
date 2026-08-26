@@ -296,8 +296,14 @@ impl Default for LogConfig {
 pub struct ApiConfig {
     #[serde(default = "default_api_bind")]
     pub bind: String,
+    /// Machine credential: `Authorization: Bearer <auth_token>` on any
+    /// request, and it also works as a login password. Setting either this
+    /// or `password` turns authentication on.
     #[serde(default)]
     pub auth_token: Option<String>,
+    /// Interactive credential: the UI's login screen asks for this.
+    #[serde(default)]
+    pub password: Option<String>,
     /// Reusable, config-driven host-based routing: `Host:` header -> redirect
     /// target path (e.g. "manager.mob.lo" = "/ui/", "api.x" = "/api/v1/health").
     #[serde(default)]
@@ -309,6 +315,7 @@ impl Default for ApiConfig {
         Self {
             bind: default_api_bind(),
             auth_token: None,
+            password: None,
             hosts: std::collections::HashMap::new(),
         }
     }
