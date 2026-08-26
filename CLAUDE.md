@@ -255,163 +255,112 @@ If a documentation file doesn't exist yet and should, create it.
 
 ## Work Plan
 
-### Current Version: `v6.0.0`
+### Current Version: stormd `v0.3.0` · stormsh `v0.2.0` · stormlog `v0.2.0`
 
 ### Current Sprint / Active Tasks
 
-**Container Extent Store — Organic Data Placement**
+**UI Overhaul — component summary contract + Svelte web UI + stormsh dashboard**
 
-Phase 1 (Foundation) is complete. Phase 2 (Volume layer rewrite) is next.
+The web UI moves from format!()-embedded HTML strings in `web.rs` to a Svelte 5
+SPA embedded in the binary, and both UIs (web + stormsh TUI) render from one
+server-side component-summary contract so they can never drift apart.
 
-- [x] Phase 1: Container extent store foundation (container.rs, container_registry.rs, gem.rs)
-- [ ] Phase 2: Rewrite ThinVolume to use GEM + ContainerRegistry (thin.rs, snapshot.rs, mod.rs, metadata.rs)
-- [ ] Phase 3: Placement engine integration (migrate_extent, evacuate_container, rebalance)
-- [ ] Phase 4: API cleanup — rename pool endpoints to containers, delete pool.rs/vdrive.rs
-
-**Other pending:**
-- [ ] ARM64 cross-compile verification (aarch64-unknown-linux-musl)
-- [ ] MikroTik minimal build verification (--no-default-features --features "mikrotik,iscsi")
+- [ ] Phase 1: Component summary API — `components.rs` with a uniform
+      `{id, kind, label, health, detail, metrics, actions}` summary for every
+      component (system, each process, logs, cron, updater, storage, plugins);
+      `GET /api/v1/components` + `/ws/components` push
+- [ ] Phase 2: Svelte 5 + Vite SPA in `web/` — design tokens, card/tile
+      component library, dashboard rendered generically from the summary feed;
+      built `web/dist` committed and embedded in the binary (rust-embed),
+      old `web.rs` string pages removed
+- [ ] Phase 3: Logs + Terminal views in the SPA (WS live tail, ANSI rendering)
+- [ ] Phase 4: stormsh Dashboard view rendering the same `/api/v1/components`
+      feed as TUI tiles — the console "sum" of each component
+- [ ] Phase 5: Plugin summaries — optional `[process.ui] summary` URL merged
+      into the plugin's component card (best-effort, short timeout)
 
 ### In Progress
 
-- [ ] (started 2026-03-20) Container Extent Store Phase 2 — rewrite volume internals to use GEM + ContainerRegistry
-
-### Major Changes / Milestones
-
-- [x] VFIO NVMe driver (hugepage DMA, full init sequence)
-- [x] TLS for management API (rustls)
-- [x] StormFS integration (registration stub)
-- [x] TLS for cluster RPCs
-- [x] Container extent store — Phase 1 foundation (container, registry, GEM)
-- [x] Shared ring IPC — zero-copy StormFS ↔ StormBlock I/O
-- [ ] Container extent store — Phase 2-4 (volume rewrite, placement, API)
-- [ ] v1.0.0 stable release (all phases hardened, API contract locked)
+- [ ] (started 2026-08-26) UI overhaul Phase 1 — component summary API
 
 ### Completed
 
-- [x] Phase 0: Build fixes — project compiles on macOS and Linux
-- [x] Phase 1: Drive layer — BlockDevice trait, SAS io_uring, NVMe stubs, FileDevice fallback
-- [x] Phase 2: RAID engine — RAID 1/5/6/10, SIMD parity, write journal, rebuild, scrub
-- [x] Phase 3: Volume manager — thin provisioning, COW snapshots, extent allocator, on-disk metadata
-- [x] Phase 4: Target protocols — iSCSI (RFC 7143, CHAP) + NVMe-oF/TCP (fabric, discovery, I/O)
-- [x] Phase 5: Management plane — REST API (axum), TOML config, Prometheus metrics
-- [x] Phase 6: Cluster scaling — Raft consensus (openraft 0.9), replication, migration
-- [x] Phase 7: Integration & hardening — 165 tests, criterion benchmarks, container images
-- [x] HTMX + Askama web UI for storage management
-- [x] Volume resize (grow/shrink)
-- [x] Journal recovery and background scrub/verify
-- [x] Musl static builds with rustls-tls
-- [x] TLS for management API (rustls)
-- [x] Drive health monitoring (SMART via sysfs + REST endpoint)
-- [x] iSCSI multi-connection sessions + R2T/Data-Out
-- [x] NVMe-oF io_uring zero-copy send
-- [x] SCSI ALUA multipath support
-- [x] VFIO hugepage DMA allocator + NVMe driver init
-- [x] StormFS registration stub
-- [x] Build fixes for Linux (IoUring type annotation, TLS service error type)
-- [x] Linux build + test verified (165 tests, devx.gw.lo CT 102)
-- [x] Musl static release build verified (11 MB stripped PIE binary)
-- [x] TLS for cluster RPCs (Raft, heartbeat, join)
-- [x] All compiler warnings and 55 clippy warnings resolved
-- [x] Async replication retry with exponential backoff
-- [x] Fuzz testing for PDU parsers (6 cargo-fuzz targets)
-- [x] Busybox-style shell — 80+ commands for scratch containers
-- [x] Log UI follow checkbox fix + stream filter dropdown
-- [x] DiskPool, VDrive, NBD server, RAID 1 dynamic members
-- [x] Pool REST API, boot manager, migration orchestrator, CLI subcommands
-- [x] Replace NBD with ublk, iPXE with direct Linux boot
-- [x] Placement engine with snapshot-fenced cold copies
-- [x] Container extent store Phase 1 (container.rs, container_registry.rs, gem.rs) — 24 tests
-- [x] Shared ring IPC — zero-copy StormFS ↔ StormBlock I/O (uring_channel.rs, uring_server.rs)
-- [x] Extensible plugin UI — [process.ui] config, reverse proxy, dynamic nav tabs
+- [x] Process supervisor (restart policies, dependencies, ready/liveness probes)
+- [x] REST API (axum) + WebSocket console/log streaming
+- [x] Embedded web dashboard (string-built — being replaced this sprint)
+- [x] SSH server + SFTP + busybox-style shell applets
+- [x] stormlog: file store, VT100 terminals, multicast log wire (stormcast)
+- [x] Cron scheduler, events (webhook), backup, image updater
+- [x] Plugin UI reverse proxy (`[process.ui]`) + host-based routing
+- [x] stormsh TUI client (processes/terminal/logs)
+- [x] Prometheus /metrics endpoint with standard names
+- [x] stormdbase multi-arch scratch base image (arm64 + amd64 + armv7)
 
 ### Release History
 
 | Version | Date | Summary |
 |---------|------|---------|
-| v3.2.0 | 2026-02-19 | Web UI, rustls-tls, musl ioctl fix |
-| v4.0.0 | 2026-02-23 | Journal recovery, scrub/verify, volume resize |
-| v5.0.0 | 2026-02-23 | TLS, SMART, iSCSI R2T, NVMe-oF zerocopy, ALUA, VFIO, StormFS |
-| v5.1.0 | 2026-03-09 | Cluster TLS, replication retry, fuzz testing, clippy/warning cleanup |
-| v6.0.0 | 2026-03-19 | DiskPool, VDrive, ublk, direct Linux boot, placement engine, migration |
+| v0.1.0 | 2026-07 | Initial: supervisor, API, logs, SSH, web dashboard |
+| v0.2.0 | 2026-08 | Updater, plugin UI proxy, cloud-id, events rework |
+| v0.3.0 | 2026-08-25 | stormcast log wire, file-backed log store, run pruning |
 
 ---
 
 ## Project Context
 
 ### Tech Stack
-- Language: Rust (edition 2021, MSRV 1.75)
-- Framework: axum 0.8 (REST API), tokio (async runtime), openraft 0.9 (cluster consensus)
-- Build system: Cargo — musl static builds for x86_64 and aarch64
-- Test framework: built-in `cargo test` (229 tests) + Criterion benchmarks
-- Templates: Askama (HTMX web UI)
-- Targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+- Language: Rust (edition 2021), workspace of three crates
+- Framework: axum 0.8 (REST + WS), tokio, russh (SSH/SFTP), ratatui (stormsh TUI)
+- Web UI: Svelte 5 + Vite SPA in `web/`, built to `web/dist` (committed) and
+  embedded in the stormd binary
+- Build: musl static binaries for x86_64, aarch64, armv7 (scratch containers)
 
 ### Key Directories
 ```
-src/drive/       — BlockDevice trait, NVMe/SAS/FileDevice, Container extent store, ublk, ring IPC
-src/raid/        — RAID 1/5/6/10, SIMD parity, write journal, rebuild, scrub
-src/volume/      — Thin provisioning, COW snapshots, GEM, extent allocator, metadata
-src/placement/   — Cold copies, storage topology, tiered replication
-src/target/      — NVMe-oF/TCP and iSCSI target protocol implementations
-src/mgmt/        — REST API (axum), config parsing, Prometheus metrics
-src/cluster/     — Raft consensus, replication, migration (optional feature)
-src/main.rs      — CLI entry point
-src/lib.rs       — Library root
-src/boot.rs      — Boot volume manager, direct Linux boot
-src/migrate.rs   — Live migration orchestrator
-src/stormfs.rs   — StormFS registration
-tests/           — Integration tests (iSCSI, NVMe-oF, RAID degraded, crash recovery, mgmt API, volume lifecycle)
-benches/         — Criterion micro-benchmarks (parity, extent alloc, PDU parsing) + fio scripts
-templates/       — Askama HTML templates (HTMX web UI)
-static/          — Static web assets
-docs/            — Specification document
+crates/stormd/     — the init/supervisor daemon
+  src/supervisor.rs  — process lifecycle, restart policies, probes
+  src/api.rs         — REST API router + handlers
+  src/components.rs  — component summary contract (UI feed)
+  src/ws.rs          — WebSocket console/log/component streaming
+  src/web.rs         — embedded SPA serving
+  src/config.rs      — TOML config types
+  src/shell/         — busybox-style applets
+crates/stormlog/   — log store, VT100 terminals, stormcast wire
+crates/stormsh/    — TUI client (ratatui)
+web/               — Svelte SPA source; web/dist is the built output (committed)
+config/            — example/deploy configs
+vendor/            — vendored russh-sftp
 ```
 
 ### Build & Test Commands
 ```bash
-# Build (full node, x86_64 musl static)
-cargo build --release --target x86_64-unknown-linux-musl
+# Frontend (on the Mac; commit web/dist)
+cd web && npm install && npm run build
 
-# Build (ARM64 JBOD)
-cargo build --release --target aarch64-unknown-linux-musl --features "arm64,iscsi,nvmeof"
-
-# Build (MikroTik — minimal)
-cargo build --release --target aarch64-unknown-linux-musl --no-default-features --features "mikrotik,iscsi"
-
-# Test
+# Rust — ALWAYS on root@dev.g8.lo (see ~/CLAUDE.md), never on the Mac
+cargo build --release
 cargo test
-
-# Benchmarks
-cargo bench
-
-# Lint
 cargo clippy
 ```
 
 ### Version Locations
 ```
-Cargo.toml         → version = "5.0.0"
+crates/stormd/Cargo.toml    → version
+crates/stormsh/Cargo.toml   → version
+crates/stormlog/Cargo.toml  → version
 ```
 
-### Important Patterns & Conventions
-- Feature flags gate platform-specific code: `cluster`, `arm64`, `iscsi`, `nvmeof`, `mikrotik`, `ui`
-- `io-uring` and `nix` are Linux-only dependencies via `[target.'cfg(target_os = "linux")'.dependencies]`
-- Single-node first design — cluster features are behind `#[cfg(feature = "cluster")]`
-- FileDevice backend enables testing on macOS without real block devices
-- Uses rustls-tls (no OpenSSL) for fully static musl binaries (11 MB stripped)
-- Build and test on Linux at: `root@devx.gw.lo:/root/stormblock` (192.168.1.53, CT 102 on pvex.gw.lo)
-- Linux build host has 40GB `/build` disk for cargo target dir (symlinked from target/)
-- DNS on devx: 192.168.1.252, 192.168.1.154 (dns.gw.lo)
-
 ### Known Decisions & Context
-- openraft pinned to 0.9 (0.10 has breaking API changes)
-- VFIO NVMe driver has full init sequence (container/group/device, BAR0, admin queues, controller enable)
-- MikroTik target uses tokio file I/O fallback (no io_uring on RouterOS kernel)
-- Git tags created for all releases (v0.1.0 through v5.0.0)
-- CHANGELOG.md fully maintained with all release history
-- CHAP auth uses constant-time comparison to prevent timing attacks
-- reqwest is now a non-optional dependency (used by both cluster join and StormFS registration)
+- Web UI is a static SPA; no SSR, no node at runtime — assets embedded in the
+  9 MB binary. `web/dist` is committed so cargo-only builds keep working.
+- One component-summary contract (`/api/v1/components`) feeds both the web
+  dashboard and stormsh's dashboard view; new subsystems appear in both UIs by
+  implementing one summary source in Rust, zero frontend changes.
+- Plugin UIs remain iframes behind `/ui/proxy/{name}`; their component card is
+  derived from their process state plus an optional `summary` URL.
+- Log wire (severities, RFC 5424 framing, multicast) lives in the shared
+  `stormcast` crate; fleet log collection is mcastsyslog's job, not stormd's.
+- stormpull (image pulling for the updater) comes from the stormbase repo.
 
 ---
 
