@@ -29,3 +29,6 @@ temp/
 # vendored deps: keep only the patched russh-sftp; ignore the rest of cargo-vendor output
 /vendor/*
 !/vendor/russh-sftp/
+
+# Machine-local cargo config (e.g. dev's CARGO target-dir on /build)
+/.cargo/

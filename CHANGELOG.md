@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+<!-- New unreleased changes go here -->
+
+## [v0.6.0] — 2026-08-26
 
 ### 2026-08-26
 - **feat:** named users — `[[api.users]]` entries (name + password) behind

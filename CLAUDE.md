@@ -255,7 +255,7 @@ If a documentation file doesn't exist yet and should, create it.
 
 ## Work Plan
 
-### Current Version: stormd `v0.5.0` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.1.0` (own repo)
+### Current Version: stormd `v0.6.0` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.4.0` (own repo)
 
 ### Current Sprint / Active Tasks
 
@@ -322,6 +322,7 @@ the plugin summary merge).
 | v0.3.0 | 2026-03-01 | Web dashboard, MinIO archival, run segmentation |
 | v0.4.0 | 2026-08-26 | Component feed + both dashboards, liveness, busybox, CloudID, updater, stormcast wire |
 | v0.5.0 | 2026-08-26 | Themes, login system, relations + grid view, stormview crate extraction |
+| v0.6.0 | 2026-08-26 | Named users, 12 themes + server default, card→grid links, UI system moved into stormview (npm) |
 
 ---
 
