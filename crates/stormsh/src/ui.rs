@@ -18,6 +18,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_tabs(f, chunks[0], app);
 
     match app.view {
+        View::Dashboard => draw_dashboard(f, chunks[1], app),
         View::Processes => draw_processes(f, chunks[1], app),
         View::Terminal => draw_terminal(f, chunks[1], app),
         View::Logs => draw_logs(f, chunks[1], app),
@@ -28,6 +29,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
 fn draw_tabs(f: &mut Frame, area: Rect, app: &App) {
     let tabs = vec![
+        ("Dashboard", View::Dashboard),
         ("Processes", View::Processes),
         ("Terminal", View::Terminal),
         ("Logs", View::Logs),
@@ -53,6 +55,154 @@ fn draw_tabs(f: &mut Frame, area: Rect, app: &App) {
 
     let tabs_line = Line::from(spans);
     f.render_widget(Paragraph::new(tabs_line), area);
+}
+
+/// The console "sum" of every component: the same summaries the web
+/// dashboard renders, drawn as a grid of tiles. The tile knows nothing about
+/// kinds — id, health, detail, and metrics come from the feed.
+fn draw_dashboard(f: &mut Frame, area: Rect, app: &App) {
+    if app.components.is_empty() {
+        let msg = if app.connected {
+            "No components reported."
+        } else {
+            "Not connected."
+        };
+        f.render_widget(
+            Paragraph::new(msg).block(Block::default().borders(Borders::ALL).title(" Dashboard ")),
+            area,
+        );
+        return;
+    }
+
+    const TILE_H: u16 = 6;
+    const TILE_MIN_W: u16 = 34;
+    let cols = ((area.width / TILE_MIN_W).max(1)) as usize;
+    let rows_fit = ((area.height / TILE_H).max(1)) as usize;
+    let total_rows = app.components.len().div_ceil(cols);
+
+    // Keep the selected tile's row visible.
+    let sel_row = app.dash_index / cols;
+    let first_row = if sel_row >= rows_fit {
+        sel_row + 1 - rows_fit
+    } else {
+        0
+    };
+
+    let row_areas = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![Constraint::Length(TILE_H); rows_fit])
+        .split(area);
+
+    for (r, row_area) in row_areas.iter().enumerate() {
+        let row = first_row + r;
+        if row >= total_rows {
+            break;
+        }
+        let col_areas = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Ratio(1, cols as u32); cols])
+            .split(*row_area);
+        for (c, col_area) in col_areas.iter().enumerate() {
+            let i = row * cols + c;
+            let Some(component) = app.components.get(i) else { break };
+            draw_tile(f, *col_area, component, i == app.dash_index);
+        }
+    }
+}
+
+fn health_color(health: &str) -> Color {
+    match health {
+        "ok" => Color::Green,
+        "warn" => Color::Yellow,
+        "error" => Color::Red,
+        "idle" => Color::DarkGray,
+        _ => Color::DarkGray,
+    }
+}
+
+fn draw_tile(f: &mut Frame, area: Rect, c: &crate::client::ComponentSummary, selected: bool) {
+    let border_style = if selected {
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let title = Line::from(vec![
+        Span::styled(" ● ", Style::default().fg(health_color(&c.health))),
+        Span::styled(
+            c.label.clone(),
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" [{}] ", c.kind), Style::default().fg(Color::DarkGray)),
+    ]);
+
+    let metrics: Vec<Span> = c
+        .metrics
+        .iter()
+        .enumerate()
+        .flat_map(|(i, m)| {
+            let value_style = match m.tone.as_deref() {
+                Some("ok") => Style::default().fg(Color::Green),
+                Some("warn") => Style::default().fg(Color::Yellow),
+                Some("error") => Style::default().fg(Color::Red),
+                Some("muted") => Style::default().fg(Color::DarkGray),
+                Some("accent") => Style::default().fg(Color::Cyan),
+                _ => Style::default().fg(Color::White),
+            };
+            let mut spans = Vec::new();
+            if i > 0 {
+                spans.push(Span::styled("  ", Style::default()));
+            }
+            spans.push(Span::styled(
+                format!("{}: ", m.label),
+                Style::default().fg(Color::DarkGray),
+            ));
+            spans.push(Span::styled(
+                format!("{}{}", m.value, m.unit.as_deref().unwrap_or("")),
+                value_style,
+            ));
+            spans
+        })
+        .collect();
+
+    let actions: Vec<Span> = c
+        .actions
+        .iter()
+        .filter(|a| a.enabled)
+        .enumerate()
+        .flat_map(|(i, a)| {
+            let mut spans = Vec::new();
+            if i > 0 {
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled(
+                format!("[{}]", a.label),
+                Style::default().fg(if a.danger { Color::Red } else { Color::Green }),
+            ));
+            spans
+        })
+        .collect();
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            c.detail.clone(),
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(metrics),
+    ];
+    if selected && !actions.is_empty() {
+        lines.push(Line::from(actions));
+    }
+
+    let tile = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title(title),
+        )
+        .wrap(Wrap { trim: true });
+    f.render_widget(tile, area);
 }
 
 fn draw_processes(f: &mut Frame, area: Rect, app: &App) {
@@ -180,7 +330,10 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let help = match app.input_mode {
-        InputMode::Normal => " q:Quit  1:Processes  2:Terminal  3:Logs  Enter:Select  s/r:Start/Restart  x:Stop ",
+        InputMode::Normal => match app.view {
+            View::Dashboard => " q:Quit  1-4:Views  ←↑↓→:Select  Enter:Terminal  s/r/x:Start/Restart/Stop  u:Update ",
+            _ => " q:Quit  1:Dashboard  2:Processes  3:Terminal  4:Logs  Enter:Select  s/r:Start/Restart  x:Stop ",
+        },
         InputMode::Search => " ESC:Cancel  Enter:Search ",
     };
 

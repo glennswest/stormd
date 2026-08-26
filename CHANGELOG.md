@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### 2026-08-26
+- **feat:** stormsh opens on a Dashboard view — the same component summaries
+  the web dashboard renders, drawn as a grid of tiles with health, detail,
+  metrics, and the enabled actions on the selected tile (s/r/x, u for image
+  updates, Enter to jump into a process's terminal). Views renumber to
+  1:Dashboard 2:Processes 3:Terminal 4:Logs.
 - **feat:** the web UI is a Svelte 5 SPA (`web/`), built to `web/dist`
   (committed) and embedded in the binary — `web.rs` goes from 1,176 lines of
   format!()-escaped HTML to a static file handler. The dashboard renders the

@@ -22,6 +22,44 @@ pub struct HealthResponse {
     pub status: String,
 }
 
+// The component summary contract — the same shape /api/v1/components serves
+// the web dashboard. See stormd's components.rs for the authoritative types.
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Metric {
+    pub label: String,
+    pub value: String,
+    #[serde(default)]
+    pub unit: Option<String>,
+    #[serde(default)]
+    pub tone: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ComponentAction {
+    pub id: String,
+    pub label: String,
+    pub method: String,
+    pub path: String,
+    pub enabled: bool,
+    pub danger: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ComponentSummary {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub health: String,
+    pub detail: String,
+    #[serde(default)]
+    pub metrics: Vec<Metric>,
+    #[serde(default)]
+    pub actions: Vec<ComponentAction>,
+    #[serde(default)]
+    pub link: Option<String>,
+}
+
 impl StormClient {
     pub fn new(host: &str, port: u16) -> Self {
         Self {
@@ -50,6 +88,28 @@ impl StormClient {
             .json()
             .await?;
         Ok(resp)
+    }
+
+    pub async fn components(&self) -> Result<Vec<ComponentSummary>> {
+        let resp = self
+            .http
+            .get(format!("{}/api/v1/components", self.base_url))
+            .send()
+            .await?
+            .json()
+            .await?;
+        Ok(resp)
+    }
+
+    /// Invoke a component action by the method+path the summary handed us.
+    pub async fn invoke(&self, method: &str, path: &str) -> Result<()> {
+        let url = format!("{}{}", self.base_url, path);
+        let req = match method {
+            "GET" => self.http.get(url),
+            _ => self.http.post(url),
+        };
+        req.send().await?.error_for_status()?;
+        Ok(())
     }
 
     pub async fn start_process(&self, name: &str) -> Result<()> {

@@ -33,6 +33,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initial data fetch
     app.refresh_processes().await;
+    app.refresh_components().await;
 
     // Setup terminal
     enable_raw_mode()?;
@@ -72,78 +73,122 @@ async fn run_app(
                             app.running = false;
                             return Ok(());
                         }
-                        KeyCode::Char('1') => app.view = View::Processes,
-                        KeyCode::Char('2') => app.view = View::Terminal,
-                        KeyCode::Char('3') => app.view = View::Logs,
+                        KeyCode::Char('1') => app.view = View::Dashboard,
+                        KeyCode::Char('2') => app.view = View::Processes,
+                        KeyCode::Char('3') => app.view = View::Terminal,
+                        KeyCode::Char('4') => app.view = View::Logs,
                         KeyCode::Tab => {
                             app.view = match app.view {
+                                View::Dashboard => View::Processes,
                                 View::Processes => View::Terminal,
                                 View::Terminal => View::Logs,
-                                View::Logs => View::Processes,
+                                View::Logs => View::Dashboard,
                             };
                         }
-                        KeyCode::Up | KeyCode::Char('k') => app.select_prev(),
-                        KeyCode::Down | KeyCode::Char('j') => app.select_next(),
+                        KeyCode::Up | KeyCode::Char('k') => match app.view {
+                            View::Dashboard => app.dash_prev(),
+                            _ => app.select_prev(),
+                        },
+                        KeyCode::Down | KeyCode::Char('j') => match app.view {
+                            View::Dashboard => app.dash_next(),
+                            _ => app.select_next(),
+                        },
+                        KeyCode::Left | KeyCode::Char('h') => {
+                            if app.view == View::Dashboard {
+                                app.dash_prev();
+                            }
+                        }
+                        KeyCode::Right => {
+                            if app.view == View::Dashboard {
+                                app.dash_next();
+                            }
+                        }
                         KeyCode::Enter => {
-                            if app.view == View::Processes {
+                            // Open the selected process's terminal — from the
+                            // process list, or from a process/plugin card.
+                            let name = match app.view {
+                                View::Processes => app.selected_process().map(|p| p.name.clone()),
+                                View::Dashboard => app
+                                    .dash_selected()
+                                    .and_then(|c| c.id.strip_prefix("process:"))
+                                    .map(|s| s.to_string()),
+                                _ => None,
+                            };
+                            if let Some(name) = name {
+                                if let Some(i) =
+                                    app.processes.iter().position(|p| p.name == name)
+                                {
+                                    app.selected_index = i;
+                                }
+                                match app.client.terminal_snapshot(&name).await {
+                                    Ok(snap) => {
+                                        app.terminal_content = snap
+                                            .get("contents")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        app.view = View::Terminal;
+                                    }
+                                    Err(e) => {
+                                        app.status_message = format!("Error: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Char('s') => match app.view {
+                            View::Dashboard => app.dash_action("start").await,
+                            _ => {
                                 if let Some(p) = app.selected_process() {
                                     let name = p.name.clone();
-                                    match app.client.terminal_snapshot(&name).await {
-                                        Ok(snap) => {
-                                            app.terminal_content = snap
-                                                .get("contents")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("")
-                                                .to_string();
-                                            app.view = View::Terminal;
+                                    match app.client.start_process(&name).await {
+                                        Ok(()) => {
+                                            app.status_message = format!("Started {}", name);
                                         }
                                         Err(e) => {
                                             app.status_message = format!("Error: {}", e);
                                         }
                                     }
+                                    app.refresh_processes().await;
                                 }
                             }
-                        }
-                        KeyCode::Char('s') => {
-                            if let Some(p) = app.selected_process() {
-                                let name = p.name.clone();
-                                match app.client.start_process(&name).await {
-                                    Ok(()) => {
-                                        app.status_message = format!("Started {}", name);
+                        },
+                        KeyCode::Char('x') => match app.view {
+                            View::Dashboard => app.dash_action("stop").await,
+                            _ => {
+                                if let Some(p) = app.selected_process() {
+                                    let name = p.name.clone();
+                                    match app.client.stop_process(&name).await {
+                                        Ok(()) => {
+                                            app.status_message = format!("Stopped {}", name);
+                                        }
+                                        Err(e) => {
+                                            app.status_message = format!("Error: {}", e);
+                                        }
                                     }
-                                    Err(e) => {
-                                        app.status_message = format!("Error: {}", e);
-                                    }
+                                    app.refresh_processes().await;
                                 }
-                                app.refresh_processes().await;
                             }
-                        }
-                        KeyCode::Char('x') => {
-                            if let Some(p) = app.selected_process() {
-                                let name = p.name.clone();
-                                match app.client.stop_process(&name).await {
-                                    Ok(()) => {
-                                        app.status_message = format!("Stopped {}", name);
+                        },
+                        KeyCode::Char('r') => match app.view {
+                            View::Dashboard => app.dash_action("restart").await,
+                            _ => {
+                                if let Some(p) = app.selected_process() {
+                                    let name = p.name.clone();
+                                    match app.client.restart_process(&name).await {
+                                        Ok(()) => {
+                                            app.status_message = format!("Restarted {}", name);
+                                        }
+                                        Err(e) => {
+                                            app.status_message = format!("Error: {}", e);
+                                        }
                                     }
-                                    Err(e) => {
-                                        app.status_message = format!("Error: {}", e);
-                                    }
+                                    app.refresh_processes().await;
                                 }
-                                app.refresh_processes().await;
                             }
-                        }
-                        KeyCode::Char('r') => {
-                            if let Some(p) = app.selected_process() {
-                                let name = p.name.clone();
-                                match app.client.restart_process(&name).await {
-                                    Ok(()) => {
-                                        app.status_message = format!("Restarted {}", name);
-                                    }
-                                    Err(e) => {
-                                        app.status_message = format!("Error: {}", e);
-                                    }
-                                }
-                                app.refresh_processes().await;
+                        },
+                        KeyCode::Char('u') => {
+                            if app.view == View::Dashboard {
+                                app.dash_action("trigger").await;
                             }
                         }
                         KeyCode::Char('l') => {
@@ -178,6 +223,7 @@ async fn run_app(
         // Periodic refresh
         if refresh_interval.tick().await.elapsed() > Duration::ZERO {
             app.refresh_processes().await;
+            app.refresh_components().await;
             app.status_message.clear();
         }
     }
