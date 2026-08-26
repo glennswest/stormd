@@ -1,7 +1,7 @@
 <script>
   import { route } from '../router.svelte.js'
   import { auth, feed, nav, logout } from '../stores.svelte.js'
-  import { THEMES, theme, applyTheme } from '../theme.svelte.js'
+  import { THEMES, theme, applyTheme } from 'stormview/theme'
 
   const links = [
     { href: '#/', label: 'Dashboard', name: 'dashboard' },

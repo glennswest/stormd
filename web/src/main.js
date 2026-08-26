@@ -1,6 +1,6 @@
 import { mount } from 'svelte'
-import './app.css'
-import { initTheme } from './lib/theme.svelte.js'
+import 'stormview/themes.css'
+import { initTheme } from 'stormview/theme'
 import App from './App.svelte'
 
 initTheme()

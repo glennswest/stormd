@@ -3,8 +3,9 @@
   // it holds no model of its own. New kinds land in "everything else"
   // until they earn a section of their own.
   import { feed } from '../stores.svelte.js'
-  import ComponentCard from '../components/ComponentCard.svelte'
-  import ComponentGrid from '../components/ComponentGrid.svelte'
+  import ComponentCard from 'stormview/components/ComponentCard.svelte'
+  import ComponentGrid from 'stormview/components/ComponentGrid.svelte'
+  import { post } from '../api.js'
   import MemChart from '../components/MemChart.svelte'
 
   let mode = $state(
@@ -23,6 +24,8 @@
       localStorage.setItem('stormd-dash-mode', m)
     } catch {}
   }
+
+  const resolveId = (id) => feed.components.find((c) => c.id === id)
 
   const sections = [
     { title: 'System', kinds: ['system', 'storage', 'logs'] },
@@ -59,13 +62,13 @@
       <button class:active={mode === 'grid'} onclick={() => setMode('grid')}>Grid</button>
     </div>
     {#if mode === 'grid'}
-      <ComponentGrid components={feed.components} />
+      <ComponentGrid components={feed.components} invoke={(a) => post(a.path)} />
     {:else}
       {#each grouped as section}
         <h2>{section.title}</h2>
         <div class="grid">
           {#each section.items as c (c.id)}
-            <ComponentCard component={c} />
+            <ComponentCard component={c} resolve={resolveId} invoke={(a) => post(a.path)} />
           {/each}
           {#if section.title === 'System'}
             <MemChart />

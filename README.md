@@ -454,9 +454,16 @@ Components carry typed relations (`has_one`, `has_many`, `belongs_to`) between
 ids in the feed; the grid nests child grids along `has_many`/`has_one` edges
 (system → processes → their update images), rows multi-select for bulk
 start/stop/restart, and `has_many` edges render as "select from a
-relationship" pickers. The `DataGrid` / `RelationPicker` Svelte components in
-`web/src/lib/components/` are written against the stormview contract only, so
-stormdrive and stormconsole can lift them unchanged.
+relationship" pickers. A ⊞ on any card opens `#/grid` rooted at that
+component or one of its relationships.
+
+**The UI system is the stormview npm package** — themes, `DataGrid`,
+`ComponentCard`, `ComponentGrid`, `RelationPicker`, `HealthDot`, and the
+shared helpers all live in the same repo as the contract
+([stormview](https://github.com/glennswest/stormview), installed from git),
+so stormdrive and stormconsole consume the identical UI system. stormd's
+`web/` keeps only the app: routing, stores, auth, and views. After pushing a
+stormview change, run `npm update stormview` here to pick up the new commit.
 
 **Login** — off by default. Setting `[api] password` (interactive) and/or
 `[api] auth_token` (machine bearer token) turns authentication on: the UI

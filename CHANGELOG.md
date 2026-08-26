@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### 2026-08-26
+- **refactor:** the whole UI system moved to the stormview repo as an npm
+  package — themes.css (all tokens + six themes), DataGrid, ComponentCard,
+  ComponentGrid, RelationPicker, HealthDot, theme state, and the shared
+  formatting/ANSI helpers. The components are app-agnostic (hosts inject
+  `resolve`/`invoke`; navigation is hash hrefs); stormd's `web/` keeps only
+  the app shell: routing, stores, auth, views. stormview is now both a Rust
+  crate (the contract) and an npm package (the renderer) in one repo.
 - **feat:** cards link to grids — a ⊞ on any card with `has_many` relations
   opens `#/grid?id=…` rooted at that component, and each relationship row
   has its own ⊞ (`&rel=…`) opening just that relationship's targets as the

@@ -4,8 +4,9 @@
   // itself is the single expandable root.
   import { route } from '../router.svelte.js'
   import { feed } from '../stores.svelte.js'
-  import ComponentGrid from '../components/ComponentGrid.svelte'
-  import HealthDot from '../components/HealthDot.svelte'
+  import ComponentGrid from 'stormview/components/ComponentGrid.svelte'
+  import HealthDot from 'stormview/components/HealthDot.svelte'
+  import { post } from '../api.js'
 
   const id = $derived(route.current.query.get('id'))
   const rel = $derived(route.current.query.get('rel'))
@@ -35,7 +36,7 @@
         {#if rel}<span class="rel">· {rel}</span>{/if}
       </h1>
     </div>
-    <ComponentGrid components={feed.components} {rootIds} />
+    <ComponentGrid components={feed.components} {rootIds} invoke={(a) => post(a.path)} />
   {/if}
 </div>
 
