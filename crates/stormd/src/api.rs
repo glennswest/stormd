@@ -90,15 +90,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/ws/components", get(ws::ws_components))
         // Shutdown
         .route("/api/v1/shutdown", post(shutdown))
-        // Web UI
-        .route("/ui/", get(crate::web::dashboard_page))
-        .route("/ui/terminal", get(crate::web::terminal_page))
-        .route("/ui/logs", get(crate::web::logs_page))
+        // Web UI — embedded SPA (legacy page URLs redirect inside the handler)
+        .route("/ui/", get(crate::web::index))
         // Plugin UI
-        .route("/ui/ext/{name}", get(crate::web::plugin_page))
         .route("/ui/proxy/{name}", any(proxy_plugin))
         .route("/ui/proxy/{name}/", any(proxy_plugin))
         .route("/ui/proxy/{name}/{*rest}", any(proxy_plugin))
+        // Static segments outrank the catch-all, so /ui/proxy stays proxied
+        .route("/ui/{*path}", get(crate::web::asset))
         .route("/api/v1/plugins", get(list_plugins));
 
     // Debug endpoints (only if enabled)

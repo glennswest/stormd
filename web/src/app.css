@@ -1,0 +1,115 @@
+/* Design tokens — the entire look and feel lives here. Components reference
+   tokens only, so a re-theme is an edit to this block and nothing else. */
+:root {
+  /* surfaces */
+  --bg: #0f0f1a;
+  --panel: #16192e;
+  --panel-raised: #1a1d32;
+  --border: #2a2d45;
+  --border-strong: #3a3d60;
+
+  /* text */
+  --text: #e0e0e0;
+  --text-dim: #888;
+  --text-faint: #666;
+  --text-ghost: #555;
+
+  /* brand + semantic */
+  --brand: #e94560;
+  --ok: #50fa7b;
+  --warn: #f1fa8c;
+  --warn-strong: #f0a030;
+  --error: #e94560;
+  --accent: #8be9fd;
+  --purple: #d6acff;
+
+  /* semantic surfaces (badges, buttons) */
+  --ok-bg: #1a4a2a;
+  --ok-border: #2a6a3a;
+  --warn-bg: #4a3a1a;
+  --warn-border: #6a5a2a;
+  --error-bg: #4a1a2a;
+  --error-border: #6a2a3a;
+  --accent-bg: #1a3a4a;
+
+  /* type */
+  --font: -apple-system, 'Segoe UI', system-ui, sans-serif;
+  --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+
+  /* shape */
+  --radius: 8px;
+  --radius-sm: 6px;
+  --nav-h: 48px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.mono { font-family: var(--mono); }
+
+/* form controls */
+select, input[type="text"], input[type="search"] {
+  background: var(--panel-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  outline: none;
+  font-family: var(--font);
+}
+select:focus, input:focus { border-color: var(--border-strong); }
+
+button {
+  background: #2a2d50;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-family: var(--font);
+}
+button:hover:not(:disabled) { background: var(--border-strong); }
+button:disabled { opacity: 0.35; cursor: default; }
+
+button.ok { background: var(--ok-bg); border-color: var(--ok-border); color: var(--ok); }
+button.ok:hover:not(:disabled) { background: #2a5a3a; }
+button.danger { background: var(--error-bg); border-color: var(--error-border); color: var(--error); }
+button.danger:hover:not(:disabled) { background: #5a2a3a; }
+button.warn { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn); }
+button.warn:hover:not(:disabled) { background: #5a4a2a; }
+
+/* the terminal/log pane */
+.term-output {
+  background: #0a0a14;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log-entry { padding: 1px 0; }
+
+/* generic layout helpers */
+.content { padding: 16px 20px; }
+
+@media (max-width: 700px) {
+  .content { padding: 12px; }
+}
