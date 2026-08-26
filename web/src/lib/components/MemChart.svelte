@@ -120,7 +120,8 @@
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 14px 16px;
+    box-shadow: var(--shadow);
+    padding: 16px 18px;
   }
   h2 {
     font-size: 12px;

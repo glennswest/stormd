@@ -25,6 +25,12 @@
     (component.relations || []).filter((r) => r.kind === 'has_many')
   )
 
+  function gridHref(rel) {
+    let href = '#/grid?id=' + encodeURIComponent(component.id)
+    if (rel) href += '&rel=' + encodeURIComponent(rel.name)
+    return href
+  }
+
   const icons = {
     system: '⛈',
     process: '▸',
@@ -61,6 +67,9 @@
     {:else}
       <span class="label">{component.label}</span>
     {/if}
+    {#if manyRelations.length}
+      <a class="grid-link head-grid" href={gridHref(null)} title="Open as grid">⊞</a>
+    {/if}
     <span class="kind">{component.kind}</span>
   </div>
 
@@ -85,7 +94,10 @@
         </button>
       {/each}
       {#each manyRelations as r}
-        <RelationPicker relation={r} {resolve} />
+        <span class="many">
+          <RelationPicker relation={r} {resolve} />
+          <a class="grid-link" href={gridHref(r)} title="{r.name} as grid">⊞</a>
+        </span>
       {/each}
     </div>
   {/if}
@@ -110,7 +122,8 @@
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 14px 16px;
+    box-shadow: var(--shadow);
+    padding: 16px 18px;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -174,6 +187,16 @@
     color: var(--text-dim);
   }
   .chip:hover { color: var(--accent); border-color: var(--border-strong); }
+  .many { display: inline-flex; align-items: center; gap: 3px; }
+  .grid-link {
+    padding: 0 5px;
+    font-size: 13px;
+    color: var(--text-faint);
+    border-radius: var(--radius-sm);
+  }
+  .grid-link:hover { color: var(--accent); text-decoration: none; background: var(--panel-raised); }
+  .head-grid { margin-left: auto; }
+  .head-grid + .kind { margin-left: 0; }
 
   .actions { display: flex; gap: 6px; padding-top: 4px; }
   .actions button { padding: 4px 12px; font-size: 12px; }

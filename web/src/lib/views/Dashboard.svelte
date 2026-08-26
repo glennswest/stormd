@@ -78,18 +78,27 @@
 
 <style>
   h2 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     font-size: 12px;
     font-weight: 600;
-    color: var(--text-faint);
+    color: var(--text-dim);
     text-transform: uppercase;
     letter-spacing: 0.8px;
-    margin: 20px 0 10px;
+    margin: 24px 0 10px;
+  }
+  h2::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
   }
   h2:first-of-type { margin-top: 0; }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
   }
   .empty { color: var(--text-faint); padding: 40px; text-align: center; }
   .mode-bar { display: flex; gap: 4px; margin-bottom: 12px; }

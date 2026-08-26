@@ -7,6 +7,7 @@
   import Terminal from './lib/views/Terminal.svelte'
   import Process from './lib/views/Process.svelte'
   import Ext from './lib/views/Ext.svelte'
+  import GridView from './lib/views/GridView.svelte'
   import Login from './lib/views/Login.svelte'
 
   checkAuth().then(() => {
@@ -19,6 +20,7 @@
     terminal: Terminal,
     process: Process,
     ext: Ext,
+    grid: GridView,
   }
 
   let View = $derived(views[route.current.name] || Dashboard)
@@ -30,7 +32,7 @@
   <Login />
 {:else}
   <Nav />
-  {#key route.current.name + (route.current.params.name || '')}
+  {#key route.current.name + (route.current.params.name || '') + route.current.query.toString()}
     <View />
   {/key}
 {/if}

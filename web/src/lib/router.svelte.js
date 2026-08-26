@@ -7,6 +7,9 @@ const routes = [
   { pattern: '#/terminal', name: 'terminal' },
   { pattern: '#/process/:name', name: 'process' },
   { pattern: '#/ext/:name', name: 'ext' },
+  // component ids carry ':' and '/', so the grid root travels in the query:
+  // #/grid?id=<component>&rel=<relation>
+  { pattern: '#/grid', name: 'grid' },
 ]
 
 function match(hash) {

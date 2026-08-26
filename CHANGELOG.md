@@ -1,7 +1,20 @@
 # Changelog
 
 ## [Unreleased]
-<!-- New unreleased changes go here -->
+
+### 2026-08-26
+- **feat:** cards link to grids — a ⊞ on any card with `has_many` relations
+  opens `#/grid?id=…` rooted at that component, and each relationship row
+  has its own ⊞ (`&rel=…`) opening just that relationship's targets as the
+  top of a nested grid.
+- **feat:** the container name in the nav is a home link.
+- **fix:** theme polish from review — Phosphor gets a taller brightness
+  ladder so group boundaries actually show; Solar's washed-out foregrounds
+  run brighter; Nord gets a darker ground and hotter aurora accents instead
+  of uniform gray; Midnight trades white-on-black glare for parchment-gray
+  text and stronger panel separation; Storm's ground drops a step below the
+  panels. Globally: dashboard section headers gained a hairline rule, cards
+  gained shadows and wider gaps — isolation and spacing, per theme review.
 
 ## [v0.5.0] — 2026-08-26
 

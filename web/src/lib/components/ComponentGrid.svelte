@@ -9,22 +9,26 @@
   import { navigate } from '../router.svelte.js'
   import { post } from '../api.js'
 
-  let { components = [] } = $props()
+  let { components = [], rootIds = null } = $props()
   let selected = $state([])
   let busy = $state(false)
 
   const byId = $derived(new Map(components.map((c) => [c.id, c])))
   const resolve = (id) => byId.get(id)
 
-  // Top level: components that belong to nothing present in the feed —
-  // everything else is reachable by expanding relations.
+  // Top level: explicit roots when given (a card's ⊞ links here rooted at
+  // that component or one of its relationships); otherwise the components
+  // that belong to nothing present in the feed — everything else is
+  // reachable by expanding relations.
   const roots = $derived(
-    components.filter(
-      (c) =>
-        !(c.relations || []).some(
-          (r) => r.kind === 'belongs_to' && r.targets.some((t) => byId.has(t))
+    rootIds
+      ? rootIds.map(resolve).filter(Boolean)
+      : components.filter(
+          (c) =>
+            !(c.relations || []).some(
+              (r) => r.kind === 'belongs_to' && r.targets.some((t) => byId.has(t))
+            )
         )
-    )
   )
 
   const columns = [

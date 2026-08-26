@@ -11,7 +11,7 @@
 </script>
 
 <nav>
-  <span class="brand">{nav.container}</span>
+  <a class="brand" href="#/">{nav.container}</a>
   <div class="links">
     {#each links as l}
       <a href={l.href} class:active={route.current.name === l.name}>{l.label}</a>
@@ -62,6 +62,7 @@
     letter-spacing: -0.5px;
     white-space: nowrap;
   }
+  .brand:hover { text-decoration: none; filter: brightness(1.15); }
   .links { display: flex; gap: 4px; }
   .links a {
     padding: 8px 16px;

@@ -2,12 +2,14 @@
    tokens only, so a theme is nothing but a block of token overrides below;
    the picker in the nav sets data-theme on <html> and localStorage keeps it. */
 :root {
-  /* surfaces */
-  --bg: #0f0f1a;
+  /* surfaces — the ground sits a step darker than the panels so cards read
+     as raised objects, not regions of the same wall */
+  --bg: #0a0a12;
   --panel: #16192e;
-  --panel-raised: #1a1d32;
-  --border: #2a2d45;
-  --border-strong: #3a3d60;
+  --panel-raised: #1e2138;
+  --border: #2e3150;
+  --border-strong: #42466e;
+  --shadow: 0 2px 8px rgb(0 0 0 / 0.35);
 
   /* text */
   --text: #e0e0e0;
@@ -70,15 +72,18 @@
 /* --- Themes: token overrides only --- */
 
 [data-theme='midnight'] {
-  --bg: #0a0e14;
-  --panel: #0f141c;
-  --panel-raised: #131a24;
-  --border: #1d2635;
-  --border-strong: #2d3b52;
-  --text: #d9e2ec;
-  --text-dim: #7e8b9d;
-  --text-faint: #5c6773;
-  --text-ghost: #47525e;
+  /* Softer text than pure-white-on-black — parchment-gray, not glare —
+     and a panel/border ladder bright enough that sections separate. */
+  --bg: #070a0f;
+  --panel: #10161f;
+  --panel-raised: #18202c;
+  --border: #263243;
+  --border-strong: #3a4c66;
+  --shadow: 0 2px 8px rgb(0 0 0 / 0.45);
+  --text: #c8d2dd;
+  --text-dim: #8b99ab;
+  --text-faint: #66737f;
+  --text-ghost: #4d5866;
   --brand: #ff8f40;
   --ok: #7fd962;
   --warn: #ffd173;
@@ -106,33 +111,36 @@
 }
 
 [data-theme='nord'] {
-  --bg: #2e3440;
-  --panel: #353c4a;
+  /* Stock Nord is uniformly mid-gray and reads flat. A darker ground under
+     the standard polar-night panels restores depth, and the aurora colors
+     run a notch hotter than stock so state actually registers. */
+  --bg: #20242e;
+  --panel: #2e3440;
   --panel-raised: #3b4252;
-  --border: #434c5e;
-  --border-strong: #4c566a;
+  --border: #4c566a;
+  --border-strong: #616f8c;
   --text: #eceff4;
-  --text-dim: #aeb8c9;
-  --text-faint: #8794a8;
-  --text-ghost: #6b788f;
-  --brand: #b48ead;
-  --ok: #a3be8c;
-  --warn: #ebcb8b;
-  --warn-strong: #d08770;
-  --error: #bf616a;
-  --accent: #88c0d0;
+  --text-dim: #b8c2d6;
+  --text-faint: #8e9bb5;
+  --text-ghost: #6f7d99;
+  --brand: #d0737c;
+  --ok: #a8d18c;
+  --warn: #f0d195;
+  --warn-strong: #d98254;
+  --error: #d06470;
+  --accent: #8fd1e8;
   --purple: #b48ead;
-  --ok-bg: #3a4438;
-  --ok-border: #4d5c48;
-  --warn-bg: #46402f;
-  --warn-border: #5e553c;
-  --error-bg: #453238;
-  --error-border: #5e4148;
-  --accent-bg: #354550;
+  --ok-bg: #39473a;
+  --ok-border: #5b7355;
+  --warn-bg: #4a4331;
+  --warn-border: #756948;
+  --error-bg: #4a3239;
+  --error-border: #7a4a55;
+  --accent-bg: #33465a;
   --btn-bg: #434c5e;
-  --nav-hover: #3b4252;
+  --nav-hover: #353c4a;
   --nav-active: #4c566a;
-  --term-bg: #272c37;
+  --term-bg: #1a1e26;
   --ansi-black: #4c566a;
   --ansi-red: #bf616a;
   --ansi-green: #a3be8c;
@@ -152,33 +160,36 @@
 }
 
 [data-theme='solar'] {
-  --bg: #002b36;
+  /* Solarized's stock foregrounds wash out on its teal ground — text and
+     the accent set run brighter here so the theme reads lit, not faded. */
+  --bg: #00212a;
   --panel: #073642;
-  --panel-raised: #0a3f4d;
-  --border: #10505f;
-  --border-strong: #1a6274;
-  --text: #cfd8d9;
-  --text-dim: #93a1a1;
-  --text-faint: #657b83;
-  --text-ghost: #586e75;
-  --brand: #d33682;
-  --ok: #859900;
-  --warn: #b58900;
-  --warn-strong: #cb4b16;
-  --error: #dc322f;
-  --accent: #268bd2;
-  --purple: #6c71c4;
-  --ok-bg: #173300;
-  --ok-border: #3d5200;
-  --warn-bg: #332600;
-  --warn-border: #5c4700;
-  --error-bg: #38100f;
-  --error-border: #5e1f1e;
-  --accent-bg: #0a2f47;
-  --btn-bg: #0e4a5a;
-  --nav-hover: #08404e;
-  --nav-active: #11525f;
-  --term-bg: #00212a;
+  --panel-raised: #0c4455;
+  --border: #175d70;
+  --border-strong: #26809a;
+  --shadow: 0 2px 8px rgb(0 0 0 / 0.35);
+  --text: #e3ecec;
+  --text-dim: #a8bcbc;
+  --text-faint: #7d9797;
+  --text-ghost: #5d7b80;
+  --brand: #e0509a;
+  --ok: #a2c11c;
+  --warn: #d4a70e;
+  --warn-strong: #e0672c;
+  --error: #ec4b48;
+  --accent: #43a4ea;
+  --purple: #8489dc;
+  --ok-bg: #1d3d00;
+  --ok-border: #4a6600;
+  --warn-bg: #3d2e00;
+  --warn-border: #705700;
+  --error-bg: #421412;
+  --error-border: #77302e;
+  --accent-bg: #0c3a57;
+  --btn-bg: #10505f;
+  --nav-hover: #0a4250;
+  --nav-active: #175d70;
+  --term-bg: #001b22;
   --ansi-black: #586e75;
   --ansi-red: #dc322f;
   --ansi-green: #859900;
@@ -198,15 +209,18 @@
 }
 
 [data-theme='phosphor'] {
+  /* Group separation needs a taller surface ladder here than elsewhere:
+     with every color a green, only brightness can draw the boundaries. */
+  --shadow: 0 0 14px rgb(51 255 119 / 0.07);
   --bg: #000500;
-  --panel: #001a0d;
-  --panel-raised: #002613;
-  --border: #003d1f;
-  --border-strong: #00602f;
+  --panel: #00250f;
+  --panel-raised: #003618;
+  --border: #005c2c;
+  --border-strong: #009448;
   --text: #33ff77;
-  --text-dim: #1fb355;
-  --text-faint: #158040;
-  --text-ghost: #0d5c2e;
+  --text-dim: #25cc60;
+  --text-faint: #1c9e4d;
+  --text-ghost: #147038;
   --brand: #66ffaa;
   --ok: #33ff77;
   --warn: #b3ff66;
@@ -214,16 +228,16 @@
   --error: #ff5555;
   --accent: #66ffcc;
   --purple: #99ffbb;
-  --ok-bg: #002613;
-  --ok-border: #00602f;
-  --warn-bg: #1e2600;
-  --warn-border: #3f5200;
-  --error-bg: #260000;
-  --error-border: #5c0000;
-  --accent-bg: #00261f;
-  --btn-bg: #002613;
-  --nav-hover: #001f10;
-  --nav-active: #003d1f;
+  --ok-bg: #003618;
+  --ok-border: #009448;
+  --warn-bg: #2b3600;
+  --warn-border: #5c7300;
+  --error-bg: #360000;
+  --error-border: #802020;
+  --accent-bg: #00362c;
+  --btn-bg: #003618;
+  --nav-hover: #002c13;
+  --nav-active: #005c2c;
   --term-bg: #000800;
   --ansi-black: #0d5c2e;
   --ansi-red: #ff5555;
@@ -245,6 +259,7 @@
 }
 
 [data-theme='light'] {
+  --shadow: 0 1px 4px rgb(16 24 40 / 0.1);
   --bg: #f4f5f8;
   --panel: #ffffff;
   --panel-raised: #eef0f4;
@@ -356,7 +371,7 @@ button.warn:hover:not(:disabled) { background: var(--warn-bg); filter: brightnes
 .log-entry { padding: 1px 0; }
 
 /* generic layout helpers */
-.content { padding: 16px 20px; }
+.content { padding: 20px 24px; }
 
 @media (max-width: 700px) {
   .content { padding: 12px; }

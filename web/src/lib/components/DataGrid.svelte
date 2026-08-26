@@ -202,6 +202,7 @@
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: var(--radius);
+    box-shadow: var(--shadow);
     overflow-x: auto;
   }
   .grid-wrap.nested {
