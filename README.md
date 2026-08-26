@@ -444,10 +444,12 @@ against a running stormd: `cd web && STORMD_URL=http://host:9080 npm run dev`;
 `npm run build` writes `web/dist`, which is committed and embedded at the next
 cargo build.
 
-**Themes** — six built in (Storm, Midnight, Nord, Solar, Phosphor, Light),
-picked from the nav bar and remembered per browser. A theme is one block of
-CSS token overrides in `web/src/app.css` — colors, ANSI palette for rendered
-output, chart colors — so adding a theme is adding a block.
+**Themes** — eight built in: Storm (Tokyo Night-based default), Midnight,
+Catppuccin Mocha, Rosé Pine, Nord, Solar, Phosphor, and Light, picked from
+the nav bar and remembered per browser. `[general] theme = "rose"` sets the
+instance default, which a viewer's own pick overrides. A theme is one block
+of CSS token overrides in stormview's `themes.css` — colors, ANSI palette
+for rendered output, chart colors — so adding a theme is adding a block.
 
 **Grid view** — the dashboard toggles between cards and a relational grid.
 Components carry typed relations (`has_one`, `has_many`, `belongs_to`) between
@@ -655,6 +657,7 @@ Your app doesn't have to match stormd's style — it renders in its own iframe a
 name = "my-service"                    # container name (shown in UI nav)
 log_dir = "/var/stormd/logs"           # log file directory
 # cloud_id = "my-unique-id"           # unique instance ID (also accepted as SSH password)
+# theme = "rose"                      # default web UI theme (viewer's own pick wins)
                                        # auto-generated UUID if not set (env: STORM_CLOUD_ID)
 
 [api]

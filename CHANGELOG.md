@@ -3,6 +3,16 @@
 ## [Unreleased]
 
 ### 2026-08-26
+- **feat:** `[general] theme` sets the instance's default web UI theme,
+  served on the open session endpoint (with the container name, so the
+  login screen is branded and themed before auth). A viewer's own pick,
+  stored in their browser, wins over the default.
+- **feat:** two new low-eye-strain themes — Catppuccin Mocha and Rosé Pine —
+  and the Storm default is rebased on Tokyo Night: low-glare indigo ground
+  and softened accents instead of Dracula neon on near-black.
+- **refactor:** the login screen is stormview's `LoginPanel` — redesigned
+  (glyph, gradient thread, focus ring, inline error with shake) and
+  reusable by stormconsole.
 - **refactor:** the whole UI system moved to the stormview repo as an npm
   package — themes.css (all tokens + six themes), DataGrid, ComponentCard,
   ComponentGrid, RelationPicker, HealthDot, theme state, and the shared
