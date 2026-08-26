@@ -255,7 +255,7 @@ If a documentation file doesn't exist yet and should, create it.
 
 ## Work Plan
 
-### Current Version: stormd `v0.3.0` · stormsh `v0.2.0` · stormlog `v0.2.0`
+### Current Version: stormd `v0.4.0` · stormsh `v0.3.0` · stormlog `v0.3.0`
 
 ### Current Sprint / Active Tasks
 
@@ -265,23 +265,27 @@ The web UI moves from format!()-embedded HTML strings in `web.rs` to a Svelte 5
 SPA embedded in the binary, and both UIs (web + stormsh TUI) render from one
 server-side component-summary contract so they can never drift apart.
 
-- [ ] Phase 1: Component summary API — `components.rs` with a uniform
+- [x] Phase 1: Component summary API — `components.rs` with a uniform
       `{id, kind, label, health, detail, metrics, actions}` summary for every
       component (system, each process, logs, cron, updater, storage, plugins);
       `GET /api/v1/components` + `/ws/components` push
-- [ ] Phase 2: Svelte 5 + Vite SPA in `web/` — design tokens, card/tile
+- [x] Phase 2: Svelte 5 + Vite SPA in `web/` — design tokens, card/tile
       component library, dashboard rendered generically from the summary feed;
       built `web/dist` committed and embedded in the binary (rust-embed),
       old `web.rs` string pages removed
-- [ ] Phase 3: Logs + Terminal views in the SPA (WS live tail, ANSI rendering)
-- [ ] Phase 4: stormsh Dashboard view rendering the same `/api/v1/components`
+- [x] Phase 3: Logs + Terminal views in the SPA (WS live tail, ANSI rendering)
+- [x] Phase 4: stormsh Dashboard view rendering the same `/api/v1/components`
       feed as TUI tiles — the console "sum" of each component
-- [ ] Phase 5: Plugin summaries — optional `[process.ui] summary` URL merged
+- [x] Phase 5: Plugin summaries — optional `[process.ui] summary` URL merged
       into the plugin's component card (best-effort, short timeout)
+
+All five phases shipped in v0.4.0 (2026-08-26), verified end-to-end on dev
+(build, tests, live smoke of /api/v1/components, /ui/, legacy redirects, and
+the plugin summary merge).
 
 ### In Progress
 
-- [ ] (started 2026-08-26) UI overhaul Phase 1 — component summary API
+(nothing)
 
 ### Completed
 
@@ -300,9 +304,10 @@ server-side component-summary contract so they can never drift apart.
 
 | Version | Date | Summary |
 |---------|------|---------|
-| v0.1.0 | 2026-07 | Initial: supervisor, API, logs, SSH, web dashboard |
-| v0.2.0 | 2026-08 | Updater, plugin UI proxy, cloud-id, events rework |
-| v0.3.0 | 2026-08-25 | stormcast log wire, file-backed log store, run pruning |
+| v0.1.0 | 2026-02-28 | Initial: supervisor, API, logs, SSH |
+| v0.2.0 | 2026-02-28 | Events, cron, backup, web terminal |
+| v0.3.0 | 2026-03-01 | Web dashboard, MinIO archival, run segmentation |
+| v0.4.0 | 2026-08-26 | Component feed + both dashboards, liveness, busybox, CloudID, updater, stormcast wire |
 
 ---
 

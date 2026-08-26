@@ -1,6 +1,21 @@
 # Changelog
 
 ## [Unreleased]
+<!-- New unreleased changes go here -->
+
+## [v0.4.0] — 2026-08-26
+
+Everything since v0.3.0 (2026-03-01), kept in dated form below. Highlights:
+the component-summary contract and the two dashboards that render it (Svelte
+web UI, stormsh tiles); liveness probes; the busybox multi-call binary and
+stormdbase image; CloudID auth and SFTP; run-segmented logging; the OCI image
+updater; the stormcast log wire.
+
+### Breaking
+- The object-store half of `stormlog` and the syslog receivers are gone —
+  the `s3` feature and the `[stormlog.minio]` / `[stormlog.syslog]` config
+  sections no longer exist (see 2026-08-25 below).
+- Default API port moved from 8080 to 9080 (see 2026-03-17 below).
 
 ### 2026-08-26
 - **feat:** a plugin can report its own summary — `[process.ui] summary` names
