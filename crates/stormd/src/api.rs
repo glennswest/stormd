@@ -21,6 +21,7 @@ pub struct UiPlugin {
     pub label: String,
     pub proxy_url: String,
     pub host: Option<String>,
+    pub summary_url: Option<String>,
 }
 
 pub struct AppState {

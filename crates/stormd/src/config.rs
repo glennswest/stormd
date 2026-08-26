@@ -146,6 +146,12 @@ pub struct ProcessUiConfig {
     /// routed to this plugin's UI, enabling name-based routing (e.g. clients.mob.lo).
     #[serde(default)]
     pub host: Option<String>,
+    /// Optional URL returning the plugin's own component summary (JSON with
+    /// any of `health`, `detail`, `metrics`), merged into its dashboard card.
+    /// Best-effort with a short timeout — a slow or absent endpoint costs the
+    /// card nothing but the extra detail.
+    #[serde(default)]
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]

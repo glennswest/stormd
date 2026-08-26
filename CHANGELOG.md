@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### 2026-08-26
+- **feat:** a plugin can report its own summary — `[process.ui] summary` names
+  a URL returning JSON with any of `health`, `detail`, `metrics`, merged into
+  the plugin's dashboard card in both UIs (best-effort, 400ms timeout,
+  fetched concurrently).
 - **feat:** stormsh opens on a Dashboard view — the same component summaries
   the web dashboard renders, drawn as a grid of tiles with health, detail,
   metrics, and the enabled actions on the selected tile (s/r/x, u for image

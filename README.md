@@ -421,14 +421,26 @@ Shell features: tab completion, command history, colorized output, piping (`logs
 
 ## Web UI
 
-| Page | URL | Description |
-|------|-----|-------------|
-| Dashboard | `/ui/` | Process table, stats (uptime, avg uptime, restarts, memory), memory chart, mount usage, restart history |
-| Terminal | `/ui/terminal` | Live VT100 terminal output per process |
-| Logs | `/ui/logs` | Log viewer with severity filter, search, run selector for crash history |
-| Plugin | `/ui/ext/{name}` | Custom app UI served via reverse proxy with stormd nav chrome |
+The web UI is a Svelte SPA embedded in the stormd binary (built from `web/`,
+~24 KB gzipped, no node at runtime), served at `/ui/`.
 
-The dashboard shows container name as the brand. Restart history entries link directly to the failed run's logs.
+| Page | Route | Description |
+|------|-------|-------------|
+| Dashboard | `/ui/#/` | Every component of the system as a live card — health, one-line detail, headline metrics, actions — plus the memory chart |
+| Terminal | `/ui/#/terminal` | Live VT100 terminal output per process |
+| Logs | `/ui/#/logs` | Log viewer with severity/stream filters, search, run selector for crash history |
+| Process | `/ui/#/process/{name}` | One process: its card plus its live terminal |
+| Plugin | `/ui/#/ext/{name}` | Custom app UI served via reverse proxy with stormd nav chrome |
+
+The pre-SPA URLs (`/ui/terminal`, `/ui/logs`, `/ui/ext/{name}`) redirect to
+their hash routes, so old bookmarks keep working.
+
+The dashboard renders the component-summary feed (`/api/v1/components`, pushed
+live over `/ws/components`) generically: a subsystem that reports a summary
+appears as a card with no frontend changes, and stormsh's dashboard renders
+the same feed as TUI tiles. To develop the UI against a running stormd:
+`cd web && STORMD_URL=http://host:9080 npm run dev`; `npm run build` writes
+`web/dist`, which is committed and embedded at the next cargo build.
 
 ### Plugin UI
 
@@ -443,7 +455,27 @@ args = ["--port", "3000"]
 [process.ui]
 label = "My App"
 proxy = "http://127.0.0.1:3000"
+# Optional: the plugin's own component summary, merged into its dashboard
+# card (JSON with any of health/detail/metrics; best-effort, 400ms timeout)
+summary = "http://127.0.0.1:3000/api/summary"
 ```
+
+A `summary` endpoint returns JSON like:
+
+```json
+{
+  "health": "ok",
+  "detail": "serving 42 clients",
+  "metrics": [
+    { "label": "clients", "value": "42", "tone": "accent" },
+    { "label": "queue", "value": "0", "tone": "muted" }
+  ]
+}
+```
+
+Every field is optional — `health` and `detail` replace the supervisor's
+process-level view of the plugin's card, `metrics` append after it. Tones are
+`ok`, `warn`, `error`, `muted`, `accent`.
 
 This adds a "My App" tab to the nav bar. When clicked, stormd serves a page with its nav chrome and an iframe. The iframe content is reverse-proxied through stormd at `/ui/proxy/myapp/`, so:
 
@@ -655,6 +687,7 @@ depends_on = ["other-process"]         # start after these processes
 # [process.ui]
 # label = "My App"                      # nav tab label
 # proxy = "http://127.0.0.1:3000"       # URL to reverse-proxy
+# summary = "http://127.0.0.1:3000/api/summary"  # optional: plugin's own card summary
 
 # Liveness probe — restarts process if health check fails
 [process.liveness]
@@ -753,6 +786,7 @@ curl http://localhost:8080/health > /tmp/health.txt
 | GET | `/api/v1/cloudid` | Instance cloud ID and container name |
 | GET | `/api/v1/health` | Health check |
 | GET | `/api/v1/status` | Full status (processes, cron, stats) |
+| GET | `/api/v1/components` | Component summaries — every part of the system in one uniform shape (id, kind, label, health, detail, metrics, actions); live push on `/ws/components` |
 | GET | `/api/v1/stats` | System stats (uptime, memory, counts) |
 | GET | `/api/v1/processes` | List all processes |
 | GET | `/api/v1/processes/{name}` | Get process status |

@@ -6,10 +6,10 @@
 
 use crate::api::AppState;
 use crate::supervisor::ProcessState;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Component health, in the order a viewer sorts by: broken first.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Health {
     Error,
@@ -22,13 +22,13 @@ pub enum Health {
 /// One headline number on a component's card. `tone` is a rendering hint
 /// ("ok" | "warn" | "error" | "muted" | "accent"), not a semantic — health
 /// lives on the component.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Metric {
     pub label: String,
     pub value: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub unit: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub tone: Option<String>,
 }
 
@@ -333,7 +333,63 @@ pub async fn collect(state: &AppState) -> Vec<ComponentSummary> {
         }
     }
 
+    // --- Plugin self-reported summaries ---
+    // A plugin that publishes its own summary gets it merged into its card:
+    // health and detail replace stormd's process-level view (the plugin knows
+    // itself better), its metrics append after the supervisor's. Best-effort
+    // with a short timeout, fetched concurrently — an absent endpoint costs
+    // the card nothing but the extra detail.
+    let with_summaries: Vec<_> = state
+        .ui_plugins
+        .iter()
+        .filter_map(|p| p.summary_url.clone().map(|url| (p.name.clone(), url)))
+        .collect();
+    if !with_summaries.is_empty() {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(400))
+            .build();
+        if let Ok(client) = client {
+            let fetches = with_summaries.into_iter().map(|(name, url)| {
+                let client = client.clone();
+                async move {
+                    let remote = client
+                        .get(&url)
+                        .send()
+                        .await
+                        .ok()?
+                        .json::<RemoteSummary>()
+                        .await
+                        .ok()?;
+                    Some((name, remote))
+                }
+            });
+            for fetched in futures_util::future::join_all(fetches).await.into_iter().flatten() {
+                let (name, remote) = fetched;
+                if let Some(card) = out.iter_mut().find(|c| c.id == format!("process:{}", name)) {
+                    if let Some(health) = remote.health {
+                        card.health = health;
+                    }
+                    if let Some(detail) = remote.detail {
+                        card.detail = detail;
+                    }
+                    card.metrics.extend(remote.metrics);
+                }
+            }
+        }
+    }
+
     out
+}
+
+/// What a plugin's `summary` endpoint may return — every field optional.
+#[derive(Debug, Deserialize)]
+struct RemoteSummary {
+    #[serde(default)]
+    health: Option<Health>,
+    #[serde(default)]
+    detail: Option<String>,
+    #[serde(default)]
+    metrics: Vec<Metric>,
 }
 
 async fn log_dir_totals(dir: &std::path::Path) -> (usize, u64) {

@@ -248,6 +248,7 @@ async fn main() {
                 label: ui.label.clone(),
                 proxy_url: ui.proxy.clone(),
                 host: ui.host.clone(),
+                summary_url: ui.summary.clone(),
             })
         })
         .collect();
