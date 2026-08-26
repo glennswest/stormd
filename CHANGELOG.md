@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### 2026-08-26
+- **feat:** the web UI is a Svelte 5 SPA (`web/`), built to `web/dist`
+  (committed) and embedded in the binary — `web.rs` goes from 1,176 lines of
+  format!()-escaped HTML to a static file handler. The dashboard renders the
+  component feed generically; logs (live tail, stored runs, local archives,
+  crash links), terminal, per-process, and plugin-iframe views keep parity
+  with the old pages. Old page URLs (`/ui/logs`, `/ui/terminal`,
+  `/ui/ext/{name}`) redirect to their hash routes. 24 KB gzipped; no node at
+  runtime; the look lives in one design-token block.
 - **feat:** the component summary contract — `GET /api/v1/components` reports
   every part of the system (the supervisor, each process and plugin, cron
   jobs, mounts, logs, tracked images) in one uniform shape: id, kind, label,
