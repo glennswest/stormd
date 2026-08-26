@@ -308,6 +308,7 @@ async fn main() {
         ui_plugins: ui_plugins.clone(),
         host_routes: host_routes.clone(),
         auth: auth_state.clone(),
+        ui_theme: config.general.theme.clone(),
     });
     let ssh_container = config.general.name.clone();
     let ssh_keys = cloudid_keys.clone();
@@ -333,6 +334,7 @@ async fn main() {
         ui_plugins,
         host_routes,
         auth: auth_state,
+        ui_theme: config.general.theme.clone(),
     });
 
     let router = api::build_router(app_state);

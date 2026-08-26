@@ -200,17 +200,24 @@ pub async fn logout(State(state): State<Arc<AppState>>, req: Request) -> Respons
 }
 
 /// Always open: the UI asks this first to decide whether to show the login
-/// screen at all.
+/// screen at all. It also carries what the login screen itself needs — the
+/// instance name and the configured default theme — since everything else
+/// is behind the gate at that point.
 pub async fn session(State(state): State<Arc<AppState>>, req: Request) -> Response {
-    let Some(auth) = &state.auth else {
-        return Json(serde_json::json!({ "required": false, "authenticated": true }))
-            .into_response();
+    let authenticated = match &state.auth {
+        None => true,
+        Some(auth) => match session_cookie(&req) {
+            Some(id) => auth.session_valid(&id).await,
+            None => false,
+        },
     };
-    let authenticated = match session_cookie(&req) {
-        Some(id) => auth.session_valid(&id).await,
-        None => false,
-    };
-    Json(serde_json::json!({ "required": true, "authenticated": authenticated })).into_response()
+    Json(serde_json::json!({
+        "required": state.auth.is_some(),
+        "authenticated": authenticated,
+        "container": state.container_name,
+        "theme": state.ui_theme,
+    }))
+    .into_response()
 }
 
 #[cfg(test)]

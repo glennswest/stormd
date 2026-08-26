@@ -40,6 +40,11 @@ pub struct GeneralConfig {
     pub pid_file: PathBuf,
     #[serde(default)]
     pub cloud_id: Option<String>,
+    /// Default web UI theme ("storm", "midnight", "catppuccin", "rose",
+    /// "nord", "solar", "phosphor", "light"). A viewer's own pick, stored in
+    /// their browser, wins over this.
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 impl Default for GeneralConfig {
@@ -49,6 +54,7 @@ impl Default for GeneralConfig {
             log_dir: default_log_dir(),
             pid_file: default_pid_file(),
             cloud_id: None,
+            theme: None,
         }
     }
 }

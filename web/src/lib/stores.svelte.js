@@ -4,6 +4,7 @@
 // picture and there is no client-side merging.
 
 import { get, postJson, reconnectingSocket } from './api.js'
+import { setDefaultTheme } from 'stormview/theme'
 
 export const feed = $state({
   components: [],
@@ -25,6 +26,11 @@ export async function checkAuth() {
     const s = await get('/api/v1/auth/session')
     auth.required = !!s.required
     auth.authenticated = !!s.authenticated
+    // The session endpoint is the one open door, so it also carries what
+    // the login screen needs: the instance name and the configured default
+    // theme (which yields to this browser's own pick).
+    if (s.container) nav.container = s.container
+    if (s.theme) setDefaultTheme(s.theme)
   } catch {
     // Can't tell — let the app try; data requests will 401 if auth is on.
   }

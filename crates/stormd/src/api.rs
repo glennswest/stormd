@@ -43,6 +43,8 @@ pub struct AppState {
     pub host_routes: std::collections::HashMap<String, String>,
     /// None = auth off (no credential configured), everything open.
     pub auth: Option<Arc<crate::auth::AuthState>>,
+    /// Configured default UI theme, served to the SPA before login.
+    pub ui_theme: Option<String>,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
