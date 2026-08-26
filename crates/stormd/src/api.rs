@@ -55,6 +55,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // and every one of them defaults to this one.
         .route("/metrics", get(metrics))
         .route("/api/v1/cloudid", get(get_cloud_id))
+        // Component summaries — the one feed both dashboards render from
+        .route("/api/v1/components", get(components))
         // Processes
         .route("/api/v1/processes", get(list_processes))
         .route("/api/v1/processes/{name}", get(get_process))
@@ -85,6 +87,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // WebSocket
         .route("/ws/console/{process}", get(ws::ws_console))
         .route("/ws/logs", get(ws::ws_logs))
+        .route("/ws/components", get(ws::ws_components))
         // Shutdown
         .route("/api/v1/shutdown", post(shutdown))
         // Web UI
@@ -147,6 +150,10 @@ async fn get_cloud_id(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "cloud_id": state.cloud_id,
         "container_name": state.container_name,
     }))
+}
+
+async fn components(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(crate::components::collect(&state).await)
 }
 
 async fn stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {

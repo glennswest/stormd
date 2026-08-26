@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### 2026-08-26
+- **feat:** the component summary contract — `GET /api/v1/components` reports
+  every part of the system (the supervisor, each process and plugin, cron
+  jobs, mounts, logs, tracked images) in one uniform shape: id, kind, label,
+  health, a one-line detail, headline metrics, and invocable actions.
+  `/ws/components` pushes the full list whenever it changes. This feed is
+  what both dashboards — web and stormsh — render from, so a subsystem
+  implements one summary in Rust and appears in both UIs.
+
 ### 2026-08-25
 - **refactor:** the log wire — severities, RFC 5424 framing, the multicast
   socket, escape stripping and the two volume limits — moved to

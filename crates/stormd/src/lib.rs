@@ -1,6 +1,7 @@
 pub mod api;
 pub mod backup;
 pub mod cloudid;
+pub mod components;
 pub mod config;
 pub mod cron;
 pub mod debug;

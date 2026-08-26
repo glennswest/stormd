@@ -75,6 +75,45 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>, process: St
     }
 }
 
+/// WebSocket handler for live component summaries. Sends the full summary
+/// list on connect, then again whenever it changes — the client always holds
+/// a complete, current picture and never has to merge deltas.
+pub async fn ws_components(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_components(socket, state))
+}
+
+async fn handle_components(mut socket: WebSocket, state: Arc<AppState>) {
+    let mut last: Option<Vec<crate::components::ComponentSummary>> = None;
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {
+                let now = crate::components::collect(&state).await;
+                // Uptime strings advance on their own, so most ticks do
+                // send; the guard only suppresses the frame when nothing at
+                // all moved. A 2s cadence of small full snapshots is cheap,
+                // and full snapshots spare every client a merge protocol.
+                if last.as_ref() != Some(&now) {
+                    let msg = serde_json::to_string(&now).unwrap_or_default();
+                    if socket.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                    last = Some(now);
+                }
+            }
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
 /// A severity by name, defaulting to Debug — which lets everything through, so
 /// a filter nobody can spell does not silently blank the view.
 fn severity_named(s: &str) -> stormlog::types::Severity {
