@@ -167,7 +167,25 @@ impl Supervisor {
                 let procs = self.processes.read().await;
                 if let Some(p) = procs.get(dep) {
                     let p = p.lock().await;
-                    if p.state == ProcessState::Running {
+                    // Running, or finished having been asked to run once.
+                    //
+                    // **A one-shot dependency was unsatisfiable.** This waited
+                    // only for `Running`, and a task that does its job and
+                    // exits — mint a certificate, run a migration, prepare a
+                    // directory — passes through `Running` in less time than
+                    // the poll interval. Miss that window and the dependent
+                    // waits for a state the process will never be in again,
+                    // forever, with nothing logged: the dependency *worked*,
+                    // which is exactly why it was no longer running.
+                    //
+                    // `Stopped` counts only when the process was configured to
+                    // stop on exit. A process meant to keep running and found
+                    // stopped has not satisfied anything, and treating that as
+                    // ready would start the dependent into a broken node.
+                    let satisfied = p.state == ProcessState::Running
+                        || (p.state == ProcessState::Stopped
+                            && p.config.on_exit == crate::config::ExitAction::Stop);
+                    if satisfied {
                         break;
                     }
                 }
