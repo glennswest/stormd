@@ -712,11 +712,44 @@ impl Supervisor {
     }
 }
 
+
+/// The client probes are made with. Built once.
+///
+/// Certificate verification is off deliberately; see `execute_probe`.
+fn probe_client() -> Option<&'static reqwest::Client> {
+    static CLIENT: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .danger_accept_invalid_certs(true)
+                .build()
+                .ok()
+        })
+        .as_ref()
+}
+
 async fn execute_probe(probe: &LivenessProbe) -> bool {
     let timeout = Duration::from_secs(probe.timeout_secs);
     match &probe.probe {
         ProbeType::Http { url } => {
-            match tokio::time::timeout(timeout, reqwest::get(url)).await {
+            // **A liveness probe does not verify the certificate.**
+            //
+            // The question is whether this process is alive on loopback, not
+            // whether it is the server it claims to be — and the answer to the
+            // second is already known, because the supervisor started it. A
+            // verifying client turns a healthy process behind a self-signed
+            // certificate into a dead one: the apiserver here serves a cert
+            // its own node minted, every probe failed, and stormd killed it on
+            // schedule roughly every twenty-five seconds. Nothing in the log
+            // said "certificate" — the process was simply "killed by signal".
+            //
+            // Upstream's kubelet skips verification on httpGet probes for the
+            // same reason.
+            let client = match probe_client() {
+                Some(c) => c,
+                None => return false,
+            };
+            match tokio::time::timeout(timeout, client.get(url).send()).await {
                 Ok(Ok(resp)) => resp.status().is_success() || resp.status().is_redirection(),
                 _ => false,
             }
