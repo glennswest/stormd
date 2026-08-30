@@ -3439,7 +3439,7 @@ source = "git+https://github.com/glennswest/stormcast?branch=main#9244121e2f9c73
 
 [[package]]
 name = "stormd"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-trait",

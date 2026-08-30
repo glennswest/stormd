@@ -3,6 +3,8 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+## [v0.7.0] — 2026-08-30
+
 ### 2026-08-30
 - **feat:** #2 non-retryable exits — `[[process]] no_restart_exit_codes`
   lists exit codes the process uses to say a restart will not help (sysexits
