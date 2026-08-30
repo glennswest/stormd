@@ -298,7 +298,19 @@ the plugin summary merge).
 
 ### In Progress
 
-(nothing)
+**Issue #2 — non-retryable exit codes (2026-08-30).** stormconsole#3 was a
+config-parse failure that stormd restarted `max_restarts` times, failed the
+container, and stormpump restarted for hours; `handle_exit` reduces every
+exit to `code == 0`. Adding a per-process carve-out:
+- [ ] `no_restart_exit_codes = [78]` — exits the process declares not worth
+      retrying (sysexits EX_CONFIG 78, EX_USAGE 64); default empty
+- [ ] `on_no_restart = "hold" | "fail"` — `hold` (default) marks the process
+      Failed and leaves the container running; `fail` fails the container.
+      Neither counts toward `max_restarts`
+- [ ] One error line `process exited with a non-retryable code — not
+      restarting`, crash entry + ProcessCrashed event carry the code
+- [ ] Tests (decision helper, config parse), README policy table + config
+      reference, example.toml, changelog; build/test on dev; release v0.7.0
 
 ### Completed
 
