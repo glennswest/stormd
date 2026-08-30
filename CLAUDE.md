@@ -255,7 +255,7 @@ If a documentation file doesn't exist yet and should, create it.
 
 ## Work Plan
 
-### Current Version: stormd `v0.6.0` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.4.0` (own repo)
+### Current Version: stormd `v0.7.0` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.4.0` (own repo)
 
 ### Current Sprint / Active Tasks
 
@@ -298,19 +298,21 @@ the plugin summary merge).
 
 ### In Progress
 
-**Issue #2 — non-retryable exit codes (2026-08-30).** stormconsole#3 was a
+**Issue #2 — non-retryable exit codes (2026-08-30) ✅ done, v0.7.0.** stormconsole#3 was a
 config-parse failure that stormd restarted `max_restarts` times, failed the
 container, and stormpump restarted for hours; `handle_exit` reduces every
 exit to `code == 0`. Adding a per-process carve-out:
-- [ ] `no_restart_exit_codes = [78]` — exits the process declares not worth
+- [x] `no_restart_exit_codes = [78]` — exits the process declares not worth
       retrying (sysexits EX_CONFIG 78, EX_USAGE 64); default empty
-- [ ] `on_no_restart = "hold" | "fail"` — `hold` (default) marks the process
+- [x] `on_no_restart = "hold" | "fail"` — `hold` (default) marks the process
       Failed and leaves the container running; `fail` fails the container.
       Neither counts toward `max_restarts`
-- [ ] One error line `process exited with a non-retryable code — not
+- [x] One error line `process exited with a non-retryable code — not
       restarting`, crash entry + ProcessCrashed event carry the code
-- [ ] Tests (decision helper, config parse), README policy table + config
-      reference, example.toml, changelog; build/test on dev; release v0.7.0
+- [x] Tests (decision helper, config parse), README policy table + config
+      reference, example.toml, changelog; build/test on dev (11 pass; live: exit-78 script
+      started once, marked failed, stormd stayed up under `hold`, exited 1
+      under `fail`; exit-1 control still restarted then failed the container)
 
 ### Completed
 
@@ -335,6 +337,7 @@ exit to `code == 0`. Adding a per-process carve-out:
 | v0.4.0 | 2026-08-26 | Component feed + both dashboards, liveness, busybox, CloudID, updater, stormcast wire |
 | v0.5.0 | 2026-08-26 | Themes, login system, relations + grid view, stormview crate extraction |
 | v0.6.0 | 2026-08-26 | Named users, 12 themes + server default, card→grid links, UI system moved into stormview (npm) |
+| v0.7.0 | 2026-08-30 | `no_restart_exit_codes` / `on_no_restart` — a process can say its exit is not worth retrying (#2) |
 
 ---
 
