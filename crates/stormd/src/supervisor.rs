@@ -1,4 +1,4 @@
-use crate::config::{FailureAction, LivenessProbe, ProbeType, ProcessConfig};
+use crate::config::{FailureAction, LivenessProbe, NoRestartAction, ProbeType, ProcessConfig};
 use crate::events::{EventBus, EventKind};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -443,7 +443,16 @@ impl Supervisor {
         };
         drop(procs);
 
-        let (failure_action, exit_action, restart_delay, max_restarts, window, restarts_in_window) = {
+        let (
+            failure_action,
+            exit_action,
+            restart_delay,
+            max_restarts,
+            window,
+            restarts_in_window,
+            no_restart,
+            no_restart_action,
+        ) = {
             let mut proc = proc_arc.lock().await;
             proc.exit_code = exit_code;
             proc.stopped_at = Some(Utc::now());
@@ -457,6 +466,8 @@ impl Supervisor {
                 proc.config.max_restarts,
                 proc.config.restart_window_secs,
                 in_window,
+                is_no_restart(exit_code, &proc.config.no_restart_exit_codes),
+                proc.config.on_no_restart.clone(),
             )
         };
 
@@ -496,9 +507,46 @@ impl Supervisor {
             }
         } else {
             warn!(process = %name, code = ?exit_code, "process exited with error");
+            let mut detail = HashMap::new();
+            if let Some(code) = exit_code {
+                detail.insert("code".to_string(), code.into());
+            }
+            if no_restart {
+                detail.insert("no_restart".to_string(), true.into());
+            }
             self.event_bus
-                .emit_simple(EventKind::ProcessCrashed, Some(name.to_string()))
+                .emit(EventKind::ProcessCrashed, Some(name.to_string()), detail)
                 .await;
+        }
+
+        // The process said so itself: this exit is one a restart will not
+        // fix (a config it cannot run on, usually). Restarting it would be
+        // the loop that filled a node's console for hours — see stormd#2 —
+        // so it is marked Failed, which every dashboard shows in red, and
+        // left there. It does not count as a restart, because it was not one.
+        if no_restart {
+            {
+                let mut proc = proc_arc.lock().await;
+                proc.state = ProcessState::Failed;
+            }
+            error!(
+                process = %name,
+                code = ?exit_code,
+                "process exited with a non-retryable code — not restarting"
+            );
+            match no_restart_action {
+                NoRestartAction::Hold => {
+                    info!(process = %name, "on_no_restart is 'hold' — container keeps running");
+                }
+                NoRestartAction::Fail => {
+                    error!(process = %name, "on_no_restart is 'fail' — failing container");
+                    *self.container_failed.write().await = true;
+                    self.event_bus
+                        .emit_simple(EventKind::ContainerFailing, None)
+                        .await;
+                }
+            }
+            return;
         }
 
         // For clean exits with on_exit=restart, we use the restart logic
@@ -898,6 +946,48 @@ fn cooloff(base: u64, restarts_in_window: u32) -> std::time::Duration {
     let shift = restarts_in_window.saturating_sub(1).min(16);
     let secs = base.saturating_mul(1u64 << shift).min(CEILING);
     std::time::Duration::from_secs(secs)
+}
+
+/// Whether an exit is one the process has declared not worth retrying. A
+/// clean exit is never one, whatever the list says, and a death by signal
+/// has no code to match — the process did not choose it.
+fn is_no_restart(exit_code: Option<i32>, codes: &[i32]) -> bool {
+    matches!(exit_code, Some(c) if c != 0 && codes.contains(&c))
+}
+
+#[cfg(test)]
+mod no_restart_tests {
+    use super::is_no_restart;
+
+    #[test]
+    fn a_listed_code_is_not_retried() {
+        assert!(is_no_restart(Some(78), &[78]));
+        assert!(is_no_restart(Some(64), &[64, 78]));
+    }
+
+    #[test]
+    fn everything_else_is() {
+        assert!(!is_no_restart(Some(1), &[78]));
+        assert!(!is_no_restart(Some(78), &[]));
+        // Killed by a signal: no code, nothing the process said.
+        assert!(!is_no_restart(None, &[78]));
+        // Success is success even if someone lists it.
+        assert!(!is_no_restart(Some(0), &[0]));
+    }
+
+    #[test]
+    fn the_config_keys_parse_with_their_defaults() {
+        let c: crate::config::ProcessConfig =
+            toml::from_str("name = \"a\"\ncommand = \"/a\"\n").unwrap();
+        assert!(c.no_restart_exit_codes.is_empty());
+        assert_eq!(c.on_no_restart, crate::config::NoRestartAction::Hold);
+        let c: crate::config::ProcessConfig = toml::from_str(
+            "name = \"a\"\ncommand = \"/a\"\nno_restart_exit_codes = [78, 64]\non_no_restart = \"fail\"\n",
+        )
+        .unwrap();
+        assert_eq!(c.no_restart_exit_codes, vec![78, 64]);
+        assert_eq!(c.on_no_restart, crate::config::NoRestartAction::Fail);
+    }
 }
 
 #[cfg(test)]

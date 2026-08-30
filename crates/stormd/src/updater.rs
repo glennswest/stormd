@@ -339,6 +339,8 @@ impl Updater {
                 restart_delay_secs: 1,
                 max_restarts: 10,
                 restart_window_secs: 3600,
+                no_restart_exit_codes: Vec::new(),
+                on_no_restart: crate::config::NoRestartAction::Hold,
                 depends_on: Vec::new(),
                 startup_delay_secs: 0,
                 ready_probe: None,

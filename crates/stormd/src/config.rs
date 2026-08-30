@@ -128,6 +128,16 @@ pub struct ProcessConfig {
     pub max_restarts: u32,
     #[serde(default = "default_restart_window_secs")]
     pub restart_window_secs: u64,
+    /// Exit codes the process uses to say a restart will not help — a config
+    /// it cannot run on, usually. sysexits gives 78 (EX_CONFIG) and 64
+    /// (EX_USAGE); stormconsole exits 78. An exit with one of these is not
+    /// restarted and does not count toward `max_restarts`; what happens to
+    /// the container is `on_no_restart`. Empty by default, so nothing changes
+    /// for a config that does not say.
+    #[serde(default)]
+    pub no_restart_exit_codes: Vec<i32>,
+    #[serde(default)]
+    pub on_no_restart: NoRestartAction,
     #[serde(default)]
     pub depends_on: Vec<String>,
     #[serde(default = "default_startup_delay_secs")]
@@ -166,6 +176,19 @@ pub enum FailureAction {
     Restart,
     Fail,
     Ignore,
+}
+
+/// What to do with the container when a process exits with one of its
+/// `no_restart_exit_codes`. `hold` leaves the container running with the
+/// process marked Failed — visible on every dashboard, and nothing outside
+/// is invited to restart what a restart cannot fix. `fail` fails the
+/// container for the supervisor above to deal with.
+#[derive(Debug, Clone, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NoRestartAction {
+    #[default]
+    Hold,
+    Fail,
 }
 
 /// What to do when a process exits cleanly (exit code 0).

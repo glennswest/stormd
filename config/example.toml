@@ -64,6 +64,11 @@ on_failure = "restart"          # restart | fail | ignore
 restart_delay_secs = 5
 max_restarts = 10
 restart_window_secs = 3600
+# Exits the process itself says a restart will not fix — a config it cannot
+# run on (sysexits 78 EX_CONFIG, 64 EX_USAGE). Not restarted, not counted;
+# the process is marked failed and on_no_restart decides the container.
+# no_restart_exit_codes = [78]
+# on_no_restart = "hold"        # hold (default) | fail
 depends_on = ["miniminio"]
 # startup_delay_secs = 0
 # working_dir = "/app"

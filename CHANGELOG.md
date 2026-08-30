@@ -3,6 +3,18 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-08-30
+- **feat:** #2 non-retryable exits — `[[process]] no_restart_exit_codes`
+  lists exit codes the process uses to say a restart will not help (sysexits
+  78 EX_CONFIG, 64 EX_USAGE; stormconsole exits 78). Such an exit is not
+  restarted, does not count toward `max_restarts`, logs one error line and
+  marks the process failed; `on_no_restart = "hold" | "fail"` (default
+  `hold`) decides whether the container keeps running or fails. Empty by
+  default, so existing configs are unchanged. The ProcessCrashed event now
+  carries `code` and, when applicable, `no_restart`
+- **docs:** README process failure policies and config reference,
+  example.toml
+
 ## [v0.6.0] — 2026-08-26
 
 ### 2026-08-26

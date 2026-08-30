@@ -721,6 +721,8 @@ on_exit = "restart"                    # restart | stop (for clean exit code 0)
 restart_delay_secs = 1                 # delay before restart
 max_restarts = 100                     # max restarts in window before failing
 restart_window_secs = 3600             # restart counting window
+no_restart_exit_codes = [78]           # exits a restart will not fix (EX_CONFIG) — see below
+on_no_restart = "hold"                 # hold | fail (container) on one of those exits
 depends_on = ["other-process"]         # start after these processes
 # image = "myapp:latest"              # OCI image (for updater)
 
@@ -868,6 +870,21 @@ curl http://localhost:8080/health > /tmp/health.txt
 |-----------|-------------------------------|
 | `restart` | Restart the process (default — for long-running services) |
 | `stop` | Leave process stopped (for one-shot tasks) |
+
+A process can also say for itself that a restart will not help.
+`no_restart_exit_codes` lists the exit codes that mean so — a config it
+cannot run on, usually; sysexits gives 78 (`EX_CONFIG`) and 64 (`EX_USAGE`),
+and stormconsole exits 78. An exit with one of those is **not** restarted,
+does not count toward `max_restarts`, is logged once at error level
+(`process exited with a non-retryable code — not restarting`), and marks the
+process **failed** (red on every dashboard, `exit_code` on its status). The
+list is empty by default, so a config that does not say gets `on_failure` as
+before.
+
+| `on_no_restart` | Behavior (exit with a listed code) |
+|-----------------|-------------------------------------|
+| `hold` | Mark the process failed, container keeps running (default — nothing outside is invited to restart what a restart cannot fix) |
+| `fail` | Fail the container for the supervisor above to deal with |
 
 ## Log severity detection
 
