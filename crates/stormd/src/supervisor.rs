@@ -52,6 +52,16 @@ struct ManagedProcess {
     kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
     stdin_tx: Option<tokio::sync::mpsc::Sender<String>>,
     liveness_failures: u32,
+    /// Has this process's `ready_probe` passed since it last started?
+    ///
+    /// Separate from `Running`, because they answer different questions. A
+    /// datastore is *running* the moment it is forked and *ready* when it will
+    /// answer — and a dependent started between those two points fails against
+    /// something that is plainly there, which is the confusing kind.
+    ///
+    /// `true` when there is no probe: a process with nothing to check is ready
+    /// when it is running, which is the previous behaviour.
+    ready: bool,
 }
 
 impl ManagedProcess {
@@ -144,6 +154,7 @@ impl Supervisor {
                 kill_tx: None,
                 stdin_tx: None,
                 liveness_failures: 0,
+                ready: cfg.ready_probe.is_none(),
             }));
             self.processes.write().await.insert(cfg.name.clone(), proc);
         }
@@ -156,9 +167,66 @@ impl Supervisor {
             }
 
             self.spawn_process(&cfg.name).await?;
+            self.watch_readiness(&cfg);
         }
 
         Ok(())
+    }
+
+    /// Drive a process's `ready_probe` until it passes, then mark it ready.
+    ///
+    /// **`ready_probe` was parsed and never consumed.** Every one in this
+    /// stack was inert, including the one meant to stop the kubelet racing the
+    /// apiserver — so the ordering an operator wrote down was not the ordering
+    /// that happened, and the failure it prevents (a dependent starting
+    /// against something forked but not yet answering) looked like the
+    /// dependent being broken.
+    ///
+    /// In the background rather than inline: only actual dependents should
+    /// wait, and a slow probe on one process must not delay every unrelated
+    /// process behind it.
+    fn watch_readiness(self: &Arc<Self>, cfg: &ProcessConfig) {
+        let Some(probe) = cfg.ready_probe.clone() else {
+            return;
+        };
+        let name = cfg.name.clone();
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            let interval = match &probe {
+                crate::config::ReadyProbe::Http { interval_secs, .. }
+                | crate::config::ReadyProbe::Tcp { interval_secs, .. }
+                | crate::config::ReadyProbe::Exec { interval_secs, .. } => (*interval_secs).max(1),
+            };
+            loop {
+                // Stop waiting on a process that is no longer coming up: a
+                // probe against something that has exited never passes, and
+                // looping on it hides the exit.
+                {
+                    let procs = this.processes.read().await;
+                    match procs.get(&name) {
+                        Some(p) => {
+                            let p = p.lock().await;
+                            if matches!(
+                                p.state,
+                                ProcessState::Stopped | ProcessState::Failed
+                            ) {
+                                return;
+                            }
+                        }
+                        None => return,
+                    }
+                }
+                if execute_ready_probe(&probe).await {
+                    let procs = this.processes.read().await;
+                    if let Some(p) = procs.get(&name) {
+                        p.lock().await.ready = true;
+                    }
+                    info!(process = %name, "ready");
+                    return;
+                }
+                tokio::time::sleep(Duration::from_secs(interval)).await;
+            }
+        });
     }
 
     async fn wait_for_dependencies(&self, deps: &[String]) {
@@ -182,7 +250,7 @@ impl Supervisor {
                     // stop on exit. A process meant to keep running and found
                     // stopped has not satisfied anything, and treating that as
                     // ready would start the dependent into a broken node.
-                    let satisfied = p.state == ProcessState::Running
+                    let satisfied = (p.state == ProcessState::Running && p.ready)
                         || (p.state == ProcessState::Stopped
                             && p.config.on_exit == crate::config::ExitAction::Stop);
                     if satisfied {
@@ -206,6 +274,8 @@ impl Supervisor {
         let config = {
             let mut proc = proc_arc.lock().await;
             proc.state = ProcessState::Starting;
+            // A restarted process is not ready until it says so again.
+            proc.ready = proc.config.ready_probe.is_none();
             proc.config.clone()
         };
 
@@ -669,6 +739,7 @@ impl Supervisor {
             kill_tx: None,
             stdin_tx: None,
             liveness_failures: 0,
+            ready: config.ready_probe.is_none(),
         }));
         self.processes.write().await.insert(config.name.clone(), proc);
     }
@@ -716,6 +787,50 @@ impl Supervisor {
 /// The client probes are made with. Built once.
 ///
 /// Certificate verification is off deliberately; see `execute_probe`.
+/// Run a readiness probe once.
+///
+/// Shares the liveness probe's client, and therefore its decision not to
+/// verify certificates: the question is whether the thing answers, and the
+/// supervisor already knows what it started.
+async fn execute_ready_probe(probe: &crate::config::ReadyProbe) -> bool {
+    use crate::config::ReadyProbe;
+    match probe {
+        ReadyProbe::Http { url, .. } => {
+            let Some(client) = probe_client() else {
+                return false;
+            };
+            match tokio::time::timeout(Duration::from_secs(5), client.get(url).send()).await {
+                Ok(Ok(resp)) => resp.status().is_success() || resp.status().is_redirection(),
+                _ => false,
+            }
+        }
+        ReadyProbe::Tcp { port, .. } => {
+            let addr = format!("127.0.0.1:{port}");
+            matches!(
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    tokio::net::TcpStream::connect(&addr)
+                )
+                .await,
+                Ok(Ok(_))
+            )
+        }
+        ReadyProbe::Exec { command, .. } => {
+            let mut parts = command.split_whitespace();
+            let Some(bin) = parts.next() else {
+                return false;
+            };
+            matches!(
+                tokio::process::Command::new(bin)
+                    .args(parts)
+                    .status()
+                    .await,
+                Ok(st) if st.success()
+            )
+        }
+    }
+}
+
 fn probe_client() -> Option<&'static reqwest::Client> {
     static CLIENT: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
     CLIENT
