@@ -4,6 +4,10 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-09-24
+- **docs:** #6 `docs/presentation.md` — a 13-slide Marp deck: purpose,
+  place in stormcos (stormcentral's relationships graph), moving parts,
+  features today, interfaces, how it ships, status, and planned work (open
+  issues, marked as not in the code); linked from the README
 - **fix:** #5 `config/example.toml` did not load — it still said
   `transport = "nats"` (NATS was removed; only `none | webhook` parse) and
   carried keys stormd ignores. Rewritten from `config.rs`, and a unit test
