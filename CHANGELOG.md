@@ -20,6 +20,9 @@
   the proxy code (what it forwards and what it does not); the Dracula style
   guide replaced by stormview's tokens. `enhancements/` → `docs/design/`, the
   shutdown note marked implemented except its SIGTERM step
+- **docs:** #5 CLAUDE.md — build via `sc-build` (not root@dev / the Mac),
+  how stormd ships, docs/ and nodevars in the key directories, DHCP notes
+  pointed at the cross-project reference (mkube is retired)
 - **docs:** #5 stale code comments — MinIO archival (gone; a run's file is
   renamed and pruned on the volume), and the conditions that turn auth on
 

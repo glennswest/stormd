@@ -313,14 +313,14 @@ golden, not written down). Findings from reading the code:
 - stormd ships as `/stormd` in every stormdbase golden (stormcos
   `build-goldens.sh` `stormdbase_stage`/`golden_stormd`; stormcentral registry
   kind `special`, "not a golden"). Authority: stormcos `docs/goldens.md`.
-- [ ] README rewritten from the code (config reference with real defaults,
+- [x] README rewritten from the code (config reference with real defaults,
       API/metrics/health, ports, build via sc-build, how it ships)
-- [ ] Plugin UI guide → `docs/plugin-ui.md` (stale Dracula style guide
+- [x] Plugin UI guide → `docs/plugin-ui.md` (stale Dracula style guide
       replaced by stormview tokens); shutdown enhancement → `docs/design/`
       marked implemented; `enhancements/` removed
-- [ ] `config/example.toml` fixed + parse test; stale code comments (MinIO
+- [x] `config/example.toml` fixed + parse test; stale code comments (MinIO
       archive, auth-on conditions)
-- [ ] CLAUDE.md build commands (sc-build, not root@dev / Mac), ships-in-golden
+- [x] CLAUDE.md build commands (sc-build, not root@dev / Mac), ships-in-golden
 - [ ] sc-build passes; issues filed for promises the code does not keep
 
 **Issue #2 — non-retryable exit codes (2026-08-30) ✅ done, v0.7.0.** stormconsole#3 was a
@@ -383,25 +383,40 @@ crates/stormd/     — the init/supervisor daemon
   src/components.rs  — component summary contract (UI feed)
   src/ws.rs          — WebSocket console/log/component streaming
   src/web.rs         — embedded SPA serving
-  src/config.rs      — TOML config types
+  src/config.rs      — TOML config types (config/example.toml is parse-tested)
+  src/nodevars.rs    — ${NODE_IP} / ${NODE_NAME} expansion at spawn
   src/shell/         — busybox-style applets
 crates/stormlog/   — log store, VT100 terminals, stormcast wire
 crates/stormsh/    — TUI client (ratatui)
 web/               — Svelte SPA source; web/dist is the built output (committed)
-config/            — example/deploy configs
+config/            — example.toml (every key; parsed by a unit test)
+docs/              — plugin-ui.md, design/ (proposals, with status)
 vendor/            — vendored russh-sftp
 ```
 
 ### Build & Test Commands
 ```bash
-# Frontend (on the Mac; commit web/dist)
-cd web && npm install && npm run build
+# Rust — push first, then from the checkout. Builds the pushed commit on
+# dev.g8.lo as an unprivileged user in a scratch dir; never build here, never
+# as root, and there is no checkout on dev.
+sc-build                          # cargo build && cargo test
+sc-build 'cargo test -p stormd'   # any command
+sc-build 'cargo clippy'
 
-# Rust — ALWAYS on root@dev.g8.lo (see ~/CLAUDE.md), never on the Mac
-cargo build --release
-cargo test
-cargo clippy
+# Frontend — commit web/dist (embedded by rust-embed)
+cd web && npm install && npm run build
 ```
+
+### How it ships
+stormd is not a golden of its own: it is `/stormd` in every stormdbase golden
+(stormcos `deploy/build-goldens.sh` `stormdbase_stage` / `golden_stormd`;
+stormcentral registry `kind = "special"`). Authority: stormcos
+`docs/goldens.md`. A commit reaches a node only when a component golden that
+pins it is rebuilt and released — `stormcentral component build <component>
+--url http://stormcentral.g8.lo`. Sibling crates (stormcast, stormview,
+stormpull) are pinned by `Cargo.lock`; a fix there needs `cargo update -p`.
+stormd's API port per container: fastetcd 9081, rustkube 9082–9085, service
+goldens port+100.
 
 ### Version Locations
 ```
@@ -515,39 +530,10 @@ curl -s -X DELETE http://192.168.10.252:8080/api/v1/zones/<zone_id>/records/<rec
 
 ### DHCP
 
-DHCP pools and reservations are configured via TOML config files, not REST API. Config files live in the microdns ConfigMap mounted into each DNS pod.
-
-```bash
-# Check DHCP status
-curl -s http://192.168.10.252:8080/api/v1/dhcp/status
-
-# List active leases
-curl -s http://192.168.10.252:8080/api/v1/leases
-```
-
-**To add/modify DHCP reservations**: Edit the microdns config in mkube's ConfigMap. The config is generated from `config/deploy/microdns-<network>.toml` in the microdns repo.
-
-DHCP reservation format in TOML config:
-```toml
-[[dhcp.v4.reservations]]
-mac = "AC:1F:6B:8A:A7:9C"
-ip = "192.168.10.10"
-hostname = "server1"
-```
-
-DHCP pool format:
-```toml
-[[dhcp.v4.pools]]
-range_start = "192.168.10.10"
-range_end = "192.168.10.210"
-subnet = "192.168.10.0/24"
-gateway = "192.168.10.1"
-dns = ["192.168.1.252"]
-domain = "g10.lo"
-lease_time_secs = 600
-next_server = "192.168.10.200"   # PXE TFTP server
-boot_file = "undionly.kpxe"       # PXE boot file
-```
+DHCP pools and reservations are database-driven and managed through each
+network's microdns REST API (TOML is first-boot bootstrap only; mkube is
+retired). See the DHCP section of the cross-project `~/src/CLAUDE.md` for the
+endpoints.
 
 ### Other Useful Endpoints
 
