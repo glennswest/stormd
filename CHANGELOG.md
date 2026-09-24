@@ -4,7 +4,7 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-09-24
-- **docs:** #6 `docs/presentation.md` — a 13-slide Marp deck: purpose,
+- **docs:** #6 `docs/presentation.md` — a 12-slide Marp deck: purpose,
   place in stormcos (stormcentral's relationships graph), moving parts,
   features today, interfaces, how it ships, status, and planned work (open
   issues, marked as not in the code); linked from the README

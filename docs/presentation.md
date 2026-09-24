@@ -51,7 +51,7 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 ```
 
 - **Also pinned at build time:** stormpull (image pulling, from the stormbase repo).
-- **Also runs under stormd, with no edge in the graph:** fastetcd,
+- **Also runs under stormd, with no edge in the graph (stormcentral#24):** fastetcd,
   rustkube-node and cadvisor. Their goldens are stormdbase goldens too.
 - **Not under stormd:** stormpump (the host PID 1), stormblock and the
   registry binary, which run bare.

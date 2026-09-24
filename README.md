@@ -11,7 +11,7 @@ stormconsole, cadvisor, stormlb and the rest (see [How it ships](#how-it-ships))
 This README is written from the code at v0.7.0. Where something is parsed but
 does nothing, it says so.
 
-A 13-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
+A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
 `npx @marp-team/marp-cli docs/presentation.md`).
 
 ## What it does today
