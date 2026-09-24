@@ -483,7 +483,7 @@ impl Supervisor {
             self.stormlog.emit_crash(name, exit_code).await;
         }
 
-        // Archive this run's logs to MinIO and free local disk space
+        // Close out this run's log file: renamed after the run, old runs pruned
         self.stormlog.archive_run(name, failed).await;
 
         if success {

@@ -3,6 +3,14 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-09-24
+- **fix:** #5 `config/example.toml` did not load — it still said
+  `transport = "nats"` (NATS was removed; only `none | webhook` parse) and
+  carried keys stormd ignores. Rewritten from `config.rs`, and a unit test
+  now parses and validates it so it cannot drift again
+- **docs:** #5 stale code comments — MinIO archival (gone; a run's file is
+  renamed and pruned on the volume), and the conditions that turn auth on
+
 ## [v0.7.0] — 2026-08-30
 
 ### 2026-08-30

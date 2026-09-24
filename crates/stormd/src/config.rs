@@ -326,8 +326,8 @@ pub struct ApiConfig {
     #[serde(default = "default_api_bind")]
     pub bind: String,
     /// Machine credential: `Authorization: Bearer <auth_token>` on any
-    /// request, and it also works as a login password. Setting either this
-    /// or `password` turns authentication on.
+    /// request, and it also works as the "admin" login password. Setting this,
+    /// `password`, or any `[[api.users]]` turns authentication on.
     #[serde(default)]
     pub auth_token: Option<String>,
     /// Legacy interactive credential — equivalent to a user named "admin"
@@ -504,5 +504,22 @@ impl Config {
             anyhow::bail!("backup enabled but destination_url not set");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shipped example is documentation, and documentation that stormd
+    /// refuses to start on is worse than none: it said `transport = "nats"`
+    /// for months after NATS was removed, and every copy of it failed to load.
+    #[test]
+    fn the_example_config_parses_and_validates() {
+        let c: Config = toml::from_str(include_str!("../../../config/example.toml"))
+            .expect("config/example.toml must parse");
+        c.validate().expect("config/example.toml must validate");
+        assert!(c.process.iter().any(|p| p.ready_probe.is_some()));
+        assert!(c.process.iter().any(|p| p.ui.is_some()));
     }
 }

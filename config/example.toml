@@ -1,35 +1,42 @@
 # stormd — Container Init Configuration
-# Place at /etc/stormd/config.toml (or specify with --config)
+# Place at /etc/stormd/config.toml (or specify with --config).
+#
+# Every key stormd reads is shown here, with its default. The full reference,
+# with what each one does, is the "Configuration reference" in README.md.
+# This file is parsed by a unit test (config::tests), so it cannot drift into
+# something stormd would refuse to start on.
 
 [general]
-name = "my-service"
-log_dir = "/var/log/stormd"
+name = "my-service"             # shown in the UI, event lines, metrics labels
+log_dir = "/var/log/stormd"     # per-process log files + .cloudid; point at a volume
+# cloud_id = "my-unique-id"     # else $STORM_CLOUD_ID, else {log_dir}/.cloudid, else a new UUID
+# theme = "storm"               # default web UI theme; a viewer's own pick wins
 
 [api]
-bind = "0.0.0.0:8080"
-# auth_token = "secret-token"    # Optional: require Bearer token for API
+bind = "0.0.0.0:9080"           # REST API, WebSockets, /metrics and the web UI
+# Any credential below turns authentication on.
+# auth_token = "secret-token"   # machine credential: Authorization: Bearer <token>
+# password = "changeme"         # legacy: user "admin" with this password
+# [[api.users]]
+# name = "ops"
+# password = "changeme"
+# [api.hosts]                   # Host: header on "/" -> redirect target
+# "manager.example.lo" = "/ui/"
 
-[log]
-max_size_bytes = 104857600  # 100MB
-max_files = 10
-timestamps = true
-json_format = false
+# --- Logging ---
 
-# --- StormLog (structured logging) ---
-
-# Where the lines are kept. Point log_dir at a volume and they outlive the
-# container; leave it on the image's filesystem and they do not.
+# Rotation and retention. The directory is [general] log_dir.
 [stormlog.file]
-log_dir = "/var/log/stormd"
 max_size_bytes = 104857600  # 100 MiB before a file rotates
 max_files = 10              # rotated generations kept, per process
 max_runs = 10               # finished runs kept, per process
 
-# Where they go on the network. Emitting only — a collector receives, stores
-# and indexes; see mcastsyslog. Defaults to the fleet group, so a container is
+# Where lines go on the network. Emitting only — a collector (mcastsyslog)
+# receives, stores and indexes. Defaults to the fleet group, so a container is
 # watchable with no configuration at all. Set to "off" to stay quiet.
 [stormlog.mcast]
 # group = "239.255.42.1:5514"
+# host = "node1"            # syslog HOSTNAME; defaults to this machine's hostname
 
 [stormlog.terminal]
 rows = 24
@@ -41,63 +48,84 @@ scrollback = 1000
 [ssh]
 enabled = true
 bind = "0.0.0.0:22"
-host_key = "/etc/stormd/host_key"
-password = "stormd"
-# authorized_keys = "/etc/stormd/authorized_keys"
+host_key = "/etc/stormd/host_key"   # generated (ed25519) if missing
+password = "stormd"                 # the cloud_id is accepted as well
+# owner = "my-namespace"            # turns on public-key auth from CloudID
+# cloudid_url = "http://169.254.169.254"
 
 # --- Supervised Processes ---
 
 [[process]]
-name = "miniminio"
-command = "/miniminio"
-args = ["--data-dir", "/data/minio"]
-env = { MINIO_ROOT_USER = "stormd", MINIO_ROOT_PASSWORD = "stormdpass" }
+name = "db"
+command = "/app/db"
+args = ["--data-dir", "/data/db", "--listen", "${NODE_IP}:5432"]  # ${NODE_IP}/${NODE_NAME} filled at spawn
 on_failure = "restart"
 restart_delay_secs = 3
 max_restarts = 10
+ready_probe = { type = "tcp", port = 5432, interval_secs = 2 }
+
+[process.liveness]
+type = "tcp"
+port = 5432
+interval_secs = 10
+timeout_secs = 5
+failure_threshold = 3
+initial_delay_secs = 5
 
 [[process]]
 name = "main-app"
 command = "/app/server"
 args = ["--port", "3000"]
+env = { DATABASE_URL = "postgres://127.0.0.1:5432/app" }
 on_failure = "restart"          # restart | fail | ignore
-restart_delay_secs = 5
+on_exit = "restart"             # restart | stop
+restart_delay_secs = 5          # base; doubles per restart in the window, capped at 30s
 max_restarts = 10
 restart_window_secs = 3600
 # Exits the process itself says a restart will not fix — a config it cannot
 # run on (sysexits 78 EX_CONFIG, 64 EX_USAGE). Not restarted, not counted;
 # the process is marked failed and on_no_restart decides the container.
-# no_restart_exit_codes = [78]
-# on_no_restart = "hold"        # hold (default) | fail
-depends_on = ["miniminio"]
+no_restart_exit_codes = [78]
+on_no_restart = "hold"          # hold (default) | fail
+depends_on = ["db"]             # waits until db is running and its ready_probe passed
 # startup_delay_secs = 0
 # working_dir = "/app"
-# env = { DATABASE_URL = "postgres://..." }
-# ready_probe = { type = "http", url = "http://localhost:3000/health", interval_secs = 2 }
+
+[process.liveness]
+type = "http"
+url = "http://127.0.0.1:3000/health"
+
+# Adds a tab to the web UI, reverse-proxied at /ui/proxy/main-app/
+[process.ui]
+label = "App"
+proxy = "http://127.0.0.1:3000"
+# host = "app.example.lo"       # Host: header on "/" -> this plugin's UI
+# summary = "http://127.0.0.1:3000/api/summary"
 
 [[process]]
-name = "sidecar"
-command = "/app/sidecar"
-on_failure = "ignore"
-depends_on = ["main-app"]
-startup_delay_secs = 2
+name = "migrate"
+command = "/app/migrate"
+on_failure = "fail"             # a failed migration fails the container
+on_exit = "stop"                # one-shot: done is done
+depends_on = ["db"]
 
 # --- Cron Jobs ---
 
 [[cron]]
 name = "cleanup"
-schedule = "0 0 * * * *"       # Every hour (sec min hour dom month dow)
+schedule = "0 0 * * * *"       # every hour (sec min hour dom month dow)
 command = "/app/cleanup"
-timeout_secs = 60
-capture_output = true
+args = []
+# env = { KEY = "value" }
+timeout_secs = 60              # default 300; recorded as failed after this (not killed)
+capture_output = true          # output logged as process "cron.cleanup" when the job ends
 
 # --- Events ---
+# Every event is written to the log regardless; this adds a webhook.
 
 [events]
 enabled = false
-transport = "nats"              # nats | webhook | both | none
-# nats_url = "nats://nats:4222"
-# nats_subject = "stormd.events"
+transport = "webhook"           # none | webhook
 # webhook_url = "http://monitor:9090/events"
 # webhook_headers = { "Authorization" = "Bearer token" }
 
@@ -105,15 +133,22 @@ transport = "nats"              # nats | webhook | both | none
 
 [backup]
 enabled = false
-on_failure = true               # Ship logs when container fails
-# destination_url = "http://backup:9091/upload"
+on_failure = true               # ship logs when the container fails
+# destination_url = "http://backup:9091/upload"   # required when enabled
 # headers = { "X-Container" = "my-service" }
-compress = true
+compress = true                 # tar.gz; false = plain tar
+
+# --- Image updater ---
+
+[updater]
+enabled = false
+poll_interval_secs = 60
+data_dir = "/data/images"
+rootfs_dir = "/data/rootfs"
 
 # --- Debug ---
 
 [debug]
 enabled = false
-allow_signal = false            # Allow sending signals via API
-allow_stdin = false             # Allow writing to process stdin via API
-dynamic_log_level = false
+allow_signal = false            # POST /api/v1/debug/processes/{name}/signal
+allow_stdin = false             # POST /api/v1/debug/processes/{name}/stdin

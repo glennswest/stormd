@@ -283,7 +283,7 @@ async fn main() {
         None
     };
 
-    // Auth: on only when [api] configures password or auth_token
+    // Auth: on only when [api] configures users, password or auth_token
     let auth_state = stormd::auth::AuthState::from_config(&config.api);
     if auth_state.is_some() {
         info!("API authentication enabled");

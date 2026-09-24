@@ -75,7 +75,7 @@ impl FileLogger {
     ///
     /// Renames `{process}.log` to a run-specific archive name and resets the
     /// writer so the next write creates a fresh file. Returns the path to the
-    /// renamed file (ready for upload to MinIO), or None if there's no file.
+    /// renamed file, or None if there's no file.
     pub async fn take_file(&self, process: &str, run_id: &str, failed: bool) -> Option<PathBuf> {
         let mut writers = self.writers.lock().await;
         writers.remove(process);
@@ -106,7 +106,6 @@ impl FileLogger {
     }
 
     /// Remove any old rotated files for a process to free disk space.
-    /// Called after a successful archive to MinIO.
     pub fn cleanup_rotated(&self, process: &str) {
         let dir = &self.config.log_dir;
         for i in 1..=self.config.max_files {

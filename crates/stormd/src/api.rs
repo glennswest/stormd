@@ -461,7 +461,7 @@ async fn ingest_log(
     Ok(Json(serde_json::json!({ "status": "ingested" })))
 }
 
-// --- Stored logs (MinIO) ---
+// --- Stored logs (what is on the log volume) ---
 
 #[derive(Debug, Deserialize)]
 struct StoredLogQuery {

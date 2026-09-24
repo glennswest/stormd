@@ -44,7 +44,7 @@ pub async fn cmd_logs(state: &Arc<AppState>, args: &[&str]) -> ShellOutput {
     match state.stormlog.query_logs(&query).await {
         Ok(entries) => {
             if entries.is_empty() {
-                ShellOutput::text("(no stored logs — MinIO may not be configured)\r\n")
+                ShellOutput::text("(no stored logs)\r\n")
             } else {
                 let mut out = String::new();
                 for entry in entries {
