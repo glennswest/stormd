@@ -298,6 +298,31 @@ the plugin summary merge).
 
 ### In Progress
 
+**Issue #5 — docs rewritten from the code (2026-09-24).** Owner: every
+component re-derives its docs from the source. Also closes #4 (ships in a
+golden, not written down). Findings from reading the code:
+- `config/example.toml` does not parse — `transport = "nats"` (NATS is gone;
+  only `none | webhook`). Fix it, and add a test that parses it so it cannot
+  drift again.
+- Parsed-but-ignored keys: `[general] pid_file`, all of `[log]`,
+  `[ssh] authorized_keys`, `[debug] dynamic_log_level`, `[process]
+  capture_stdout/capture_stderr`, `[updater] registry`, `[stormlog.file]
+  log_dir` (overridden by `[general] log_dir`). Documented as such; issue filed.
+- Updater never starts an image-tracked process whose rootfs already exists
+  (e.g. after stormd restarts) — issue filed.
+- stormd ships as `/stormd` in every stormdbase golden (stormcos
+  `build-goldens.sh` `stormdbase_stage`/`golden_stormd`; stormcentral registry
+  kind `special`, "not a golden"). Authority: stormcos `docs/goldens.md`.
+- [ ] README rewritten from the code (config reference with real defaults,
+      API/metrics/health, ports, build via sc-build, how it ships)
+- [ ] Plugin UI guide → `docs/plugin-ui.md` (stale Dracula style guide
+      replaced by stormview tokens); shutdown enhancement → `docs/design/`
+      marked implemented; `enhancements/` removed
+- [ ] `config/example.toml` fixed + parse test; stale code comments (MinIO
+      archive, auth-on conditions)
+- [ ] CLAUDE.md build commands (sc-build, not root@dev / Mac), ships-in-golden
+- [ ] sc-build passes; issues filed for promises the code does not keep
+
 **Issue #2 — non-retryable exit codes (2026-08-30) ✅ done, v0.7.0.** stormconsole#3 was a
 config-parse failure that stormd restarted `max_restarts` times, failed the
 container, and stormpump restarted for hours; `handle_exit` reduces every
