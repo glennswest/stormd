@@ -8,6 +8,18 @@
   `transport = "nats"` (NATS was removed; only `none | webhook` parse) and
   carried keys stormd ignores. Rewritten from `config.rs`, and a unit test
   now parses and validates it so it cannot drift again
+- **docs:** #5 README rewritten from the code: every config key with its
+  real default (several were wrong, e.g. `max_restarts` is 10 not 100), keys
+  that are parsed but do nothing marked as such, ready probes, the restart
+  cooloff, `${NODE_IP}`, `/metrics`, ports, auth, the SSH exec/scp limits, and
+  that stop/restart/shutdown are SIGKILL. NATS, MinIO and the stale stormdbase
+  project list are gone. New "How it ships" section — stormd is `/stormd` in
+  every stormdbase golden, with stormcos `docs/goldens.md` as the authority
+  (#4). Building is `sc-build` on dev
+- **docs:** #5 plugin UI guide moved to `docs/plugin-ui.md`, rewritten from
+  the proxy code (what it forwards and what it does not); the Dracula style
+  guide replaced by stormview's tokens. `enhancements/` → `docs/design/`, the
+  shutdown note marked implemented except its SIGTERM step
 - **docs:** #5 stale code comments — MinIO archival (gone; a run's file is
   renamed and pruned on the volume), and the conditions that turn auth on
 

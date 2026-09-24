@@ -1,990 +1,677 @@
 # stormd
 
-Container init system for scratch images. A single static binary that replaces shell, systemd, and cron inside minimal containers. SSH in, manage processes, tail logs, view a web dashboard — like a real Linux server, in 9 MB.
+A container init for scratch images: one static binary that is PID 1,
+supervises one or more processes, keeps their logs, and answers questions
+about them over a REST API, a web console, SSH and a TUI client.
 
-## Using stormdbase as a base image
+In stormcos, stormd is PID 1 of every supervised component container —
+fastetcd, the rustkube control plane, the kubelet, stormdrive, stormstorage,
+stormconsole, cadvisor, stormlb and the rest (see [How it ships](#how-it-ships)).
 
-The easiest way to use stormd is to build `FROM stormdbase` — a multi-arch scratch image (arm64 + amd64) that includes stormd, stormsh, and 63 busybox-style command symlinks pre-installed in `/bin`, `/usr/bin`, `/sbin`, and `/usr/sbin`. The container runtime picks the right architecture automatically.
+This README is written from the code at v0.7.0. Where something is parsed but
+does nothing, it says so.
 
-**Registry:** `registry.gt.lo:5000/stormdbase:latest`
+## What it does today
 
-### Example: web service with liveness probe
+- **Supervises processes** — start order with `depends_on` and ready probes,
+  restart policies for crashes (`on_failure`) and clean exits (`on_exit`), an
+  escalating restart delay capped at 30 s, a restart budget per window, and
+  exit codes a process can declare not worth retrying (`no_restart_exit_codes`).
+- **Liveness probes** — HTTP or TCP; on failure, SIGUSR1, 5 s grace, then
+  SIGKILL, and the restart policy takes over.
+- **Fills in node values** — `${NODE_IP}` and `${NODE_NAME}` in a process's
+  `args` and `env` values are expanded each time it is spawned.
+- **Logs** — stdout/stderr per process to a rotated file on the log volume,
+  each run's file kept (and pruned) when it exits, every line on the fleet's
+  multicast syslog group (the [stormcast](https://github.com/glennswest/stormcast)
+  wire), a VT100 screen per process, and live streams to follow.
+- **Events** — lifecycle events written to the log always, and optionally
+  POSTed to a webhook.
+- **REST API + WebSockets + Prometheus `/metrics`** on one port (default 9080).
+- **Web console** — a Svelte SPA embedded in the binary at `/ui/`, rendered
+  from the same component feed as the TUI; plugin tabs for supervised
+  processes that have their own UI.
+- **SSH server** — a management shell (process control, logs, attach, 60-odd
+  file/network/system commands, pipes and redirection) and an SFTP subsystem.
+- **Busybox-style multi-call binary** — 63 commands through `argv[0]` symlinks,
+  so a scratch container has `ls`, `cat`, `curl`, `ping`, … .
+- **Cron** — 6-field (seconds-first) schedules.
+- **Log backup** — tar(.gz) the log directory and POST it somewhere when the
+  container fails, or on demand.
+- **OCI image updater** — processes with an `image` are pulled, unpacked into a
+  rootfs directory, and swapped when the registry digest changes.
+- **PID 1 duties** — reaps zombies, handles SIGTERM/SIGINT, writes a few
+  network sysctls, and has a `--healthcheck` mode for Docker `HEALTHCHECK`.
+
+## Workspace
+
+```
+crates/stormd/    the init/supervisor daemon (binary + lib)
+  src/main.rs         startup, CLI, PID 1 duties, shutdown
+  src/config.rs       every config key and its default
+  src/supervisor.rs   process lifecycle, restart policy, probes
+  src/nodevars.rs     ${NODE_IP} / ${NODE_NAME}
+  src/api.rs          REST router, /metrics, plugin proxy
+  src/auth.rs         login, sessions, bearer token
+  src/components.rs   component-summary feed (both dashboards)
+  src/ws.rs           WebSocket console / logs / components
+  src/web.rs          embedded SPA
+  src/ssh.rs sftp.rs  SSH server, SFTP subsystem
+  src/shell/          SSH shell and busybox applets
+  src/cron.rs events.rs backup.rs updater.rs cloudid.rs stats.rs debug.rs
+crates/stormlog/  logging: rotated files, multicast emit, VT100, streams
+crates/stormsh/   TUI client (ratatui)
+web/              Svelte 5 SPA source; web/dist is the built output (committed)
+config/           example.toml — every key, parsed by a unit test
+docs/             plugin UI guide, design notes
+vendor/           vendored russh-sftp
+```
+
+Versions: stormd 0.7.0, stormsh 0.4.0, stormlog 0.3.0 (each crate's
+`Cargo.toml`).
+
+## Building
+
+**Builds run on the build box, never on this VM and never as root.** Push
+first, then from the checkout:
+
+```bash
+sc-build                         # cargo build && cargo test, on dev.g8.lo
+sc-build 'cargo test -p stormd'  # any command
+```
+
+`sc-build` fetches the pushed commit onto `dev.g8.lo` as an unprivileged build
+user, builds in a scratch directory and deletes it. A failure files a
+`build-failure` issue here. Uncommitted changes are refused — it builds what
+is on GitHub. Linux only matters: the PID 1, signal and `/proc` code is
+`cfg(target_os = "linux")`, and a macOS build skips it.
+
+Release binaries are static musl (`x86_64-unknown-linux-musl`,
+`aarch64-unknown-linux-musl`, `armv7-unknown-linux-musleabihf`; linkers in
+`.cargo/config.toml`). The release profile strips, uses LTO and
+`panic = "abort"`.
+
+**The web UI** is built separately and committed: `cd web && npm install &&
+npm run build` writes `web/dist`, which `rust-embed` compiles into the stormd
+binary, so a cargo-only build needs no node. The UI system (themes,
+`DataGrid`, `ComponentCard`, …) is the
+[stormview](https://github.com/glennswest/stormview) npm package, pinned in
+`web/package-lock.json`; `npm update stormview` picks up a new commit. The
+Rust contract types come from the same repo as a git dependency. To develop
+against a running stormd: `cd web && STORMD_URL=http://host:9080 npm run dev`.
+
+Sibling dependencies are git dependencies pinned in `Cargo.lock`: stormcast
+(log wire), stormview (UI contract), stormpull (from the stormbase repo, for
+the updater). A fix in one of them does not arrive here until `cargo update -p
+<name>` and a commit of the lock file.
+
+## How it ships
+
+stormd is **not a golden of its own**. It is `/stormd` inside every
+*stormdbase* golden — the base each supervised component golden is built on.
+stormcentral's component registry lists it as `kind = "special"`, recipe "not a
+golden: /stormd in every stormdbase golden".
+
+The authority for how goldens are built is
+[stormcos `docs/goldens.md`](https://github.com/glennswest/stormcos/blob/main/docs/goldens.md).
+In short, stormcos `deploy/build-goldens.sh` (and stormcentral's golden
+builder, which mirrors it and pins the stormd commit per build):
+
+- builds stormd static for musl from this repo;
+- `stormdbase_stage`: `/stormd`, applet links in `/bin` and `/usr/bin`
+  (relative targets, `../stormd`, because a golden is mounted as a clone and an
+  absolute target only resolves when the root is `/`), `/etc/stormd`,
+  `/var/log/stormd` as the log volume's mount point;
+- adds the component binary and `/etc/stormd/config.toml`, appends log limits
+  sized to the 64 MiB log volume (`max_size_bytes = 8388608`, `max_files = 3`,
+  `max_runs = 5`), and seals a deterministic tar into the golden;
+- the container's `argv` is `/stormd`, and it reads `/etc/stormd/config.toml`.
+
+So **a commit here reaches a node only when a new golden (and release) is
+built** that picks it up. After work is pushed and sc-build passes, request
+it with `stormcentral component build <component> --url
+http://stormcentral.g8.lo` for the component whose golden should carry it.
+
+### stormd's API port on a node
+
+Every stormd on a node shares the host network, so each has its own port:
+
+| Container | stormd API |
+|---|---|
+| fastetcd | 9081 |
+| rustkube-apiserver / controller-manager / scheduler | 9082 / 9083 / 9084 |
+| rustkube-node (kubelet, kube-proxy) | 9085 |
+| `kind = "service"` goldens (stormdrive, stormstorage, stormconsole, cadvisor, stormlb, …) | the service's port + 100 (stormdrive 9192, stormstorage 9193, stormconsole 9194) |
+
+A service golden's config also sets `no_restart_exit_codes = [78]` and an HTTP
+liveness probe on the service's health path.
+
+### Standalone container image
+
+`Containerfile` (arm64), `Containerfile.x86_64` and `Containerfile.armv7` build
+a scratch *stormdbase* OCI image from a prebuilt musl binary — stormd, stormsh
+and the applet links in `/bin`, `/usr/bin`, `/sbin`, `/usr/sbin` — with
+`HEALTHCHECK /stormd --healthcheck` and `ENTRYPOINT ["/stormd"]`. Use it as
+`FROM` for a container outside stormcos:
 
 ```dockerfile
-FROM registry.gt.lo:5000/stormdbase:latest
+FROM stormdbase
 COPY my-app /app/server
 COPY config.toml /etc/stormd/config.toml
-EXPOSE 9080 8080 22
 ENTRYPOINT ["/stormd"]
 ```
 
-`config.toml`:
-
-```toml
-[general]
-name = "my-service"
-log_dir = "/var/stormd/logs"
-
-[api]
-bind = "0.0.0.0:9080"
-
-[ssh]
-enabled = true
-bind = "0.0.0.0:22"
-password = "changeme"
-
-[stormlog.terminal]
-rows = 50
-cols = 120
-
-[[process]]
-name = "web"
-command = "/app/server"
-args = ["--port", "8080"]
-on_failure = "restart"
-on_exit = "restart"
-restart_delay_secs = 2
-
-[process.liveness]
-type = "http"
-url = "http://localhost:8080/health"
-interval_secs = 10
-initial_delay_secs = 10
-```
-
-Build and run:
-
-```bash
-podman build --format docker -t my-service .
-podman run -d --name my-service \
-  -p 9080:9080 -p 8080:8080 -p 2222:22 \
-  my-service
-
-# Open dashboard
-open http://localhost:9080/ui/
-
-# SSH in — full shell with ls, cat, grep, curl, ping, etc.
-ssh root@localhost -p 2222
-
-# Get the instance cloud_id (auto-generated, also works as SSH password)
-curl -s http://localhost:9080/api/v1/cloudid | jq -r .cloud_id
-
-# SCP files into the container
-scp -P 2222 mydata.tar.gz root@localhost:/data/
-
-# SFTP session
-sftp -P 2222 root@localhost
-```
-
-That's it. Your final image has a process supervisor, SSH server, web dashboard, REST API, liveness health checks, SCP/SFTP file transfer, and 63 Unix commands — all from a single static binary.
-
-### Example: multi-process with per-process logging
-
-Each `[[process]]` gets its own log stream, VT100 terminal, log archive, and liveness probe.
-
-```dockerfile
-FROM registry.gt.lo:5000/stormdbase:latest
-COPY api-server /app/api
-COPY worker /app/worker
-COPY config.toml /etc/stormd/config.toml
-EXPOSE 9080 8080 22
-ENTRYPOINT ["/stormd"]
-```
-
-```toml
-[general]
-name = "my-stack"
-log_dir = "/var/stormd/logs"
-
-[api]
-bind = "0.0.0.0:9080"
-
-[ssh]
-enabled = true
-bind = "0.0.0.0:22"
-password = "changeme"
-
-[stormlog.terminal]
-rows = 50
-cols = 120
-
-[[process]]
-name = "api"
-command = "/app/api"
-args = ["--port", "8080"]
-on_failure = "restart"
-on_exit = "restart"
-
-[process.liveness]
-type = "http"
-url = "http://localhost:8080/health"
-interval_secs = 10
-
-[[process]]
-name = "worker"
-command = "/app/worker"
-args = ["--concurrency", "4"]
-on_failure = "restart"
-on_exit = "stop"
-depends_on = ["api"]
-```
-
-Per-process logging:
-- Separate log files: `/var/stormd/logs/api.log`, `/var/stormd/logs/worker.log`
-- Separate VT100 terminals viewable in web UI or via `attach api` in SSH
-- Separate archived runs on the log volume (per-process, per-run)
-- Filterable in logs UI: `?process=api` or `?process=worker`
-
-SSH shell usage:
-```bash
-ps                  # see both processes with status
-logs api            # view api logs only
-logs worker         # view worker logs only
-logs -f             # follow all logs
-logs -f api         # follow api logs only
-restart worker      # restart just the worker
-```
-
-### Building stormdbase
-
-```bash
-# ARM64 (Apple Silicon, Raspberry Pi, MikroTik)
-cargo build --release --target aarch64-unknown-linux-musl
-podman build --format docker --platform linux/arm64 -t stormdbase-arm64 -f Containerfile .
-
-# x86_64
-cargo build --release --target x86_64-unknown-linux-musl
-podman build --format docker --platform linux/amd64 -t stormdbase-amd64 -f Containerfile.x86_64 .
-
-# Create multi-arch manifest and push
-podman manifest create stormdbase:latest
-podman manifest add stormdbase:latest localhost/stormdbase-arm64:latest --arch arm64
-podman manifest add stormdbase:latest localhost/stormdbase-amd64:latest --arch amd64
-podman manifest push --all --tls-verify=false stormdbase:latest registry.gt.lo:5000/stormdbase:latest
-```
-
-### Projects using stormdbase
-
-| Project | Description | Image |
-|---------|-------------|-------|
-| **netwatch** | Network monitoring and topology mapping | `registry.gt.lo:5000/netwatch:edge` |
-| **microdns** | DNS/DHCP server with REST API | `registry.gt.lo:5000/microdns:edge` |
-| **miniminio** | Minimal MinIO S3 gateway | `registry.gt.lo:5000/miniminio:edge` |
-| **rust4git** | Git web interface | `registry.gt.lo:5000/rust4git:edge` |
-| **mkube** | Container orchestrator | `registry.gt.lo:5000/mkube:edge` |
-
-## What it does
-
-- **Process supervisor** — launches and monitors one or more binaries with configurable restart policies
-- **Web dashboard** — browser-based process management, memory charts, mount usage, restart history at `/ui/`
-- **Plugin UI** — managed processes add custom tabs to the web UI via `[process.ui]` config, with reverse proxy and style guide
-- **SSH server** — built-in SSH with a bash-like management shell (process control, log tailing, tab completion)
-- **VT100 terminals** — per-process terminal emulation, viewable via SSH, WebSocket, or web UI
-- **Structured logging** — severity detection shared with the fleet ([stormcast](https://github.com/glennswest/stormcast)), a rotated file per process on the log volume, RFC 5424 multicast to the fleet group, broadcast streams to follow
-- **Log archival** — a run's file is named after the run on exit, failed or exited, and the run history is browsable in the UI. Old runs are pruned so a crash loop cannot fill the volume with the record of what went wrong.
-- **Stdio capture** — captures stdout/stderr with automatic severity detection (PANIC/FATAL/ERROR/WARN)
-- **Cron scheduler** — run commands on cron schedules
-- **OCI image updater** — automatic image updates with blue/green rootfs pivot via stormpull
-- **REST API** — full control plane for status, process management, logs, terminals, plugins, and debug
-- **Graceful shutdown** — `POST /api/v1/shutdown` stops all processes and exits with optional exit code
-- **Event system** — push events to NATS or webhooks when processes start/stop/crash
-- **Liveness probes** — HTTP and TCP health checks with automatic restart on failure (SIGUSR1 grace, then SIGKILL)
-- **Busybox commands** — 63 built-in Unix commands (ls, cat, grep, curl, ping, etc.) via argv[0] symlinks
-- **Cloud ID** — per-instance unique identifier usable as SSH password; set via config, env var, or auto-generated UUID
-- **CloudID SSH key auth** — fetches SSH public keys from CloudID metadata service (169.254.169.254) for passwordless login; 30s auto-refresh
-- **SFTP/SCP** — built-in SFTP subsystem enables `scp` and `sftp` file transfers into and out of containers
-- **Docker HEALTHCHECK** — `stormd --healthcheck` probes the running instance for use in scratch containers
-- **PID 1** — proper zombie reaping, signal handling, and network sysctl init for scratch containers
-
-## Workspace structure
+## Running
 
 ```
-stormd/
-  Cargo.toml                   # workspace root
-  crates/
-    stormd/                    # main binary — init, supervisor, API, SSH server, web UI
-    stormlog/                  # library — VT100, rotated files, multicast emit, streams
-    stormsh/                   # CLI — TUI console client
+stormd [--config PATH]           # default /etc/stormd/config.toml
+stormd --healthcheck [--healthcheck-port 9080]
+stormd --install DIR             # create applet symlinks in DIR, exit
+stormd --list-commands           # print the applet names, exit
+stormd --version
 ```
 
-## Quick start
-
-### Build
-
-```bash
-# Debug build (all crates)
-cargo build
-
-# Static musl release (x86_64)
-cargo build --release --target x86_64-unknown-linux-musl
-
-# Static musl release (ARM64 — for MikroTik, Raspberry Pi, etc.)
-cargo build --release --target aarch64-unknown-linux-musl
-
-# Without NATS support
-cargo build --release --no-default-features
-```
-
-### Run
-
-```bash
-./target/release/stormd --config /etc/stormd/config.toml
-```
-
-### Access
-
-```bash
-# Web dashboard
-open http://localhost:9080/ui/
-
-# SSH into the container (default password: stormd)
-ssh root@localhost -p 22
-
-# REST API
-curl http://localhost:9080/api/v1/status | jq
-```
-
-## Example: scratch container with your app
-
-This example shows how to package stormd with your own application binary in a scratch container. No OS, no shell, no package manager — just your binary and stormd.
-
-### 1. Build stormd and your app
-
-```bash
-# Build stormd for your target architecture
-cargo build --release --target aarch64-unknown-linux-musl
-
-# Build your app as a static binary too
-# (your app's build process here)
-```
-
-### 2. Write a config file
-
-Create `config.toml`:
-
-```toml
-[general]
-name = "my-service"
-log_dir = "/var/stormd/logs"
-
-[api]
-bind = "0.0.0.0:9080"
-
-[ssh]
-enabled = true
-bind = "0.0.0.0:22"
-password = "changeme"
-
-[stormlog.terminal]
-rows = 50
-cols = 120
-
-[[process]]
-name = "my-app"
-command = "/app/server"
-args = ["--port", "8080"]
-env = { DATABASE_URL = "postgres://db:5432/mydb", LOG_LEVEL = "info" }
-on_failure = "restart"          # restart on crash
-on_exit = "restart"             # restart on clean exit too (long-running service)
-restart_delay_secs = 2
-max_restarts = 50
-restart_window_secs = 3600
-```
-
-### 3. Write a Containerfile
-
-```dockerfile
-FROM scratch
-COPY stormd /stormd
-COPY my-app /app/server
-COPY config.toml /etc/stormd/config.toml
-EXPOSE 9080 8080 22
-ENTRYPOINT ["/stormd"]
-```
-
-### 4. Build and run the container
-
-```bash
-# Build with podman (or docker)
-podman build -t my-service:latest .
-
-# Run it
-podman run -d --name my-service \
-  -p 9080:9080 \
-  -p 8080:8080 \
-  -p 2222:22 \
-  -v my-service-data:/var/stormd \
-  my-service:latest
-```
-
-### 5. Manage it
-
-```bash
-# Open the web dashboard
-open http://localhost:9080/ui/
-
-# SSH in and manage processes
-ssh root@localhost -p 2222
-# password: changeme
-
-# Inside the SSH shell:
-ps                    # list processes
-logs my-app           # view recent logs
-logs -f my-app        # follow logs in realtime
-restart my-app        # restart the process
-status                # full system status
-```
-
-### Multi-process example
-
-stormd can supervise multiple processes with dependency ordering:
-
-```toml
-[general]
-name = "full-stack"
-log_dir = "/var/stormd/logs"
-
-[api]
-bind = "0.0.0.0:9080"
-
-[ssh]
-enabled = true
-bind = "0.0.0.0:22"
-password = "changeme"
-
-# Logs. Point log_dir at a volume and they outlive the container.
-[stormlog.file]
-log_dir = "/var/stormd/logs"
-
-[[process]]
-name = "api-server"
-command = "/app/server"
-args = ["--port", "8080"]
-on_failure = "restart"
-on_exit = "restart"
-
-# Worker process depends on main API
-[[process]]
-name = "worker"
-command = "/app/worker"
-args = ["--concurrency", "4"]
-on_failure = "restart"
-on_exit = "stop"                # don't restart workers on clean exit
-depends_on = ["api-server"]
-
-# Periodic cleanup job
-[[cron]]
-name = "cleanup"
-schedule = "0 0 * * * *"       # every hour
-command = "/app/cleanup"
-```
-
-```dockerfile
-FROM scratch
-COPY stormd /stormd
-COPY server /app/server
-COPY worker /app/worker
-COPY cleanup /app/cleanup
-COPY config.toml /etc/stormd/config.toml
-VOLUME /var/stormd/logs
-EXPOSE 9080 8080 22
-ENTRYPOINT ["/stormd"]
-```
-
-## SSH shell commands
-
-```
-ps              — list supervised processes (colored status, liveness column)
-start <name>    — start a process
-stop <name>     — stop a process
-restart <name>  — restart a process
-attach <name>   — attach to process VT100 terminal
-logs [name]     — show recent logs
-logs -f [name]  — follow logs realtime
-grep <pattern>  — search logs
-liveness [name] — show liveness probe status and config
-cron            — list cron jobs
-status          — full system status (includes liveness health summary)
-uptime          — container uptime
-env             — environment variables
-whoami          — current user (root)
-hostname        — container name
-df              — storage usage
-free            — memory info
-dmesg           — query all process logs from stormlog
-systemctl       — systemd emulation (start/stop/restart/status/list-units)
-help            — list commands
-exit            — close SSH session
-```
-
-Shell features: tab completion, command history, colorized output, piping (`logs | grep error`), redirection (`cmd > file`, `cmd >> file`).
-
-## Web UI
-
-The web UI is a Svelte SPA embedded in the stormd binary (built from `web/`,
-~24 KB gzipped, no node at runtime), served at `/ui/`.
-
-| Page | Route | Description |
-|------|-------|-------------|
-| Dashboard | `/ui/#/` | Every component of the system as a live card — health, one-line detail, headline metrics, actions — plus the memory chart |
-| Terminal | `/ui/#/terminal` | Live VT100 terminal output per process |
-| Logs | `/ui/#/logs` | Log viewer with severity/stream filters, search, run selector for crash history |
-| Process | `/ui/#/process/{name}` | One process: its card plus its live terminal |
-| Plugin | `/ui/#/ext/{name}` | Custom app UI served via reverse proxy with stormd nav chrome |
-
-The pre-SPA URLs (`/ui/terminal`, `/ui/logs`, `/ui/ext/{name}`) redirect to
-their hash routes, so old bookmarks keep working.
-
-The dashboard renders the component-summary feed (`/api/v1/components`, pushed
-live over `/ws/components`) generically: a subsystem that reports a summary
-appears as a card with no frontend changes, and stormsh's dashboard renders
-the same feed as TUI tiles. The contract types live in the shared
-[stormview](https://github.com/glennswest/stormview) crate. To develop the UI
-against a running stormd: `cd web && STORMD_URL=http://host:9080 npm run dev`;
-`npm run build` writes `web/dist`, which is committed and embedded at the next
-cargo build.
-
-**Themes** — eight built in: Storm (Tokyo Night-based default), Midnight,
-Catppuccin Mocha, Rosé Pine, Nord, Solar, Phosphor, and Light, picked from
-the nav bar and remembered per browser. `[general] theme = "rose"` sets the
-instance default, which a viewer's own pick overrides. A theme is one block
-of CSS token overrides in stormview's `themes.css` — colors, ANSI palette
-for rendered output, chart colors — so adding a theme is adding a block.
-
-**Grid view** — the dashboard toggles between cards and a relational grid.
-Components carry typed relations (`has_one`, `has_many`, `belongs_to`) between
-ids in the feed; the grid nests child grids along `has_many`/`has_one` edges
-(system → processes → their update images), rows multi-select for bulk
-start/stop/restart, and `has_many` edges render as "select from a
-relationship" pickers. A ⊞ on any card opens `#/grid` rooted at that
-component or one of its relationships.
-
-**The UI system is the stormview npm package** — themes, `DataGrid`,
-`ComponentCard`, `ComponentGrid`, `RelationPicker`, `HealthDot`, and the
-shared helpers all live in the same repo as the contract
-([stormview](https://github.com/glennswest/stormview), installed from git),
-so stormdrive and stormconsole consume the identical UI system. stormd's
-`web/` keeps only the app: routing, stores, auth, and views. After pushing a
-stormview change, run `npm update stormview` here to pick up the new commit.
-
-**Login** — off by default. Configuring `[[api.users]]` (name + password),
-the legacy `[api] password` (the "admin" user), and/or `[api] auth_token`
-(machine bearer token, also valid as admin's login) turns authentication on:
-the UI shows a user/password screen, sessions are HttpOnly cookies
-(in-memory, 24h), the signed-in user shows in the nav, and every endpoint
-except `/api/v1/health`, `/metrics`, the auth endpoints and the static
-assets requires a session or `Authorization: Bearer <token>`. The plugin
-proxy is protected. stormsh passes the token with `-t`/`--token` or
-`STORMD_TOKEN`.
-
-### Plugin UI
-
-Any managed process can add its own tab to the stormd web UI without recompiling stormd. Add a `[process.ui]` section to your process config:
-
-```toml
-[[process]]
-name = "myapp"
-command = "/app/myapp"
-args = ["--port", "3000"]
-
-[process.ui]
-label = "My App"
-proxy = "http://127.0.0.1:3000"
-# Optional: the plugin's own component summary, merged into its dashboard
-# card (JSON with any of health/detail/metrics; best-effort, 400ms timeout)
-summary = "http://127.0.0.1:3000/api/summary"
-```
-
-A `summary` endpoint returns JSON like:
-
-```json
-{
-  "health": "ok",
-  "detail": "serving 42 clients",
-  "metrics": [
-    { "label": "clients", "value": "42", "tone": "accent" },
-    { "label": "queue", "value": "0", "tone": "muted" }
-  ]
-}
-```
-
-Every field is optional — `health` and `detail` replace the supervisor's
-process-level view of the plugin's card, `metrics` append after it. Tones are
-`ok`, `warn`, `error`, `muted`, `accent`.
-
-This adds a "My App" tab to the nav bar. When clicked, stormd serves a page with its nav chrome and an iframe. The iframe content is reverse-proxied through stormd at `/ui/proxy/myapp/`, so:
-
-- Same-origin — no CORS issues, cookies and fetch work naturally
-- The app doesn't need to be directly reachable from the browser
-- All HTTP methods are forwarded (GET, POST, PUT, DELETE, PATCH)
-- Content-type headers are preserved (HTML, CSS, JS, JSON, images all work)
-
-The proxy path structure:
-```
-/ui/ext/myapp          → stormd nav + iframe (what the user sees)
-/ui/proxy/myapp/       → proxied to http://127.0.0.1:3000/
-/ui/proxy/myapp/foo    → proxied to http://127.0.0.1:3000/foo
-/ui/proxy/myapp/api/x  → proxied to http://127.0.0.1:3000/api/x
-```
-
-#### Example: app with its own UI
-
-```toml
-[general]
-name = "my-stack"
-
-[[process]]
-name = "api"
-command = "/app/api"
-args = ["--port", "8080"]
-
-[[process]]
-name = "admin"
-command = "/app/admin-ui"
-args = ["--port", "3001"]
-
-[process.ui]
-label = "Admin"
-proxy = "http://127.0.0.1:3001"
-
-[[process]]
-name = "grafana"
-command = "/app/grafana-server"
-args = ["--homepath", "/app/grafana"]
-
-[process.ui]
-label = "Metrics"
-proxy = "http://127.0.0.1:3002"
-```
-
-This gives you five tabs: Dashboard, Terminal, Logs, Admin, Metrics.
-
-#### Style guide for plugin UIs
-
-Plugin UIs render inside an iframe that fills the viewport below stormd's 48px nav bar. To match stormd's visual style:
-
-**Colors (Dracula-inspired dark theme):**
-```css
-/* Background and text */
-body { background: #0f0f1a; color: #e0e0e0; }
-
-/* Accent colors */
---red:    #e94560;    /* errors, danger, brand */
---green:  #50fa7b;    /* success, running, healthy */
---yellow: #f1fa8c;    /* warnings, caution */
---cyan:   #8be9fd;    /* links, info, accents */
---pink:   #ff79c6;    /* highlights */
---purple: #6272a4;    /* muted accents */
-
-/* Surfaces */
---surface:    #16192e;   /* cards, nav, panels */
---border:     #2a2d45;   /* borders, dividers */
---hover:      #1e2140;   /* hover backgrounds */
---active:     #2a2d50;   /* active/selected state */
---input-bg:   #1a1d32;   /* form input backgrounds */
-```
-
-**Typography:**
-```css
-/* System font stack */
-font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
-
-/* Monospace (for code, logs, data) */
-font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-```
-
-**Component patterns:**
-```css
-/* Cards */
-.card {
-    background: #16192e;
-    border: 1px solid #2a2d45;
-    border-radius: 8px;
-    padding: 16px 20px;
-}
-
-/* Buttons */
-button {
-    background: #2a2d50;
-    color: #e0e0e0;
-    border: 1px solid #3a3d60;
-    padding: 6px 14px;
-    border-radius: 6px;
-    font-size: 13px;
-}
-
-/* Status badges */
-.badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-}
-.badge-green { background: #1a4a2a; color: #50fa7b; }
-.badge-red   { background: #4a1a2a; color: #e94560; }
-
-/* Tables */
-th { font-size: 11px; font-weight: 600; text-transform: uppercase;
-     letter-spacing: 0.5px; color: #666; }
-td { font-size: 13px; border-bottom: 1px solid #1a1d32; }
-tr:hover { background: #1a1d32; }
-
-/* Form inputs */
-input, select {
-    background: #1a1d32;
-    color: #e0e0e0;
-    border: 1px solid #2a2d45;
-    padding: 6px 12px;
-    border-radius: 6px;
-    font-size: 13px;
-}
-```
-
-**Key dimensions:**
-- stormd nav bar: 48px height (your iframe gets `calc(100vh - 48px)`)
-- Card border-radius: 8px
-- Button/input border-radius: 6px
-- Badge border-radius: 10px
-- Base font size: 13px
-- Label font size: 11px, uppercase, letter-spacing 0.5px
-
-Your app doesn't have to match stormd's style — it renders in its own iframe and can use any framework. The style guide is just for visual consistency if you want it.
+Invoked through a symlink whose name is one of the 63 applets, stormd runs
+that command and exits instead (see [Busybox commands](#busybox-commands)).
+
+Startup, in order: install applet symlinks into `/bin`, `/usr/bin`, `/sbin`,
+`/usr/sbin` (skipping names that exist; errors ignored) → load and validate the
+config (exit 1 on error) → resolve the cloud ID → start logging → start cron
+and the updater → start processes → bind the API (exit 1 if it cannot) and the
+SSH server → reap zombies and set sysctls (Linux).
+
+It shuts down on SIGTERM, SIGINT, `POST /api/v1/shutdown`, or container
+failure: stops every process (see below — SIGKILL), flushes logs, runs the backup if the container
+failed and `[backup] on_failure` is set, and exits with the API-requested code,
+else 1 if the container failed, else 0.
+
+Logging goes to stderr as plain compact lines — no timestamp, no ANSI, no JSON
+(the envelope that carries them already has those). `RUST_LOG` overrides the
+default filter `info,stormd=debug`.
+
+Network sysctls written at start (Linux, best-effort):
+`net.ipv4.icmp_echo_ignore_all=0`, `conf.all.accept_local=1`, `ip_forward=1`,
+`conf.all.arp_ignore=0`, `conf.all.arp_announce=0`,
+`conf.all.accept_redirects=1`, `net.ipv6.conf.all.disable_ipv6=0`.
+
+### Ports
+
+| Port | What | Config |
+|---|---|---|
+| 9080/tcp | REST API, WebSockets, `/metrics`, web UI | `[api] bind` |
+| 22/tcp | SSH + SFTP (only when `[ssh] enabled = true`; off by default) | `[ssh] bind` |
+| → 239.255.42.1:5514/udp | log lines out, RFC 5424 syslog (send only) | `[stormlog.mcast] group` |
+
+stormd also connects out to: the CloudID metadata service (SSH keys, when
+`[ssh] owner` is set), a webhook and a backup URL (when configured), and
+registries (updater).
 
 ## Configuration reference
 
-```toml
-[general]
-name = "my-service"                    # container name (shown in UI nav)
-log_dir = "/var/stormd/logs"           # log file directory
-# cloud_id = "my-unique-id"           # unique instance ID (also accepted as SSH password)
-# theme = "rose"                      # default web UI theme (viewer's own pick wins)
-                                       # auto-generated UUID if not set (env: STORM_CLOUD_ID)
+TOML, from `crates/stormd/src/config.rs` and `crates/stormlog/src/types.rs`.
+Unknown keys are ignored silently. `config/example.toml` shows every key and is
+parsed by a unit test.
 
-[api]
-bind = "0.0.0.0:9080"                 # REST API + web UI bind address
-# auth_token = "s3cret"               # machine credential: Authorization: Bearer <token>
-# password = "changeme"               # legacy: equivalent to user "admin" below
-# [[api.users]]                       # named users for the UI login — any user,
-# name = "glenn"                      # password, or auth_token being set turns
-# password = "changeme"               # authentication on
+Validation at load: at least one `[[process]]` or `[[cron]]`; process names
+unique; each process has `command` or `image`; every `depends_on` names a
+process; `[events]` with `transport = "webhook"` needs `webhook_url`;
+`[backup] enabled` needs `destination_url`.
 
-[ssh]
-enabled = true                         # enable built-in SSH server
-bind = "0.0.0.0:22"                   # SSH bind address
-password = "stormd"                    # SSH password (default: stormd)
-# host_key = "/etc/stormd/host_key"   # SSH host key path (auto-generated if missing)
-# owner = "my-namespace"              # CloudID owner tag — enables SSH public key auth
-# cloudid_url = "http://169.254.169.254"  # CloudID metadata endpoint (default: magic IP)
+### `[general]`
 
-[events]
-enabled = false                        # enable event system
-# nats_url = "nats://localhost:4222"   # NATS server URL
-# webhook_url = "http://..."           # webhook endpoint
+| Key | Default | |
+|---|---|---|
+| `name` | `"stormd"` | container name: UI, events, metrics `container` label |
+| `log_dir` | `"/var/log/stormd"` | per-process log files and `.cloudid`; created at start. **Overrides `[stormlog.file] log_dir`** |
+| `cloud_id` | — | see [Cloud ID](#cloud-id) |
+| `theme` | — | default web UI theme id (below); a viewer's own pick wins |
+| `pid_file` | `"/run/stormd.pid"` | **parsed, not used** — no PID file is written |
 
-[backup]
-enabled = false                        # enable log backup on failure
-on_failure = true                      # backup logs when container fails
+Theme ids (from stormview): `storm`, `one`, `gruvbox`, `catppuccin`, `rose`,
+`midnight`, `nord`, `solar`, `phosphor` (dark); `light`, `frost`, `paper`
+(light).
 
-[debug]
-enabled = false                        # enable debug endpoints
-allow_signal = false                   # allow sending signals via API
-allow_stdin = false                    # allow stdin injection via API
+### `[api]`
 
-[updater]
-enabled = false                        # enable OCI image updater
-# registry = "registry.example.com"
-# poll_interval_secs = 300
+| Key | Default | |
+|---|---|---|
+| `bind` | `"0.0.0.0:9080"` | REST API, WS, metrics and UI |
+| `auth_token` | — | bearer token for any request; also the `admin` login password |
+| `password` | — | legacy: user `admin` with this password |
+| `[[api.users]]` | — | `name`, `password` — UI login users |
+| `[api.hosts]` | — | `"host.name" = "/path"`: a request for `/` whose `Host:` matches is redirected there (default `/ui/`) |
 
-[stormlog.mcast]
-# group = "239.255.42.1:5514"          # the fleet group; "off" to stay quiet
+Any of `auth_token`, `password` or a user turns authentication on — see
+[Authentication](#authentication).
 
-[stormlog.terminal]
-rows = 24                              # VT100 terminal rows
-cols = 80                              # VT100 terminal columns
-scrollback = 1000                      # scrollback buffer size
+### `[[process]]`
 
-[stormlog.file]
-max_size_bytes = 104857600             # 100 MiB per log file before rotation
-max_files = 10                         # rotated generations to keep, per process
-max_runs = 10                          # finished runs to keep, per process
+| Key | Default | |
+|---|---|---|
+| `name` | required | unique |
+| `command` | `""` | binary path; required unless `image` is set |
+| `args` | `[]` | `${NODE_IP}` / `${NODE_NAME}` expanded at spawn |
+| `env` | `{}` | added to stormd's own environment; values expanded like `args` |
+| `working_dir` | stormd's | |
+| `image` | — | OCI image; the process is then run by the updater (below), not at start |
+| `on_failure` | `"restart"` | non-zero exit or signal: `restart` \| `fail` \| `ignore` |
+| `on_exit` | `"restart"` | exit 0: `restart` \| `stop` |
+| `restart_delay_secs` | `1` | base delay; doubles per restart in the window, capped at 30 s |
+| `max_restarts` | `10` | per `restart_window_secs` |
+| `restart_window_secs` | `3600` | |
+| `no_restart_exit_codes` | `[]` | exit codes that mean "a restart will not fix this" |
+| `on_no_restart` | `"hold"` | `hold` \| `fail` |
+| `depends_on` | `[]` | names of processes to wait for |
+| `startup_delay_secs` | `0` | sleep before the first spawn |
+| `ready_probe` | — | inline table, below |
+| `[process.liveness]` | — | below |
+| `[process.ui]` | — | plugin tab, below |
+| `capture_stdout`, `capture_stderr` | `true` | **parsed, not used** — both are always captured |
 
-[[process]]
-name = "my-app"                        # process name (must be unique)
-command = "/app/server"                # binary path
-args = ["--flag", "value"]             # command arguments
-env = { KEY = "value" }                # environment variables
-working_dir = "/"                      # working directory
-on_failure = "restart"                 # restart | fail | ignore
-on_exit = "restart"                    # restart | stop (for clean exit code 0)
-restart_delay_secs = 1                 # delay before restart
-max_restarts = 100                     # max restarts in window before failing
-restart_window_secs = 3600             # restart counting window
-no_restart_exit_codes = [78]           # exits a restart will not fix (EX_CONFIG) — see below
-on_no_restart = "hold"                 # hold | fail (container) on one of those exits
-depends_on = ["other-process"]         # start after these processes
-# image = "myapp:latest"              # OCI image (for updater)
+**`ready_probe`** — `{ type = "http", url = "...", interval_secs = N }`,
+`{ type = "tcp", port = N, interval_secs = N }` or
+`{ type = "exec", command = "bin arg ...", interval_secs = N }`
+(`interval_secs` is required). Polled in the background after each spawn,
+5 s timeout per attempt; HTTP passes on 2xx/3xx (certificates not verified),
+TCP connects to `127.0.0.1:port`, exec passes on exit 0. It gates dependents
+only.
 
-# Plugin UI — add a custom tab to the stormd web UI
-# [process.ui]
-# label = "My App"                      # nav tab label
-# proxy = "http://127.0.0.1:3000"       # URL to reverse-proxy
-# summary = "http://127.0.0.1:3000/api/summary"  # optional: plugin's own card summary
+**`[process.liveness]`**
 
-# Liveness probe — restarts process if health check fails
-[process.liveness]
-type = "http"                          # http | tcp
-url = "http://localhost:8080/health"   # HTTP probe URL
-# port = 5432                          # TCP probe port (for type = "tcp")
-interval_secs = 10                     # check interval (default: 10)
-timeout_secs = 5                       # probe timeout (default: 5)
-failure_threshold = 1                  # failures before restart (default: 1)
-initial_delay_secs = 5                 # delay before first check (default: 5)
+| Key | Default | |
+|---|---|---|
+| `type` | required | `http` (with `url`) \| `tcp` (with `port`, on 127.0.0.1) |
+| `interval_secs` | `10` | |
+| `timeout_secs` | `5` | |
+| `failure_threshold` | `1` | consecutive failures before acting |
+| `initial_delay_secs` | `5` | after each spawn |
 
-[[cron]]
-name = "cleanup"                       # job name
-schedule = "0 0 * * * *"              # cron expression (6-field with seconds)
-command = "/app/cleanup"               # command to run
-args = []                              # arguments
-```
+HTTP passes on 2xx or 3xx and does not verify certificates (the supervisor
+already knows what it started; a self-signed apiserver was otherwise killed
+every 25 s).
 
-## Liveness probes
+**`[process.ui]`** — `label` (required), `proxy` (required, URL), `host`
+(Host-based route to this plugin), `summary` (URL of the plugin's own card
+summary). See [docs/plugin-ui.md](docs/plugin-ui.md).
 
-Liveness probes detect hung processes that haven't exited but have stopped responding. When the failure threshold is reached, stormd sends SIGUSR1 (grace period), waits 5 seconds, then SIGKILL if still running. The normal restart policy then takes over.
+### `[[cron]]`
 
-### HTTP probe
+| Key | Default | |
+|---|---|---|
+| `name` | required | |
+| `schedule` | required | 6 fields, seconds first: `sec min hour dom month dow` (the `cron` crate) |
+| `command` | required | |
+| `args` | `[]` | |
+| `env` | `{}` | |
+| `timeout_secs` | `300` | after this the run is recorded as failed; **the job is not killed** |
+| `capture_output` | `true` | once the job ends, its stdout/stderr are logged as process `cron.<name>` (stderr as warnings) |
 
-```toml
-[[process]]
-name = "web"
-command = "/app/server"
+### `[events]`
 
-[process.liveness]
-type = "http"
-url = "http://localhost:8080/health"
-interval_secs = 10
-failure_threshold = 3
-initial_delay_secs = 15
-```
+| Key | Default | |
+|---|---|---|
+| `enabled` | `false` | |
+| `transport` | `"none"` | `none` \| `webhook` |
+| `webhook_url` | — | each event is POSTed as JSON |
+| `webhook_headers` | `{}` | |
 
-### TCP probe
+Events are written to the log (process `event`) whether or not this is
+enabled. See [Events](#events-1).
 
-```toml
-[[process]]
-name = "postgres"
-command = "/usr/bin/postgres"
+### `[backup]`
 
-[process.liveness]
-type = "tcp"
-port = 5432
-interval_secs = 5
-```
+| Key | Default | |
+|---|---|---|
+| `enabled` | `false` | |
+| `on_failure` | `true` | back up when the container fails |
+| `destination_url` | — | required when enabled; the archive is POSTed here |
+| `headers` | `{}` | added to the POST |
+| `compress` | `true` | `application/gzip` tar.gz, else `application/x-tar` |
 
-Check liveness status via SSH shell:
+The archive is the whole `log_dir` under `logs/`. `POST /api/v1/backup` runs
+it on demand.
 
-```
-liveness              # show all probe status
-liveness web          # show specific process probe
-ps                    # LIVENESS column shows ok/FAIL(n)
-status                # summary shows N/M healthy
-systemctl status web  # includes liveness details
-```
+### `[updater]`
 
-## Busybox commands
+| Key | Default | |
+|---|---|---|
+| `enabled` | `false` | |
+| `poll_interval_secs` | `60` | |
+| `data_dir` | `"/data/images"` | blob store |
+| `rootfs_dir` | `"/data/rootfs"` | `<name>`, `<name>.new`, `<name>.old` |
+| `registry` | `"registry.gt.lo"` | **parsed, not used** — the registry comes from each `image` reference |
 
-stormd acts as a busybox-style multi-call binary. When invoked via a symlink (e.g., `/bin/ls -> /stormd`), it runs the corresponding command directly. The `stormdbase` image has all 63 commands pre-linked in `/bin`, `/usr/bin`, `/sbin`, and `/usr/sbin`.
+See [Image updater](#image-updater).
 
-### Available commands
+### `[ssh]`
 
-| Category | Commands |
-|----------|----------|
-| **File** | `ls`, `dir`, `cat`, `head`, `tail`, `cp`, `mv`, `rm`, `mkdir`, `touch`, `chmod`, `chown`, `find`, `ln`, `stat`, `pwd`, `wc`, `du`, `readlink`, `file`, `sha256sum`, `md5sum`, `tee` |
-| **Network** | `ifconfig`, `ip`, `ping`, `curl`, `wget`, `netstat`, `ss`, `nslookup`, `dig`, `hostname`, `route` |
-| **System** | `mount`, `df`, `free`, `uname`, `date`, `id`, `kill`, `printenv`, `export`, `unset`, `sleep`, `echo`, `env`, `whoami`, `which`, `type`, `lsof`, `true`, `false`, `clear` |
-| **Text** | `sort`, `uniq`, `cut`, `tr`, `sed`, `rev`, `base64`, `xxd`, `grep` |
+| Key | Default | |
+|---|---|---|
+| `enabled` | `false` | |
+| `bind` | `"0.0.0.0:22"` | |
+| `host_key` | `"/etc/stormd/host_key"` | ed25519, generated and saved if missing |
+| `password` | `"stormd"` | the cloud ID is also accepted |
+| `owner` | — | when set, public-key auth from CloudID is on |
+| `cloudid_url` | `"http://169.254.169.254"` | |
+| `authorized_keys` | — | **parsed, not used** |
 
-### Install symlinks manually
+### `[debug]`
 
-```bash
-# Install all commands to /bin
-stormd --install /bin
+| Key | Default | |
+|---|---|---|
+| `enabled` | `false` | adds `GET /api/v1/debug/info` and `/api/v1/debug/config` |
+| `allow_signal` | `false` | adds `POST /api/v1/debug/processes/{name}/signal` |
+| `allow_stdin` | `false` | adds `POST /api/v1/debug/processes/{name}/stdin` |
+| `dynamic_log_level` | `false` | **parsed, not used** |
 
-# List all available commands
-stormd --list-commands
-```
+### `[stormlog.file]`, `[stormlog.mcast]`, `[stormlog.terminal]`
 
-Piping and redirection work between commands:
+| Key | Default | |
+|---|---|---|
+| `file.max_size_bytes` | `104857600` (100 MiB) | rotate `<process>.log` at this size |
+| `file.max_files` | `10` | rotated generations kept per process |
+| `file.max_runs` | `10` | finished runs kept per process |
+| `file.log_dir` | — | **ignored**: always `[general] log_dir` |
+| `mcast.group` | `239.255.42.1:5514` | `host:port`, or `"off"` |
+| `mcast.host` | this machine's hostname | syslog HOSTNAME field (the node, not the container) |
+| `terminal.rows` / `cols` | `24` / `80` | VT100 screen per process |
+| `terminal.scrollback` | `1000` | lines |
 
-```bash
-ls -la /app | grep server
-cat /etc/stormd/config.toml | grep process
-curl http://localhost:8080/health > /tmp/health.txt
-```
+### `[log]`
 
-## REST API
+`max_size_bytes`, `max_files`, `timestamps`, `json_format` — **parsed, not
+used.** Rotation is `[stormlog.file]`.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/cloudid` | Instance cloud ID and container name |
-| GET | `/api/v1/health` | Health check |
-| GET | `/api/v1/status` | Full status (processes, cron, stats) |
-| GET | `/api/v1/components` | Component summaries — every part of the system in one uniform shape (id, kind, label, health, detail, metrics, actions, relations); live push on `/ws/components` |
-| POST | `/api/v1/auth/login` | Start a session (`{"username": "...", "password": "..."}`) — sets the session cookie |
-| POST | `/api/v1/auth/logout` | End the session |
-| GET | `/api/v1/auth/session` | `{required, authenticated}` — whether login is needed/held |
-| GET | `/api/v1/stats` | System stats (uptime, memory, counts) |
-| GET | `/api/v1/processes` | List all processes |
-| GET | `/api/v1/processes/{name}` | Get process status |
-| POST | `/api/v1/processes/{name}/start` | Start a process |
-| POST | `/api/v1/processes/{name}/stop` | Stop a process |
-| POST | `/api/v1/processes/{name}/restart` | Restart a process |
-| GET | `/api/v1/terminal/{process}` | VT100 screen snapshot |
-| GET | `/api/v1/logs` | Query logs (`?process=X&tail=100&search=error`) |
-| GET | `/api/v1/logs/{process}` | Process-specific logs |
-| GET | `/api/v1/logs/{process}/runs` | List historical runs for a process |
-| GET | `/api/v1/logs/files` | List archived log files with sizes |
-| GET | `/api/v1/logs/files/{filename}` | Read a specific archived log file |
-| GET | `/api/v1/logs/stored` | Query what is on the log volume (`?run_id=X`) |
-| POST | `/api/v1/logs/ingest` | Structured log ingestion |
-| GET | `/api/v1/mounts` | Disk/mount usage |
-| GET | `/api/v1/memory/history` | Memory RSS/VMS history samples |
-| GET | `/api/v1/cron` | List cron jobs with status |
-| GET | `/api/v1/updates` | List OCI image update status |
-| POST | `/api/v1/updates/{name}/trigger` | Trigger image update check |
-| POST | `/api/v1/backup` | Trigger manual log backup |
-| GET | `/api/v1/plugins` | List registered UI plugins |
-| POST | `/api/v1/shutdown` | Graceful shutdown (optional `exitCode` in body) |
-| WS | `/ws/console/{process}` | Realtime terminal stream |
-| WS | `/ws/logs` | Realtime log tailing (`?process=X&severity=error`) |
+## Process supervision
 
-## Process failure policies
+Processes without `image` are started at boot **in config order**; each first
+waits for its `depends_on` (polled every 250 ms), then `startup_delay_secs`,
+then is spawned. A dependency is satisfied when it is running and its
+`ready_probe` (if any) has passed — or when it has stopped and it is a one-shot
+(`on_exit = "stop"`), so a migration or a cert-minting task can be depended on.
+A later process in the list waits behind an earlier one that is still waiting.
 
-| `on_failure` | Behavior (non-zero exit) |
-|--------------|--------------------------|
-| `restart` | Restart after delay, up to `max_restarts` in `restart_window_secs`, then fail container |
-| `fail` | Fail the entire container immediately (exit code 1) |
-| `ignore` | Leave process stopped, container keeps running |
+stdin, stdout and stderr are pipes: output goes to the log, stdin is reachable
+through the debug API.
 
-| `on_exit` | Behavior (clean exit, code 0) |
-|-----------|-------------------------------|
-| `restart` | Restart the process (default — for long-running services) |
-| `stop` | Leave process stopped (for one-shot tasks) |
+**Stopping is SIGKILL.** A stop or restart (API, shell, stormsh, UI) and
+shutdown all kill the process outright — there is no SIGTERM and no grace
+period today, so a process gets no chance to flush or deregister. A process
+that must shut down cleanly has to be told another way first.
 
-A process can also say for itself that a restart will not help.
-`no_restart_exit_codes` lists the exit codes that mean so — a config it
-cannot run on, usually; sysexits gives 78 (`EX_CONFIG`) and 64 (`EX_USAGE`),
-and stormconsole exits 78. An exit with one of those is **not** restarted,
-does not count toward `max_restarts`, is logged once at error level
-(`process exited with a non-retryable code — not restarting`), and marks the
-process **failed** (red on every dashboard, `exit_code` on its status). The
-list is empty by default, so a config that does not say gets `on_failure` as
-before.
+| Exit | Policy | Result |
+|---|---|---|
+| 0 | `on_exit = "restart"` | restarted after the delay; past `max_restarts` it is left **stopped** |
+| 0 | `on_exit = "stop"` | stopped |
+| non-zero / signal | `on_failure = "restart"` | restarted after the delay; past `max_restarts` the process is **failed** and so is the container |
+| non-zero / signal | `on_failure = "fail"` | process failed, container failed |
+| non-zero / signal | `on_failure = "ignore"` | stopped; container keeps running |
+| code in `no_restart_exit_codes` | `on_no_restart = "hold"` | process **failed**, not restarted, not counted; container keeps running |
+| code in `no_restart_exit_codes` | `on_no_restart = "fail"` | as above, and the container fails |
 
-| `on_no_restart` | Behavior (exit with a listed code) |
-|-----------------|-------------------------------------|
-| `hold` | Mark the process failed, container keeps running (default — nothing outside is invited to restart what a restart cannot fix) |
-| `fail` | Fail the container for the supervisor above to deal with |
+The delay before restart *n* within the window is `restart_delay_secs × 2^(n-1)`,
+capped at 30 s — a process that can never start costs a restart every 30 s,
+not every second. `no_restart_exit_codes` is how a process says a restart
+cannot help (sysexits 78 `EX_CONFIG`, 64 `EX_USAGE`; stormconsole exits 78): it
+logs `process exited with a non-retryable code — not restarting` once, and the
+`process_crashed` event carries `code` and `no_restart`. A clean exit is never
+treated as one, and a death by signal has no code to match.
 
-## Log severity detection
+A failed container makes stormd shut down (checked every second) and exit 1.
 
-stormd automatically detects severity from log line content:
+**Liveness:** after `initial_delay_secs`, every `interval_secs`. When
+`failure_threshold` consecutive probes fail stormd emits
+`liveness_check_failed`, sends SIGUSR1, waits 5 s, and sends SIGKILL if the
+process is still there; the exit then goes through the table above.
 
-| Pattern | Severity |
-|---------|----------|
-| `PANIC`, `FATAL`, `SEGFAULT`, `SIGSEGV`, `SIGABRT`, `CORE DUMPED` | Emergency |
-| `CRITICAL` | Critical |
-| `ERROR:`, `[ERROR]`, `level=error` | Error |
-| `WARNING:`, `[WARN`, `level=warn` | Warning |
-| All other stdout | Info |
-| All other stderr | Warning |
+**`${NODE_IP}` and `${NODE_NAME}`** in `args` and `env` values (not `command`)
+are replaced at every spawn. `NODE_IP` is the source address the routing table
+picks for an off-node destination (no packet is sent); `NODE_NAME` is
+`/proc/sys/kernel/hostname`. A name with no value is left as written.
 
-Process crashes emit a `*** PROCESS CRASHED ***` entry at Emergency severity.
+## Logging
+
+Every line of every process, and every event, goes three places:
+
+1. **A file** — `{log_dir}/{process}.log`, rotated at `max_size_bytes` to
+   `{process}.1.log` … `{process}.{max_files}.log`. When a run ends the file is
+   renamed `{process}.{run_id}.{failed|exited}.log` and the next run starts a
+   fresh one; the oldest runs past `max_runs` are deleted. Before the rename
+   stormd waits (up to 5 s) for the output pipes to drain, so the line that
+   explains a crash is in the file.
+2. **The fleet's multicast group** — RFC 5424 syslog over UDP, framed by
+   [stormcast](https://github.com/glennswest/stormcast) (shared with
+   stormpump). Send only; collecting and searching a fleet's logs is
+   mcastsyslog's job.
+3. **Live streams** — the VT100 screen per process and a broadcast channel,
+   followed by the web console, stormsh, `attach`, and `/ws/logs`.
+
+**Severity** is stormcast's judgement from the first 120 characters of the
+line: klog prefixes (`F`/`E`/`W`/`I`/`D` + `MMDD`), else the *leftmost* of
+`PANIC`/`FATAL` → critical, `ERROR` → error, `WARN` → warning, `DEBUG`/`TRACE`
+→ debug, `INFO` → info (case-insensitive, so `level=error` counts). A line with
+no level is info on stdout and warning on stderr. A crash adds
+`*** PROCESS CRASHED *** exit code N` (or `killed by signal`) at emergency.
+
+`POST /api/v1/logs/ingest` (`{process, line, stream?, severity?}`) adds a line
+from outside.
 
 ## Events
 
-Events are emitted for process lifecycle changes and can be sent to NATS or webhooks:
+Kinds: `container_starting`, `container_stopping`, `container_failing`,
+`process_started`, `process_stopped`, `process_crashed`, `process_restarting`,
+`liveness_check_failed`, `cron_executed`, `cron_failed`, `backup_started`,
+`backup_completed`, `backup_failed`, `update_check_started`,
+`update_available`, `update_pulling`, `update_pivoting`, `update_completed`,
+`update_failed`. (`process_ready` exists in the type and is never emitted.)
 
-- `container_starting`, `container_stopping`, `container_failing`
-- `process_started`, `process_stopped`, `process_crashed`, `process_restarting`, `liveness_check_failed`
-- `update_check_started`, `update_available`, `update_pulling`, `update_pivoting`, `update_completed`, `update_failed`
-- `cron_executed`, `cron_failed`
-- `backup_started`, `backup_completed`, `backup_failed`
+Each is logged as `event=<kind> process=<p> container=<c> key=value…` —
+critical for `container_failing`; error for crashes and failed
+cron/backup/update; warning for restarts, liveness failures, stops. With the
+webhook on, the event is also POSTed as JSON:
+`{id, timestamp, kind, process, container, detail}`.
+
+## REST API
+
+On `[api] bind`. With auth on, everything except the endpoints marked *open*
+needs a session cookie or `Authorization: Bearer <auth_token>`.
+
+| Method | Path | |
+|---|---|---|
+| GET | `/` | *open* — redirect by `Host:` (`[api.hosts]`, plugin `host`), else `/ui/` |
+| GET | `/api/v1/health` | *open* — `{"status":"ok"}` |
+| GET | `/metrics` | *open* — Prometheus text, below |
+| GET | `/api/v1/status` | `container_failed`, stats, processes, cron jobs |
+| GET | `/api/v1/stats` | uptime, memory, process counts |
+| GET | `/api/v1/cloudid` | `{cloud_id, container_name}` |
+| GET | `/api/v1/components` | the component-summary feed (below) |
+| POST | `/api/v1/auth/login` | *open* — `{username, password}` → session cookie |
+| POST | `/api/v1/auth/logout` | *open* |
+| GET | `/api/v1/auth/session` | *open* — whether login is required/held, instance name, default theme |
+| GET | `/api/v1/processes` | all process statuses |
+| GET | `/api/v1/processes/{name}` | one |
+| POST | `/api/v1/processes/{name}/start` \| `stop` \| `restart` | |
+| GET | `/api/v1/logs` | lines from the log files (`?process=&tail=&search=`) |
+| GET | `/api/v1/logs/{process}` | same, one process (`?tail=&search=`) |
+| GET | `/api/v1/logs/{process}/runs` | finished runs |
+| GET | `/api/v1/logs/files` | files in `log_dir` with sizes |
+| GET | `/api/v1/logs/files/{filename}` | one file |
+| GET | `/api/v1/logs/stored` | structured query (`?process=&stream=&search=&tail=&run_id=`) |
+| POST | `/api/v1/logs/ingest` | add a line |
+| GET | `/api/v1/terminal/{process}` | VT100 screen snapshot |
+| GET | `/api/v1/cron` | jobs with last/next run, counts |
+| GET | `/api/v1/updates` | updater state per image |
+| GET | `/api/v1/updates/{name}` | one |
+| POST | `/api/v1/updates/{name}/trigger` | check, pull and pivot now |
+| POST | `/api/v1/backup` | run the backup now |
+| GET | `/api/v1/mounts` | mount usage |
+| GET | `/api/v1/memory/history` | RSS/VMS samples |
+| GET | `/api/v1/plugins` | `[process.ui]` plugins |
+| POST | `/api/v1/shutdown` | stop everything and exit; optional `{"exitCode": N}` |
+| WS | `/ws/console/{process}` | live terminal |
+| WS | `/ws/logs` | live lines (`?process=&severity=`) |
+| WS | `/ws/components` | the component feed, a full snapshot every 2 s |
+| ANY | `/ui/proxy/{name}/…` | reverse proxy to a plugin (auth required) |
+| GET | `/ui/`, `/ui/…` | *open* — the embedded SPA |
+| GET | `/api/v1/debug/info`, `/api/v1/debug/config` | with `[debug] enabled` |
+| POST | `/api/v1/debug/processes/{name}/signal` | with `allow_signal` |
+| POST | `/api/v1/debug/processes/{name}/stdin` | with `allow_stdin` |
+
+**Health:** `GET /api/v1/health` answers `{"status":"ok"}` whenever the API
+is up; it does not reflect process state (use `/api/v1/status` or
+`/metrics`). `stormd --healthcheck` GETs it on `127.0.0.1:--healthcheck-port`
+(default 9080 — pass the real port if `[api] bind` differs) with a 5 s
+timeout and exits 0 or 1.
+
+### Metrics
+
+`GET /metrics`, Prometheus text 0.0.4, read at request time and kept nowhere.
+Label `container` is `[general] name`; `process` is the supervised process.
+
+| Metric | Type | |
+|---|---|---|
+| `stormd_up` | gauge | 1 |
+| `process_start_time_seconds` | gauge | stormd's start time |
+| `process_resident_memory_bytes`, `process_virtual_memory_bytes` | gauge | stormd's own memory |
+| `stormd_uptime_seconds` | gauge | |
+| `stormd_process_state{state}` | gauge | 1 for the current state of `running`, `stopped`, `failed`, `starting`, `restarting` |
+| `stormd_process_restarts_total` | counter | |
+| `stormd_process_crashes_total` | counter | non-zero exits |
+| `stormd_process_liveness_failures_total` | counter | **current consecutive failures** — reset to 0 by a passing probe, so not monotonic despite the type |
+| `stormd_process_uptime_seconds` | gauge | absent when not running |
+
+### Component feed
+
+`GET /api/v1/components` (and `/ws/components`) describes every part of the
+instance in one shape — `id, kind, label, health, detail, metrics, actions,
+relations` — with kinds `system`, `process`, `plugin`, `cron`, `storage`,
+`logs`, `updater`, and typed relations (`has_one`, `has_many`, `belongs_to`).
+Both the web dashboard and stormsh render it generically, so a new subsystem
+appears in both by adding one summary source in `components.rs`. The contract
+types are the [stormview](https://github.com/glennswest/stormview) crate.
+
+## Authentication
+
+Off unless `[api]` sets `auth_token`, `password` or `[[api.users]]`. Then:
+the UI shows a login screen; a login sets an HttpOnly `stormd_session` cookie
+(sessions are in memory, 24 h, gone on restart); `auth_token` works as a bearer
+token on any request and as the password for `admin`; credentials are
+compared in constant time. Open paths: `/`, `/metrics`, `/api/v1/health`,
+`/api/v1/auth/*`, and `/ui/*` except `/ui/proxy/*`. stormsh passes the token
+with `-t`/`--token` or `STORMD_TOKEN`.
+
+## Web UI
+
+The Svelte SPA at `/ui/` (hash routes):
+
+| Route | |
+|---|---|
+| `#/` | dashboard: a card per component, or a relational grid (nested along `has_many`/`has_one`, multi-select bulk start/stop/restart, relation pickers); memory chart |
+| `#/grid` | the grid rooted at a component (⊞ on a card) |
+| `#/terminal` | live VT100 per process |
+| `#/logs` | log viewer: severity/stream filters, search, run selector |
+| `#/process/{name}` | one process: card and terminal |
+| `#/ext/{name}` | a plugin's UI in an iframe |
+
+Twelve themes (ids under [`[general]`](#general)), picked in the nav and
+remembered per browser. The pre-SPA URLs `/ui/terminal`, `/ui/logs` and
+`/ui/ext/{name}` redirect to their hash routes.
+
+A supervised process with `[process.ui]` gets its own tab, reverse-proxied
+same-origin at `/ui/proxy/{name}/`, and may feed its dashboard card through a
+`summary` URL — see [docs/plugin-ui.md](docs/plugin-ui.md).
+
+## stormsh
+
+A ratatui client for a running stormd.
+
+```
+stormsh [-H HOST] [-p PORT] [-t TOKEN]    # defaults 127.0.0.1, 9080, $STORMD_TOKEN
+```
+
+Views: `1` dashboard (the component feed as tiles), `2` processes, `3`
+terminal, `4` logs; `Tab` cycles. `↑/↓` or `j/k` select, `s`/`x`/`r`
+start/stop/restart, `u` triggers an update (dashboard), `l` logs, `q`/`Esc`
+quits.
+
+## SSH
+
+With `[ssh] enabled = true`. Any username; the password is `[ssh] password`
+or the cloud ID. With `owner` set, public keys are fetched from
+`{cloudid_url}/latest/meta-data/public-keys/` (index, then
+`/{idx}/openssh-key`) at start and every 30 s, keeping the old set if a
+refresh fails; the owner value itself only switches this on — it is not sent.
+
+A session is an interactive shell (a PTY is expected); `ssh host command`
+(exec requests) is not supported. The `sftp` subsystem is, so `sftp` and
+OpenSSH's default (SFTP-based) `scp` work; legacy `scp -O` does not.
+
+The shell, in addition to every applet below:
+
+```
+ps / top            processes with state and liveness
+start|stop|restart <name>
+attach <name>       the process's VT100 screen
+logs [-f] [name]    recent / follow
+dmesg [-f]          all processes
+grep <pat> [file]   logs, or a file
+liveness [name]     probe config and status
+cron                jobs
+status              everything, with a liveness summary
+uptime
+systemctl start|stop|restart|status|list-units [name]
+xargs               runs the shell's own commands
+help, exit
+```
+
+Tab completion (commands, process names, paths), history, `|` pipes, and
+`>` / `>>` redirection.
+
+## Busybox commands
+
+`argv[0]` dispatch, 63 commands:
+
+| | |
+|---|---|
+| File | `ls dir cat head tail cp mv rm mkdir touch chmod chown find ln stat pwd wc du readlink file sha256sum md5sum tee` |
+| Network | `ifconfig ip ping curl wget netstat ss nslookup dig hostname route` |
+| System | `mount df free uname date id kill printenv export unset sleep echo env whoami which type lsof true false clear` |
+| Text | `sort uniq cut tr sed rev base64 xxd grep` |
+
+`stormd --install DIR` links them all to the running binary; stormd also does
+this at every start for `/bin`, `/usr/bin`, `/sbin` and `/usr/sbin`. Piped
+stdin works (`ls /app | grep server`).
 
 ## Cloud ID
 
-Each stormd instance has a unique cloud ID that can be used as an SSH password. This provides per-instance credentials for fleet management without sharing a single password.
+A per-instance identifier, usable as the SSH password and served at
+`/api/v1/cloudid`. Resolved once at start, first match wins:
 
-**Resolution order:**
-1. Config file: `[general] cloud_id = "my-id"`
-2. Environment variable: `STORM_CLOUD_ID=my-id`
-3. Persisted file: `{log_dir}/.cloudid` (survives restarts if log_dir is on a volume)
-4. Auto-generated UUID v4 (persisted to `{log_dir}/.cloudid`)
+1. `[general] cloud_id`
+2. `$STORM_CLOUD_ID`
+3. `{log_dir}/.cloudid`
+4. a new UUID v4, written to `{log_dir}/.cloudid`
 
-**Usage:**
-```bash
-# Retrieve cloud_id via API
-curl http://localhost:9080/api/v1/cloudid
+## Image updater
 
-# SSH using cloud_id as password
-ssh root@container-host -p 22
-# enter the cloud_id as the password
+With `[updater] enabled = true`, each `[[process]]` with `image` is owned by
+the updater rather than started at boot. For each: if `rootfs_dir/<name>` does
+not exist it pulls the image (stormpull, from the registry named in the
+reference), unpacks it to `<name>.new`, and pivots — stop the process, move the
+current rootfs to `<name>.old`, `<name>.new` into place, set the command to the
+image entrypoint *inside* that directory (it is not chrooted), merge the
+image's env under the config's, set the working directory, start it, and
+delete `.old` in the background. Then every `poll_interval_secs` it HEADs the
+manifest and repeats the pull and pivot when the digest changes.
+`POST /api/v1/updates/{name}/trigger` does it now.
 
-# SCP files into the container
-scp -P 22 myfile.tar.gz root@container-host:/data/
+Two things the updater does not do today: it does not start an image process
+whose rootfs already exists when stormd starts (it only waits for the next
+digest change), and with the updater disabled an `image` process never runs.
 
-# SFTP session
-sftp -P 22 root@container-host
-sftp> put localfile.txt /app/
-sftp> get /var/stormd/logs/api.log
-```
+## Development notes
 
-The cloud_id is accepted alongside the configured SSH password — both work.
-
-## CloudID SSH Key Auth
-
-When `owner` is set in `[ssh]`, stormd fetches SSH public keys from the CloudID metadata service and accepts public key authentication. This eliminates password prompts and centralizes key management across all stormd containers.
-
-CloudID resolves which keys to serve based on the requesting container's IP address and namespace owner annotation (`vkube.io/owner`). The magic IP `169.254.169.254` is routed to CloudID via DHCP option 121 on all data networks.
-
-**Config:**
-```toml
-[ssh]
-enabled = true
-bind = "0.0.0.0:22"
-owner = "my-namespace"                       # activates CloudID key fetching
-cloudid_url = "http://169.254.169.254"       # default — uses magic metadata IP
-```
-
-**How it works:**
-1. On startup, stormd fetches authorized SSH keys from `{cloudid_url}/latest/meta-data/public-keys/`
-2. Keys are refreshed every 30 seconds so changes propagate without restart
-3. SSH clients can authenticate with their SSH key — no password needed
-4. Password auth (configured password + cloud_id) remains available as fallback
-5. If CloudID is unreachable, stormd starts with an empty key store and retries
-
-**Usage:**
-```bash
-# SSH in with your key (no password prompt)
-ssh root@container-host -p 22
-
-# SCP with key auth
-scp -P 22 myfile.tar.gz root@container-host:/data/
-```
-
-**Example configs:**
-```toml
-# mkube container
-[ssh]
-enabled = true
-owner = "mkube"
-
-# app in user namespace
-[ssh]
-enabled = true
-owner = "gwest"
-```
-
-## Version
-
-0.3.0
+- `web/dist` is committed; rebuild it when `web/` or stormview changes.
+- New dashboard content: add a summary source in `components.rs`; no frontend
+  change.
+- Design notes and history: [docs/](docs/). Changes: [CHANGELOG.md](CHANGELOG.md).
