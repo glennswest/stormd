@@ -298,6 +298,18 @@ the plugin summary merge).
 
 ### In Progress
 
+**Issue #6 — presentation (2026-09-24).** `docs/presentation.md`, Marp
+Markdown, 8–15 slides, every claim from the #5 README / the code:
+- [ ] Deck: purpose, place in stormcos (stormcentral relationships graph:
+      depended on by stormcos, rustkube, stormcert, stormlb, stormimds,
+      stormipmi, stormblock-registry, stormdrive, stormstorage, stormcoredns,
+      stormconsole; depends on stormcast, stormview), moving parts (ASCII
+      diagram), features today, planned (open issues), interfaces, shipping,
+      status
+- [ ] Render check with marp-cli on dev via sc-build; README link; changelog
+- [ ] File on stormcentral: graph lacks fastetcd/rustkube-node/cadvisor → stormd
+      though their goldens run under it
+
 **Issue #5 — docs rewritten from the code (2026-09-24) ✅ done.** Owner: every
 component re-derives its docs from the source. Also closes #4 (ships in a
 golden, not written down). Findings from reading the code:
