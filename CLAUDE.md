@@ -298,7 +298,7 @@ the plugin summary merge).
 
 ### In Progress
 
-**Issue #5 — docs rewritten from the code (2026-09-24).** Owner: every
+**Issue #5 — docs rewritten from the code (2026-09-24) ✅ done.** Owner: every
 component re-derives its docs from the source. Also closes #4 (ships in a
 golden, not written down). Findings from reading the code:
 - `config/example.toml` does not parse — `transport = "nats"` (NATS is gone;
@@ -327,7 +327,7 @@ golden, not written down). Findings from reading the code:
       timeout doesn't kill + liveness "counter" resets + proxy drops headers,
       #11 unknown applet name starts init (with stormcos#66, stormcentral#17:
       goldens link `ps`, which is not an applet)
-- [ ] sc-build passes
+- [x] sc-build passes on d743d96 (17 tests, incl. the example.toml parse test)
 
 **Issue #2 — non-retryable exit codes (2026-08-30) ✅ done, v0.7.0.** stormconsole#3 was a
 config-parse failure that stormd restarted `max_restarts` times, failed the
