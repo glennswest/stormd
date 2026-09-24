@@ -321,7 +321,13 @@ golden, not written down). Findings from reading the code:
 - [x] `config/example.toml` fixed + parse test; stale code comments (MinIO
       archive, auth-on conditions)
 - [x] CLAUDE.md build commands (sc-build, not root@dev / Mac), ships-in-golden
-- [ ] sc-build passes; issues filed for promises the code does not keep
+- [x] Issues filed for what the code does not do: #7 dead config keys /
+      unknown keys silent, #8 updater never starts an image process whose
+      rootfs exists, #9 stop/shutdown are SIGKILL (no SIGTERM), #10 cron
+      timeout doesn't kill + liveness "counter" resets + proxy drops headers,
+      #11 unknown applet name starts init (with stormcos#66, stormcentral#17:
+      goldens link `ps`, which is not an applet)
+- [ ] sc-build passes
 
 **Issue #2 — non-retryable exit codes (2026-08-30) ✅ done, v0.7.0.** stormconsole#3 was a
 config-parse failure that stormd restarted `max_restarts` times, failed the
