@@ -298,6 +298,20 @@ the plugin summary merge).
 
 ### In Progress
 
+**Issue #16 — a one-shot dependency satisfied at spawn (2026-09-25).**
+`wait_for_dependencies` accepts `Running && ready`, and a process with no
+`ready_probe` is ready at spawn — so a one-shot (`on_exit = "stop"`, no probe)
+let its dependents through while still working (stormcos#60: node-admin ran
+before stormcert-sa wrote the key). Plan:
+- [ ] Pure helper `dependency_satisfied`: one-shot without probe → only
+      `Stopped` with exit code 0; one-shot with probe keeps `Running && ready`;
+      `Stopped` counts only after a clean exit (a one-shot failed under
+      `on_failure = "ignore"`, or stopped by hand, does not satisfy)
+- [ ] Log once when a dependent is held behind a one-shot that failed, so the
+      wait is not silent
+- [ ] Unit tests, README § Process supervision, presentation, example.toml
+      comment, changelog; sc-build; patch release
+
 **Issue #6 — presentation (2026-09-24) ✅ done.** `docs/presentation.md`, Marp
 Markdown, 12 slides, every claim from the #5 README / the code:
 - [x] Deck: purpose, place in stormcos (stormcentral relationships graph:
