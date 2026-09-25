@@ -106,7 +106,8 @@ proxy = "http://127.0.0.1:3000"
 name = "migrate"
 command = "/app/migrate"
 on_failure = "fail"             # a failed migration fails the container
-on_exit = "stop"                # one-shot: done is done
+on_exit = "stop"                # one-shot: done is done — its dependents
+                                # start only after it exits 0
 depends_on = ["db"]
 
 # --- Cron Jobs ---

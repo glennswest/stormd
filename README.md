@@ -390,8 +390,14 @@ used.** Rotation is `[stormlog.file]`.
 Processes without `image` are started at boot **in config order**; each first
 waits for its `depends_on` (polled every 250 ms), then `startup_delay_secs`,
 then is spawned. A dependency is satisfied when it is running and its
-`ready_probe` (if any) has passed — or when it has stopped and it is a one-shot
-(`on_exit = "stop"`), so a migration or a cert-minting task can be depended on.
+`ready_probe` (if any) has passed. A one-shot (`on_exit = "stop"`) — a
+migration, a cert-minting task — satisfies when it has **finished**: stopped
+after exiting 0. Without a `ready_probe`, running is not enough, because a
+process with no probe is "ready" the moment it is spawned, while it is still
+doing the work its dependents wait for; a one-shot *with* a probe satisfies
+on the probe as well. A one-shot that failed (left stopped by
+`on_failure = "ignore"`, or failed) or was stopped by hand never satisfies:
+its dependents stay held and one WARN line names the dependency.
 A later process in the list waits behind an earlier one that is still waiting.
 
 stdin, stdout and stderr are pipes: output goes to the log, stdin is reachable

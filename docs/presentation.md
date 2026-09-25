@@ -87,7 +87,8 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 
 - **Start order.** Processes start in config order. `depends_on` waits
   until a dependency is running *and* its `ready_probe` (http, tcp or exec)
-  has passed, or until a one-shot dependency (`on_exit = "stop"`) is done.
+  has passed, or until a one-shot dependency (`on_exit = "stop"`) has
+  exited 0 — running is not done.
 - **Restart policy.** `on_failure` is `restart`, `fail` or `ignore`.
   `on_exit` is `restart` or `stop`. `max_restarts` counts restarts within
   `restart_window_secs`.

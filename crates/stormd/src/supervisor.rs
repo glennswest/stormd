@@ -231,30 +231,34 @@ impl Supervisor {
 
     async fn wait_for_dependencies(&self, deps: &[String]) {
         for dep in deps {
+            // Said once per dependency, so a dependent held behind a one-shot
+            // that failed is visible without a line every poll.
+            let mut told = false;
             loop {
                 let procs = self.processes.read().await;
                 if let Some(p) = procs.get(dep) {
                     let p = p.lock().await;
-                    // Running, or finished having been asked to run once.
-                    //
-                    // **A one-shot dependency was unsatisfiable.** This waited
-                    // only for `Running`, and a task that does its job and
-                    // exits — mint a certificate, run a migration, prepare a
-                    // directory — passes through `Running` in less time than
-                    // the poll interval. Miss that window and the dependent
-                    // waits for a state the process will never be in again,
-                    // forever, with nothing logged: the dependency *worked*,
-                    // which is exactly why it was no longer running.
-                    //
-                    // `Stopped` counts only when the process was configured to
-                    // stop on exit. A process meant to keep running and found
-                    // stopped has not satisfied anything, and treating that as
-                    // ready would start the dependent into a broken node.
-                    let satisfied = (p.state == ProcessState::Running && p.ready)
-                        || (p.state == ProcessState::Stopped
-                            && p.config.on_exit == crate::config::ExitAction::Stop);
-                    if satisfied {
+                    if dependency_satisfied(
+                        &p.state,
+                        p.ready,
+                        p.config.ready_probe.is_some(),
+                        &p.config.on_exit,
+                        p.exit_code,
+                    ) {
                         break;
+                    }
+                    let one_shot = p.config.on_exit == crate::config::ExitAction::Stop;
+                    if !told
+                        && one_shot
+                        && matches!(p.state, ProcessState::Stopped | ProcessState::Failed)
+                    {
+                        warn!(
+                            dependency = %dep,
+                            state = ?p.state,
+                            code = ?p.exit_code,
+                            "waiting on a one-shot that did not finish cleanly — dependents stay held"
+                        );
+                        told = true;
                     }
                 }
                 drop(procs);
@@ -946,6 +950,81 @@ fn cooloff(base: u64, restarts_in_window: u32) -> std::time::Duration {
     let shift = restarts_in_window.saturating_sub(1).min(16);
     let secs = base.saturating_mul(1u64 << shift).min(CEILING);
     std::time::Duration::from_secs(secs)
+}
+
+/// Whether a process satisfies a `depends_on` naming it.
+///
+/// A long-running process satisfies once it is running and ready — and a
+/// process with no `ready_probe` is ready the moment it is spawned.
+///
+/// **A one-shot was satisfied at spawn.** For a one-shot (`on_exit = "stop"`)
+/// with no probe, "running and ready" is true while it is still doing the job
+/// its dependents wait for; stormcert-node-admin ran and failed before
+/// stormcert-sa had written the key it signs with (stormd#16). So a one-shot
+/// without a probe satisfies only once it has *finished* — stopped, having
+/// exited 0. One with a probe has said what "ready" means and keeps
+/// satisfying on it.
+///
+/// **A one-shot was unsatisfiable.** Waiting only for `Running` missed a task
+/// that does its job and exits inside one poll interval, and the dependent
+/// waited forever for a state the process would never be in again. Hence
+/// `Stopped` counts — but only for a one-shot, and only after a clean exit. A
+/// process meant to keep running and found stopped has satisfied nothing; nor
+/// has a one-shot that failed under `on_failure = "ignore"` (also `Stopped`)
+/// or was stopped by hand (killed, no code).
+fn dependency_satisfied(
+    state: &ProcessState,
+    ready: bool,
+    has_ready_probe: bool,
+    on_exit: &crate::config::ExitAction,
+    exit_code: Option<i32>,
+) -> bool {
+    let one_shot = *on_exit == crate::config::ExitAction::Stop;
+    let finished = *state == ProcessState::Stopped && exit_code == Some(0);
+    if one_shot {
+        finished || (has_ready_probe && *state == ProcessState::Running && ready)
+    } else {
+        *state == ProcessState::Running && ready
+    }
+}
+
+#[cfg(test)]
+mod dependency_tests {
+    use super::{dependency_satisfied, ProcessState};
+    use crate::config::ExitAction;
+
+    #[test]
+    fn a_one_shot_without_a_probe_satisfies_only_when_finished() {
+        // Spawned and "ready" (no probe) but still working: not yet.
+        assert!(!dependency_satisfied(&ProcessState::Running, true, false, &ExitAction::Stop, None));
+        assert!(!dependency_satisfied(&ProcessState::Starting, true, false, &ExitAction::Stop, None));
+        // Exited 0 and stopped: done.
+        assert!(dependency_satisfied(&ProcessState::Stopped, true, false, &ExitAction::Stop, Some(0)));
+    }
+
+    #[test]
+    fn a_one_shot_that_did_not_finish_cleanly_does_not_satisfy() {
+        // on_failure = "ignore" leaves it Stopped with its code.
+        assert!(!dependency_satisfied(&ProcessState::Stopped, true, false, &ExitAction::Stop, Some(1)));
+        // Stopped by hand: killed, no code.
+        assert!(!dependency_satisfied(&ProcessState::Stopped, true, false, &ExitAction::Stop, None));
+        assert!(!dependency_satisfied(&ProcessState::Failed, true, false, &ExitAction::Stop, Some(78)));
+    }
+
+    #[test]
+    fn a_one_shot_with_a_probe_satisfies_on_the_probe() {
+        assert!(!dependency_satisfied(&ProcessState::Running, false, true, &ExitAction::Stop, None));
+        assert!(dependency_satisfied(&ProcessState::Running, true, true, &ExitAction::Stop, None));
+        assert!(dependency_satisfied(&ProcessState::Stopped, false, true, &ExitAction::Stop, Some(0)));
+    }
+
+    #[test]
+    fn a_long_running_process_satisfies_when_running_and_ready() {
+        assert!(dependency_satisfied(&ProcessState::Running, true, false, &ExitAction::Restart, None));
+        assert!(!dependency_satisfied(&ProcessState::Running, false, true, &ExitAction::Restart, None));
+        // Stopped, even cleanly, is not what it was meant to be.
+        assert!(!dependency_satisfied(&ProcessState::Stopped, true, false, &ExitAction::Restart, Some(0)));
+    }
 }
 
 /// Whether an exit is one the process has declared not worth retrying. A

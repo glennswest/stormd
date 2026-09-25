@@ -3,6 +3,16 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-09-25
+- **fix:** #16 a `depends_on` naming a one-shot (`on_exit = "stop"`) with no
+  `ready_probe` was satisfied the moment the one-shot spawned — no probe
+  means ready at spawn — so dependents ran while it was still working
+  (stormcos#60: stormcert-node-admin failed before stormcert-sa wrote its
+  key). Such a one-shot now satisfies only once stopped after exiting 0; one
+  with a probe also satisfies on the probe. A one-shot that failed or was
+  stopped by hand no longer satisfies (it did when `on_failure = "ignore"`
+  left it stopped); the held dependent logs one WARN naming it
+
 ### 2026-09-24
 - **docs:** #6 `docs/presentation.md` — a 12-slide Marp deck: purpose,
   place in stormcos (stormcentral's relationships graph), moving parts,
