@@ -434,14 +434,28 @@ async fn main() {
         }
     }
 
-    // Graceful shutdown
+    // Graceful shutdown — bounded. Whatever stalls from here, stormd still
+    // exits: under a supervisor or a test harness a stormd that ignores
+    // SIGTERM holds whatever is waiting on it (stormd#17: ten hours under
+    // `timeout 10`). A plain thread, so a wedged runtime cannot stop it.
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(SHUTDOWN_DEADLINE_SECS));
+        eprintln!("stormd: shutdown did not finish in {SHUTDOWN_DEADLINE_SECS}s — exiting");
+        std::process::exit(1);
+    });
+
     event_bus_shutdown
         .emit_simple(EventKind::ContainerStopping, None)
         .await;
 
+    // Stopping sets the supervisor's shutdown flag, which also ends the
+    // start order: it may be parked on a dependency that will never be
+    // satisfied, and waiting for it was the #17 hang. Stop again once it has
+    // ended, for a process it forked while the first stop ran.
     sup_shutdown.stop_all().await;
     cron_shutdown.shutdown();
     let _ = start_handle.await;
+    sup_shutdown.stop_all().await;
 
     // Flush stormlog buffers
     if let Err(e) = stormlog_shutdown.flush().await {
@@ -465,7 +479,14 @@ async fn main() {
     if supervisor.has_failed().await {
         std::process::exit(1);
     }
+    // Explicitly: returning would drop the runtime, which waits on any
+    // blocking task still running.
+    std::process::exit(0);
 }
+
+/// How long shutdown may take, after SIGTERM, SIGINT, an API shutdown or a
+/// container failure, before stormd exits regardless.
+const SHUTDOWN_DEADLINE_SECS: u64 = 30;
 
 /// PID 1 zombie reaper — required when running as init in a container.
 #[cfg(target_os = "linux")]

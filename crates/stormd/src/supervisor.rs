@@ -3,6 +3,7 @@ use crate::events::{EventBus, EventKind};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use stormlog::StormLog;
@@ -113,6 +114,10 @@ pub struct Supervisor {
     container_failed: RwLock<bool>,
     exit_tx: mpsc::Sender<ExitEvent>,
     exit_rx: Mutex<Option<mpsc::Receiver<ExitEvent>>>,
+    /// Set by `stop_all`. From then on nothing new is spawned — not the rest
+    /// of the start order, not a restart, not an API start — and a dependency
+    /// wait gives up. See `stop_all`.
+    shutting_down: AtomicBool,
 }
 
 impl Supervisor {
@@ -125,7 +130,12 @@ impl Supervisor {
             container_failed: RwLock::new(false),
             exit_tx,
             exit_rx: Mutex::new(Some(exit_rx)),
+            shutting_down: AtomicBool::new(false),
         }
+    }
+
+    fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::SeqCst)
     }
 
     pub async fn has_failed(&self) -> bool {
@@ -163,7 +173,13 @@ impl Supervisor {
             self.wait_for_dependencies(&cfg.depends_on).await;
 
             if cfg.startup_delay_secs > 0 {
-                tokio::time::sleep(tokio::time::Duration::from_secs(cfg.startup_delay_secs)).await;
+                self.sleep_unless_shutdown(Duration::from_secs(cfg.startup_delay_secs)).await;
+            }
+
+            // The start order ends where shutdown begins.
+            if self.is_shutting_down() {
+                info!(process = %cfg.name, "shutting down — not starting");
+                return Ok(());
             }
 
             self.spawn_process(&cfg.name).await?;
@@ -235,6 +251,9 @@ impl Supervisor {
             // that failed is visible without a line every poll.
             let mut told = false;
             loop {
+                if self.is_shutting_down() {
+                    return;
+                }
                 let procs = self.processes.read().await;
                 if let Some(p) = procs.get(dep) {
                     let p = p.lock().await;
@@ -274,6 +293,12 @@ impl Supervisor {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("process not found: {}", name))?;
         drop(procs);
+
+        // Nothing starts once the container is stopping; a child forked now
+        // would outlive the `stop_all` that was meant to end it.
+        if self.is_shutting_down() {
+            anyhow::bail!("stormd is shutting down — not starting '{}'", name);
+        }
 
         let config = {
             let mut proc = proc_arc.lock().await;
@@ -577,6 +602,9 @@ impl Supervisor {
                 .emit_simple(EventKind::ProcessRestarting, Some(name.to_string()))
                 .await;
             tokio::time::sleep(cooloff(restart_delay, restarts_in_window)).await;
+            if self.stand_down(&proc_arc, name).await {
+                return;
+            }
             if let Err(e) = self.spawn_process(name).await {
                 error!(process = %name, error = %e, "failed to restart process after clean exit");
                 let mut proc = proc_arc.lock().await;
@@ -638,6 +666,9 @@ impl Supervisor {
                         )
                         .await;
                     tokio::time::sleep(wait).await;
+                    if self.stand_down(&proc_arc, name).await {
+                        return;
+                    }
                     if let Err(e) = self.spawn_process(name).await {
                         error!(process = %name, error = %e, "failed to restart process");
                         let mut proc = proc_arc.lock().await;
@@ -745,17 +776,80 @@ impl Supervisor {
         statuses
     }
 
+    /// Stop every running process, and start nothing more.
+    ///
+    /// **SIGTERM did not stop stormd** (stormd#17). The signal was received;
+    /// then shutdown waited for the start order to finish, and the start
+    /// order was parked on a dependency that would never be satisfied — a
+    /// dependent of a one-shot that had failed. stormd sat there for ten
+    /// hours under `timeout 10`, holding a build slot, with every later
+    /// SIGTERM going to a handler nobody was reading any more. So this sets
+    /// `shutting_down` first: the start order and any dependency wait give
+    /// up, restarts stand down, and nothing new is spawned.
+    ///
+    /// Then it waits, briefly, for the kills to land, so the children are
+    /// gone before stormd is. Safe to call twice; main does, once the start
+    /// order has ended, to catch a process forked while the first call ran.
     pub async fn stop_all(&self) {
-        let procs = self.processes.read().await;
-        for (name, p) in procs.iter() {
-            let mut proc = p.lock().await;
-            if proc.state == ProcessState::Running {
-                proc.state = ProcessState::Stopping;
-                if let Some(tx) = proc.kill_tx.take() {
-                    let _ = tx.send(());
-                    info!(process = %name, "stopping process");
+        self.shutting_down.store(true, Ordering::SeqCst);
+        {
+            let procs = self.processes.read().await;
+            for (name, p) in procs.iter() {
+                let mut proc = p.lock().await;
+                // A process marked Running a moment before its kill handle is
+                // stored is left Running, for the second call to catch.
+                if proc.state == ProcessState::Running {
+                    if let Some(tx) = proc.kill_tx.take() {
+                        proc.state = ProcessState::Stopping;
+                        let _ = tx.send(());
+                        info!(process = %name, "stopping process");
+                    }
                 }
             }
+        }
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let mut stopping = Vec::new();
+            {
+                let procs = self.processes.read().await;
+                for (name, p) in procs.iter() {
+                    if p.lock().await.state == ProcessState::Stopping {
+                        stopping.push(name.clone());
+                    }
+                }
+            }
+            if stopping.is_empty() {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                warn!(processes = ?stopping, "still stopping after 10s — exiting anyway");
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// After a restart's cooloff: if stormd began shutting down meanwhile,
+    /// leave the process stopped rather than start it into a container that
+    /// is going away. `true` when it stood down.
+    async fn stand_down(&self, proc_arc: &Arc<Mutex<ManagedProcess>>, name: &str) -> bool {
+        if !self.is_shutting_down() {
+            return false;
+        }
+        proc_arc.lock().await.state = ProcessState::Stopped;
+        info!(process = %name, "shutting down — not restarting");
+        true
+    }
+
+    /// Sleep, but wake early if shutdown begins.
+    async fn sleep_unless_shutdown(&self, total: Duration) {
+        let end = tokio::time::Instant::now() + total;
+        while !self.is_shutting_down() {
+            let now = tokio::time::Instant::now();
+            if now >= end {
+                return;
+            }
+            tokio::time::sleep((end - now).min(Duration::from_millis(250))).await;
         }
     }
 
@@ -1098,5 +1192,45 @@ mod cooloff_tests {
     fn a_zero_base_still_waits() {
         // A configured zero would be the loop this exists to stop.
         assert_eq!(cooloff(0, 1), Duration::from_secs(1));
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::Supervisor;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn supervisor() -> Arc<Supervisor> {
+        let cfg: crate::config::Config = toml::from_str(
+            "[general]\nname = \"t\"\nlog_dir = \"/nonexistent/stormd-test\"\n\
+             [stormlog.mcast]\ngroup = \"off\"\n",
+        )
+        .unwrap();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(cfg.stormlog.clone(), "t"));
+        Arc::new(Supervisor::new(log, bus))
+    }
+
+    /// stormd#17: the start order parked on a dependency that can never be
+    /// satisfied must end when shutdown begins, not hold stormd forever.
+    #[tokio::test]
+    async fn stopping_ends_a_start_order_parked_on_a_dependency() {
+        let sup = supervisor();
+        let cfg: crate::config::ProcessConfig = toml::from_str(
+            "name = \"held\"\ncommand = \"/bin/true\"\ndepends_on = [\"never\"]\n",
+        )
+        .unwrap();
+        let s = sup.clone();
+        let start = tokio::spawn(async move { s.start_all(&[cfg]).await });
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(!start.is_finished(), "should be waiting on its dependency");
+
+        sup.stop_all().await;
+        let r = tokio::time::timeout(Duration::from_secs(2), start).await;
+        assert!(r.is_ok(), "start order still waiting after stop_all");
+        assert!(r.unwrap().unwrap().is_ok());
+        // And nothing starts afterwards.
+        assert!(sup.start_process("held").await.is_err());
     }
 }
