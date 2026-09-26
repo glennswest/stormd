@@ -3,8 +3,10 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
-### 2026-09-25
-- **fix:** #16 a `depends_on` naming a one-shot (`on_exit = "stop"`) with no
+## [v0.7.1] — 2026-09-26 (stormd)
+
+### Fixed
+- #16 a `depends_on` naming a one-shot (`on_exit = "stop"`) with no
   `ready_probe` was satisfied the moment the one-shot spawned — no probe
   means ready at spawn — so dependents ran while it was still working
   (stormcos#60: stormcert-node-admin failed before stormcert-sa wrote its
