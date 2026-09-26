@@ -1,0 +1,19 @@
+[package]
+name = "stormd-test"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "stormd's test container: short, medium and long suites, per stormcentral docs/test-standard.md."
+publish = false
+
+# A workspace member, so `cargo test` covers its own unit tests and the one
+# Cargo.lock pins it. It does not depend on the stormd crate: it drives the
+# stormd *binary* of the same commit, through its REST API, the way anything
+# on a node does.
+[dependencies]
+serde_json.workspace = true
+libc = "0.2"
+
+[[bin]]
+name = "stormd-test"
+path = "src/main.rs"

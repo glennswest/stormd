@@ -1,0 +1,58 @@
+# stormd-test-<suite> — how stormcentral runs stormd's tests on a test
+# machine, per stormcentral docs/test-standard.md.
+#
+# Test metadata (what the runner matches against the machine):
+#   suites:   short (< 2 min), medium (< 30 min), long (the night window)
+#   requires: []            (no hardware: the suites run the stormd under test
+#                            inside the pod, with the test binary as the
+#                            processes it supervises)
+#   api:      none          (stormd is driven over its own REST API on
+#                            127.0.0.1 inside the pod; no ServiceAccount token)
+#   node:     read-only GET /api/v1/health on STORM_NODE ports 9081-9085, the
+#             control plane's stormds; none answering is a skip
+#   external: none
+#   resources: long sizes its waves from the pod's own CPU, memory and pid
+#             limits (16 processes per CPU, 8 MiB each, a quarter of pids.max)
+#
+# The runner creates the namespace test-stormd-<suite>-<run id>, fills in
+# NAMESPACE / RUN_ID / NODE / SUITE / TIMEOUT / TIMEOUT_PLUS_MARGIN / COMMIT /
+# IMAGE below, applies this, waits for the Job, collects /results with the
+# logs, and deletes the namespace. Nothing is created outside it.
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: stormd-test
+  namespace: ${NAMESPACE}
+  labels: { storm.io/test-run: "${RUN_ID}" }
+spec:
+  backoffLimit: 0            # a retry would hide the finding
+  activeDeadlineSeconds: ${TIMEOUT_PLUS_MARGIN}
+  template:
+    metadata:
+      labels: { storm.io/test-run: "${RUN_ID}" }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: stormd-test
+          image: ${IMAGE}
+          env:
+            - { name: STORM_NAMESPACE, value: "${NAMESPACE}" }
+            - { name: STORM_RUN_ID, value: "${RUN_ID}" }
+            - { name: STORM_NODE, value: "${NODE}" }
+            - { name: STORM_SUITE, value: "${SUITE}" }
+            - { name: STORM_TIMEOUT, value: "${TIMEOUT}" }
+            - { name: STORM_COMPONENT, value: stormd }
+            - { name: STORM_COMMIT, value: "${COMMIT}" }
+          volumeMounts:
+            # stormd's configs and logs live under /results/work, so a
+            # failure's logs come back with the results.
+            - { name: results, mountPath: /results }
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - { name: results, emptyDir: {} }

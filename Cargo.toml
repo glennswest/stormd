@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/stormd", "crates/stormlog", "crates/stormsh"]
+members = ["crates/stormd", "crates/stormlog", "crates/stormsh", "test"]
 resolver = "2"
 
 [workspace.package]
