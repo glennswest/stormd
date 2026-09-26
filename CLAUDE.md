@@ -255,7 +255,7 @@ If a documentation file doesn't exist yet and should, create it.
 
 ## Work Plan
 
-### Current Version: stormd `v0.7.2` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.4.0` (own repo)
+### Current Version: stormd `v0.7.3` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.4.0` (own repo)
 
 ### Current Sprint / Active Tasks
 
@@ -464,6 +464,7 @@ exit to `code == 0`. Adding a per-process carve-out:
 | v0.7.0 | 2026-08-30 | `no_restart_exit_codes` / `on_no_restart` — a process can say its exit is not worth retrying (#2) |
 | v0.7.1 | 2026-09-26 | A one-shot dependency satisfies when it finishes cleanly, not when it spawns (#16) |
 | v0.7.2 | 2026-09-26 | SIGTERM/SIGINT always stop stormd: shutdown ends the start order, is bounded at 30 s (#17) |
+| v0.7.3 | 2026-09-26 | Cron jobs run (#21); test container short/medium/long (#15); test crate out of default-members (#20) |
 
 ---
 

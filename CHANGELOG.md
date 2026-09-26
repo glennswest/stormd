@@ -3,16 +3,20 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
-### 2026-09-26
-- **fix:** #20 a compile error in the new test crate (9205cd5, fixed in
+## [v0.7.3] — 2026-09-26 (stormd)
+
+### Fixed
+- #20 a compile error in the new test crate (9205cd5, fixed in
   265acc1) broke every service golden's `build stormd` step, because the
   golden build compiles the whole workspace. `test/` is now out of the
   workspace's `default-members`: a bare `cargo build` no longer compiles it
-- **fix:** #21 no `[[cron]]` job ever ran: the scheduler ran a job when
+- #21 no `[[cron]]` job ever ran: the scheduler ran a job when
   `upcoming().next()` was not in the future, which it never is. Each job now
   keeps its next fire time and advances it when it comes; `GET /api/v1/cron`
   reports that time. Found by the #15 medium suite
-- **test:** #15 the test container, `stormd-test-<suite>`, per stormcentral's
+
+### Added
+- #15 the test container, `stormd-test-<suite>`, per stormcentral's
   test standard: `test/` (workspace member `stormd-test`), `test/build.sh`,
   `test/Containerfile` (scratch: `/stormd` of the commit + `/test`),
   `test/stormd-test.yaml` (the Job). It runs the stormd under test as its
@@ -20,7 +24,9 @@
   probe, one-shot, crash restart, logs, SIGTERM with nothing left, the node's
   stormds' health), `medium` (failure paths and features end to end), `long`
   (waves sized from the pod's allowance, measured for slowdown and residue)
-- **docs:** README "Tests" section; README's stormd version was stale (0.7.0)
+
+### Documentation
+- README "Tests" section; README's stormd version was stale (0.7.0)
 
 ## [v0.7.2] — 2026-09-26 (stormd)
 

@@ -71,7 +71,7 @@ docs/             plugin UI guide, design notes
 vendor/           vendored russh-sftp
 ```
 
-Versions: stormd 0.7.2, stormsh 0.4.0, stormlog 0.3.0 (each crate's
+Versions: stormd 0.7.3, stormsh 0.4.0, stormlog 0.3.0 (each crate's
 `Cargo.toml`).
 
 ## Building
