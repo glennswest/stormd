@@ -4,6 +4,10 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-09-26
+- **fix:** #21 no `[[cron]]` job ever ran: the scheduler ran a job when
+  `upcoming().next()` was not in the future, which it never is. Each job now
+  keeps its next fire time and advances it when it comes; `GET /api/v1/cron`
+  reports that time. Found by the #15 medium suite
 - **test:** #15 the test container, `stormd-test-<suite>`, per stormcentral's
   test standard: `test/` (workspace member `stormd-test`), `test/build.sh`,
   `test/Containerfile` (scratch: `/stormd` of the commit + `/test`),

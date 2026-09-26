@@ -26,6 +26,8 @@ pub struct CronJobStatus {
 struct CronJobState {
     config: CronJobConfig,
     parsed_schedule: Schedule,
+    /// When it fires next. Kept, not recomputed: see `run`.
+    next_run: Option<chrono::DateTime<Utc>>,
     last_run: Option<chrono::DateTime<Utc>>,
     last_exit_code: Option<i32>,
     run_count: u64,
@@ -62,6 +64,7 @@ impl CronScheduler {
                 cfg.name.clone(),
                 CronJobState {
                     config: cfg.clone(),
+                    next_run: schedule.upcoming(Utc).next(),
                     parsed_schedule: schedule,
                     last_run: None,
                     last_exit_code: None,
@@ -80,18 +83,25 @@ impl CronScheduler {
             let mut next_wake: Option<chrono::DateTime<Utc>> = None;
             let mut jobs_to_run = Vec::new();
 
+            // **No job ever ran** (stormd#21). This asked the schedule for
+            // `upcoming().next()` each time round and ran the job when that
+            // was not in the future — but `upcoming` only ever yields times
+            // after now, so the loop slept until a fire time, woke, and was
+            // told the one after it, forever. The fire time is kept per job
+            // and advanced when it has come.
             {
-                let jobs = self.jobs.read().await;
-                for (name, state) in jobs.iter() {
-                    if let Some(next) = state.parsed_schedule.upcoming(Utc).next() {
-                        if next <= now {
-                            jobs_to_run.push(name.clone());
-                        } else {
-                            match &next_wake {
-                                Some(current) if next < *current => next_wake = Some(next),
-                                None => next_wake = Some(next),
-                                _ => {}
-                            }
+                let mut jobs = self.jobs.write().await;
+                for (name, state) in jobs.iter_mut() {
+                    let Some(next) = state.next_run else { continue };
+                    if next <= now {
+                        jobs_to_run.push(name.clone());
+                        state.next_run = state.parsed_schedule.after(&now).next();
+                    }
+                    if let Some(next) = state.next_run {
+                        match &next_wake {
+                            Some(current) if next < *current => next_wake = Some(next),
+                            None => next_wake = Some(next),
+                            _ => {}
                         }
                     }
                 }
@@ -102,7 +112,8 @@ impl CronScheduler {
             }
 
             let sleep_dur = next_wake
-                .map(|t| (t - Utc::now()).to_std().unwrap_or(std::time::Duration::from_secs(1)))
+                // Already past (a job ran long): go round again now.
+                .map(|t| (t - Utc::now()).to_std().unwrap_or(std::time::Duration::ZERO))
                 .unwrap_or(std::time::Duration::from_secs(1));
 
             tokio::select! {
@@ -204,11 +215,7 @@ impl CronScheduler {
         let jobs = self.jobs.read().await;
         let mut statuses = Vec::new();
         for (name, state) in jobs.iter() {
-            let next_run = state
-                .parsed_schedule
-                .upcoming(Utc)
-                .next()
-                .map(|t| t.to_rfc3339());
+            let next_run = state.next_run.map(|t| t.to_rfc3339());
             statuses.push(CronJobStatus {
                 name: name.clone(),
                 schedule: state.config.schedule.clone(),
@@ -225,5 +232,29 @@ impl CronScheduler {
 
     pub fn shutdown(&self) {
         let _ = self.shutdown.send(true);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+    use cron::Schedule;
+    use std::str::FromStr;
+
+    /// The fire time the scheduler keeps: due once reached, then advanced
+    /// past now — the step stormd#21 was missing.
+    #[test]
+    fn a_kept_fire_time_comes_due_and_advances() {
+        let s = Schedule::from_str("* * * * * *").unwrap();
+        let t0 = Utc.with_ymd_and_hms(2026, 9, 26, 12, 0, 0).unwrap();
+        let next = s.after(&t0).next().unwrap();
+        assert_eq!(next, t0 + chrono::Duration::seconds(1));
+        // At that second the job is due; asking `upcoming` then, as the old
+        // loop did, only ever says "later".
+        let now = next;
+        assert!(next <= now);
+        let after = s.after(&now).next().unwrap();
+        assert!(after > now);
+        assert_eq!(after, now + chrono::Duration::seconds(1));
     }
 }
