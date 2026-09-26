@@ -255,7 +255,7 @@ If a documentation file doesn't exist yet and should, create it.
 
 ## Work Plan
 
-### Current Version: stormd `v0.7.1` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.4.0` (own repo)
+### Current Version: stormd `v0.7.2` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.4.0` (own repo)
 
 ### Current Sprint / Active Tasks
 
@@ -298,18 +298,23 @@ the plugin summary merge).
 
 ### In Progress
 
-**Issue #17 — SIGTERM did not stop stormd (2026-09-26).** Not signal
+**Issue #17 — SIGTERM did not stop stormd (2026-09-26) ✅ done, stormd v0.7.2.** Not signal
 delivery: the handler fires, then shutdown awaits `start_handle`, and
 `start_all` was parked forever in `wait_for_dependencies` on a dependency that
 can never be satisfied (the #16 live test: `held` behind a failed one-shot).
 Later SIGTERMs land on a tokio stream nobody reads. Same hang as PID 1. Plan:
-- [ ] Supervisor `shutting_down` flag set by `stop_all`: dependency waits and
+- [x] Supervisor `shutting_down` flag set by `stop_all`: dependency waits and
       `start_all` give up, `spawn_process` refuses, restart paths stand down
-- [ ] `stop_all` waits (bounded) for kills to land; main calls it again after
+- [x] `stop_all` waits (bounded) for kills to land; main calls it again after
       startup ends (closes the spawn-during-stop window), exits explicitly
-- [ ] Watchdog: a std thread forces exit 30 s after shutdown begins
-- [ ] Live test with `timeout -k 5 10` (held dependency, running child);
-      README, changelog; sc-build; patch release
+- [x] Watchdog: a std thread forces exit 30 s after shutdown begins
+- [x] Live test with `timeout -k 5 10` (held dependency, running child);
+      README, changelog; sc-build; patch release. Live on dev under
+      `timeout -k 5 -s TERM|INT 10`: rc 124 (no SIGKILL needed), exit ~0.1 s
+      after the signal, `held` never started, no leftover child. An exit
+      during shutdown is logged as a stop — but `timeout` signals the whole
+      group, and the child's exit can be handled before the flag is set, so
+      one crash + "restarting" line may still appear (restart stands down)
 
 **Issue #16 — a one-shot dependency satisfied at spawn (2026-09-25) ✅ done, stormd v0.7.1.**
 `wait_for_dependencies` accepts `Running && ready`, and a process with no
@@ -413,6 +418,7 @@ exit to `code == 0`. Adding a per-process carve-out:
 | v0.6.0 | 2026-08-26 | Named users, 12 themes + server default, card→grid links, UI system moved into stormview (npm) |
 | v0.7.0 | 2026-08-30 | `no_restart_exit_codes` / `on_no_restart` — a process can say its exit is not worth retrying (#2) |
 | v0.7.1 | 2026-09-26 | A one-shot dependency satisfies when it finishes cleanly, not when it spawns (#16) |
+| v0.7.2 | 2026-09-26 | SIGTERM/SIGINT always stop stormd: shutdown ends the start order, is bounded at 30 s (#17) |
 
 ---
 
