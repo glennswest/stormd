@@ -184,9 +184,16 @@ and the updater → start processes → bind the API (exit 1 if it cannot) and t
 SSH server → reap zombies and set sysctls (Linux).
 
 It shuts down on SIGTERM, SIGINT, `POST /api/v1/shutdown`, or container
-failure: stops every process (see below — SIGKILL), flushes logs, runs the backup if the container
-failed and `[backup] on_failure` is set, and exits with the API-requested code,
-else 1 if the container failed, else 0.
+failure — the same whether it is PID 1 or an ordinary process under a
+supervisor or a test harness. From that moment nothing new starts: the start
+order stops where it is (including a process still waiting on a `depends_on`
+that will never be satisfied), restarts stand down, and API starts are
+refused. It stops every process (see below — SIGKILL) and waits up to 10 s
+for them to go, flushes logs, runs the backup if the container failed and
+`[backup] on_failure` is set, and exits with the API-requested code, else 1 if
+the container failed, else 0. If shutdown has not finished 30 s after it
+began, stormd exits 1 regardless. A test that starts stormd should still use
+`timeout -k 5 N`, so a regression here cannot hang a build.
 
 Logging goes to stderr as plain compact lines — no timestamp, no ANSI, no JSON
 (the envelope that carries them already has those). `RUST_LOG` overrides the

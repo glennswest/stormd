@@ -3,6 +3,17 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-09-26
+- **fix:** #17 SIGTERM/SIGINT did not stop stormd when its start order was
+  waiting on a `depends_on` that could never be satisfied (e.g. a dependent
+  of a one-shot that failed): the signal was received, then shutdown waited
+  for the start order forever — ten hours under `timeout 10` on dev, holding a
+  build slot. Shutdown now sets a flag that ends the start order and any
+  dependency wait, stands down pending restarts and refuses new starts;
+  `stop_all` waits up to 10 s for the kills to land and runs again once the
+  start order has ended; and a watchdog thread exits stormd 30 s after
+  shutdown began if anything else stalls
+
 ## [v0.7.1] — 2026-09-26 (stormd)
 
 ### Fixed
