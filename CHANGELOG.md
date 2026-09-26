@@ -3,6 +3,16 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-09-26
+- **fix:** #19 the CloudID SSH-key refresh sent bare GETs, which stormimds
+  (default `security.mode = "both"`) answers 401 with an empty body — parsed
+  as an index with no entries: no keys, no warning. It now speaks IMDSv2
+  (`PUT /latest/api/token`, then `X-aws-ec2-metadata-token` on each GET,
+  falling back to no token when none is issued) and sends
+  `Metadata-Flavor: StormIMDS`; a non-2xx answer is an error with its
+  status; a stale token is replaced once; a persistent failure is warned
+  about once, not every 30 s
+
 ## [v0.7.3] — 2026-09-26 (stormd)
 
 ### Fixed

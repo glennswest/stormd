@@ -662,6 +662,13 @@ or the cloud ID. With `owner` set, public keys are fetched from
 `{cloudid_url}/latest/meta-data/public-keys/` (index, then
 `/{idx}/openssh-key`) at start and every 30 s, keeping the old set if a
 refresh fails; the owner value itself only switches this on — it is not sent.
+The requests speak IMDSv2: a token from `PUT /latest/api/token` (asked for
+six hours, re-asked a minute before it expires, or once when a request with
+it is answered 401) goes on every GET as `X-aws-ec2-metadata-token`, along
+with `Metadata-Flavor: StormIMDS` — so every stormimds `security.mode`
+works, and a service that issues no token is asked without one. A non-2xx
+answer is a failed refresh, logged with its status once (and again only when
+it changes, or when it recovers).
 
 A session is an interactive shell (a PTY is expected); `ssh host command`
 (exec requests) is not supported. The `sftp` subsystem is, so `sftp` and
