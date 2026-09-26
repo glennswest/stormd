@@ -398,6 +398,22 @@ mod tests {
         assert!(e.contains("401"), "{e}");
     }
 
+    /// Against a real stormimds: `STORMIMDS_URL=http://127.0.0.1:PORT cargo
+    /// test -p stormd live_stormimds -- --ignored --nocapture`. Prints what
+    /// came back rather than asserting a key count, since which paths
+    /// stormimds serves is its own business (stormimds#5).
+    #[tokio::test]
+    #[ignore]
+    async fn live_stormimds() {
+        let url = std::env::var("STORMIMDS_URL").expect("STORMIMDS_URL");
+        let mut imds = Imds::new(reqwest::Client::new(), &url);
+        let id = imds.get("latest/meta-data/instance-id").await;
+        println!("instance-id: {id:?}");
+        println!("token issued: {}", imds.token.is_some());
+        println!("keys: {:?}", fetch_keys(&mut imds).await.map(|s| s.len()));
+        assert!(id.is_ok(), "{id:?}");
+    }
+
     #[tokio::test]
     async fn a_token_the_service_forgot_is_replaced_once() {
         // The service forgets its tokens on the second GET (the first key).
