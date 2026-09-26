@@ -298,7 +298,7 @@ the plugin summary merge).
 
 ### In Progress
 
-**Issue #15 — short/medium/long test containers (2026-09-26).** Per
+**Issue #15 — short/medium/long test containers (2026-09-26) ✅ done.** Per
 stormcentral `docs/test-standard.md`, shaped like stormcast's `test/`.
 Decisions (from the code, not asked):
 - The suites run **the stormd of the commit under test** as a child of the
@@ -314,24 +314,34 @@ Decisions (from the code, not asked):
   in-container cargo build. `test/build.sh` builds static musl binaries on
   the build box (as the root `Containerfile`s expect); `test/Containerfile`
   is `FROM scratch` + the two binaries. `test/stormd-test.yaml` is the Job.
-- `test/` is a workspace member (`stormd-test`), so `cargo test` covers its
-  unit tests and one `Cargo.lock` pins it.
+- `test/` is a workspace member (`stormd-test`) pinned by the one
+  `Cargo.lock`, but **not a default member**: the golden build is a bare
+  `cargo build --release` in this repo, and a compile error in test code broke
+  every service golden once (#20). Build/test it with `-p stormd-test` or
+  `--workspace`.
 Plan:
-- [ ] Crate skeleton: env, report (JSON lines, /results, exit 0/1/2), helper
+- [x] Crate skeleton: env, report (JSON lines, /results, exit 0/1/2), helper
       modes, stormd harness (spawn, config, API client, SIGTERM, residue)
-- [ ] short: boot + API + start order (one-shot → dependent) + ready probe,
+- [x] short: boot + API + start order (one-shot → dependent) + ready probe,
       restart on crash, logs through the API, SIGTERM shutdown with no child
       left, node stormd health (skip if none)
-- [ ] medium: failure paths — ignore-failed one-shot holds dependents,
+- [x] medium: failure paths — ignore-failed one-shot holds dependents,
       no_restart hold/fail, on_failure=fail, max_restarts, API stop/start/
       restart, API shutdown exitCode, auth 401/200, metrics, components,
       bad config exits 1, SIGTERM with a parked start order, cron
-- [ ] long: waves until STORM_TIMEOUT — N processes sized from the pod's
+- [x] long: waves until STORM_TIMEOUT — N processes sized from the pod's
       own CPU/memory allowance, churn, drain; start latency, shutdown time,
       stormd RSS/fds and leftover children per wave; regression = fail
-- [ ] Containerfile, build.sh, Job yaml; README "Tests" section; changelog
-- [ ] Verify on dev via sc-build: build + run each suite natively (long with
+- [x] Containerfile, build.sh, Job yaml; README "Tests" section; changelog
+- [x] Verify on dev via sc-build: build + run each suite natively (long with
       a short STORM_TIMEOUT); podman build if dev has it
+- Verified on dev (sc-build): short 6 pass + node-stormd skip, medium 15 pass
+  + skip, long 300 s window (waves, no regression, nothing left); image built
+  with podman from `test/build.sh` staging and short passed inside it as uid
+  65532. Found and filed: #21 cron never ran (fixed), #22 exit handling is
+  serialized behind restart cooloffs (open). Running the image on dev with a
+  bind-mounted results dir leaves subuid-owned files that sc-build cannot
+  delete — use `podman unshare rm -rf` (or no bind mount) if repeating it.
 
 **Issue #17 — SIGTERM did not stop stormd (2026-09-26) ✅ done, stormd v0.7.2.** Not signal
 delivery: the handler fires, then shutdown awaits `start_handle`, and
@@ -479,6 +489,8 @@ crates/stormd/     — the init/supervisor daemon
   src/shell/         — busybox-style applets
 crates/stormlog/   — log store, VT100 terminals, stormcast wire
 crates/stormsh/    — TUI client (ratatui)
+test/              — stormd-test: the test container (short/medium/long), build.sh,
+                     Containerfile, stormd-test.yaml (the Job); not a default member
 web/               — Svelte SPA source; web/dist is the built output (committed)
 config/            — example.toml (every key; parsed by a unit test)
 docs/              — plugin-ui.md, design/ (proposals, with status)
@@ -493,6 +505,9 @@ vendor/            — vendored russh-sftp
 sc-build                          # cargo build && cargo test
 sc-build 'cargo test -p stormd'   # any command
 sc-build 'cargo clippy'
+sc-build 'cargo build --workspace && cargo test --workspace'   # + test crate
+# Test container suites against a cargo build (see README "Tests"):
+#   STORM_SUITE=short target/debug/stormd-test
 
 # Frontend — commit web/dist (embedded by rust-embed)
 cd web && npm install && npm run build
