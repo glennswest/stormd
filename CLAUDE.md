@@ -255,7 +255,7 @@ If a documentation file doesn't exist yet and should, create it.
 
 ## Work Plan
 
-### Current Version: stormd `v0.7.0` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.4.0` (own repo)
+### Current Version: stormd `v0.7.1` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.4.0` (own repo)
 
 ### Current Sprint / Active Tasks
 
@@ -298,19 +298,22 @@ the plugin summary merge).
 
 ### In Progress
 
-**Issue #16 — a one-shot dependency satisfied at spawn (2026-09-25).**
+**Issue #16 — a one-shot dependency satisfied at spawn (2026-09-25) ✅ done, stormd v0.7.1.**
 `wait_for_dependencies` accepts `Running && ready`, and a process with no
 `ready_probe` is ready at spawn — so a one-shot (`on_exit = "stop"`, no probe)
 let its dependents through while still working (stormcos#60: node-admin ran
 before stormcert-sa wrote the key). Plan:
-- [ ] Pure helper `dependency_satisfied`: one-shot without probe → only
+- [x] Pure helper `dependency_satisfied`: one-shot without probe → only
       `Stopped` with exit code 0; one-shot with probe keeps `Running && ready`;
       `Stopped` counts only after a clean exit (a one-shot failed under
       `on_failure = "ignore"`, or stopped by hand, does not satisfy)
-- [ ] Log once when a dependent is held behind a one-shot that failed, so the
+- [x] Log once when a dependent is held behind a one-shot that failed, so the
       wait is not silent
-- [ ] Unit tests, README § Process supervision, presentation, example.toml
-      comment, changelog; sc-build; patch release
+- [x] Unit tests, README § Process supervision, presentation, example.toml
+      comment, changelog; sc-build passes on e265647; live on dev: one-shot
+      `sa` (sleep 3; touch key) → dependent started only after it exited 0 and
+      saw the key; dependent of an `ignore`-failed one-shot never started, one
+      WARN logged; patch release v0.7.1
 
 **Issue #6 — presentation (2026-09-24) ✅ done.** `docs/presentation.md`, Marp
 Markdown, 12 slides, every claim from the #5 README / the code:
@@ -396,6 +399,7 @@ exit to `code == 0`. Adding a per-process carve-out:
 | v0.5.0 | 2026-08-26 | Themes, login system, relations + grid view, stormview crate extraction |
 | v0.6.0 | 2026-08-26 | Named users, 12 themes + server default, card→grid links, UI system moved into stormview (npm) |
 | v0.7.0 | 2026-08-30 | `no_restart_exit_codes` / `on_no_restart` — a process can say its exit is not worth retrying (#2) |
+| v0.7.1 | 2026-09-26 | A one-shot dependency satisfies when it finishes cleanly, not when it spawns (#16) |
 
 ---
 
