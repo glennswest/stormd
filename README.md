@@ -472,7 +472,8 @@ that must shut down cleanly has to be told another way first.
 
 The delay before restart *n* within the window is `restart_delay_secs × 2^(n-1)`,
 capped at 30 s — a process that can never start costs a restart every 30 s,
-not every second. `no_restart_exit_codes` is how a process says a restart
+not every second. Each exit is handled on its own, so one process waiting out
+its delay does not hold up another's exit, restart or state. `no_restart_exit_codes` is how a process says a restart
 cannot help (sysexits 78 `EX_CONFIG`, 64 `EX_USAGE`; stormconsole exits 78): it
 logs `process exited with a non-retryable code — not restarting` once, and the
 `process_crashed` event carries `code` and `no_restart`. A clean exit is never

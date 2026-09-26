@@ -142,10 +142,21 @@ impl Supervisor {
         *self.container_failed.read().await
     }
 
+    /// Take exit events, each on its own task.
+    ///
+    /// **One process's cooloff held up every other exit** (stormd#22). This
+    /// awaited `handle_exit` in turn, and `handle_exit` sleeps the restart
+    /// cooloff before respawning — so while one crash-looping process waited
+    /// out its (up to 30 s) cooloff, every other process that died stayed
+    /// `running` in the API, unrestarted and invisible to dependency checks.
+    /// A wave of processes in the #15 long suite took ~100 ms each to settle
+    /// for that reason alone. Exits of *one* process cannot overlap: it exits
+    /// again only after `handle_exit` has respawned it.
     pub async fn run_exit_handler(self: &Arc<Self>) {
         let mut rx = self.exit_rx.lock().await.take().expect("exit handler already running");
         while let Some(evt) = rx.recv().await {
-            self.handle_exit(&evt.name, evt.exit_code).await;
+            let this = Arc::clone(self);
+            tokio::spawn(async move { this.handle_exit(&evt.name, evt.exit_code).await });
         }
     }
 
@@ -1244,5 +1255,57 @@ mod shutdown_tests {
         assert!(r.unwrap().unwrap().is_ok());
         // And nothing starts afterwards.
         assert!(sup.start_process("held").await.is_err());
+    }
+}
+
+#[cfg(test)]
+mod exit_handler_tests {
+    use super::{ProcessState, Supervisor};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// stormd#22: a process in its restart cooloff must not delay handling
+    /// another process's exit.
+    #[tokio::test]
+    async fn a_cooloff_does_not_hold_up_another_exit() {
+        let dir = std::env::temp_dir().join(format!("stormd-exit-test-{}", std::process::id()));
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        let sup = Arc::new(Supervisor::new(log, bus));
+        let h = sup.clone();
+        tokio::spawn(async move { h.run_exit_handler().await });
+
+        let procs: Vec<crate::config::ProcessConfig> = [
+            // Crashes at once, then waits out a 5 s cooloff.
+            "name = \"slow\"\ncommand = \"/bin/sh\"\nargs = [\"-c\", \"exit 1\"]\nrestart_delay_secs = 5\n",
+            // Crashes half a second later, while `slow` is cooling off.
+            "name = \"quick\"\ncommand = \"/bin/sh\"\nargs = [\"-c\", \"sleep 0.5; exit 1\"]\non_failure = \"ignore\"\non_exit = \"stop\"\n",
+        ]
+        .iter()
+        .map(|t| toml::from_str(t).unwrap())
+        .collect();
+        sup.start_all(&procs).await.unwrap();
+
+        let mut handled = false;
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let q = sup.get_status("quick").await.unwrap();
+            if q.state == ProcessState::Stopped && q.exit_code == Some(1) {
+                handled = true;
+                break;
+            }
+        }
+        let slow = sup.get_status("slow").await.unwrap();
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(handled, "quick's exit was not handled within 2 s (slow is {:?})", slow.state);
+        assert_eq!(slow.state, ProcessState::Restarting, "slow should still be in its cooloff");
     }
 }
