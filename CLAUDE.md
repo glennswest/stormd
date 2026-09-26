@@ -255,7 +255,7 @@ If a documentation file doesn't exist yet and should, create it.
 
 ## Work Plan
 
-### Current Version: stormd `v0.7.3` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.4.0` (own repo)
+### Current Version: stormd `v0.7.4` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.4.0` (own repo)
 
 ### Current Sprint / Active Tasks
 
@@ -298,22 +298,32 @@ the plugin summary merge).
 
 ### In Progress
 
-**Issue #19 — CloudID key refresh speaks IMDSv2 (2026-09-26).** stormimds
+**Issue #19 — CloudID key refresh speaks IMDSv2 (2026-09-26) ✅ done, v0.7.4.** stormimds
 (default `security.mode = "both"`) answers a bare GET 401 with an empty body;
 `fetch_keys` parsed that as an empty index — no keys, no warning. Plan:
-- [ ] `PUT /latest/api/token` (`X-aws-ec2-metadata-token-ttl-seconds: 21600`),
+- [x] `PUT /latest/api/token` (`X-aws-ec2-metadata-token-ttl-seconds: 21600`),
       token cached until near expiry, `X-aws-ec2-metadata-token` on each GET;
       a refused PUT falls back to no token (IMDSv1 / other services).
       `Metadata-Flavor: StormIMDS` on every request too, so stormimds's
       `header` mode works as well (real EC2 ignores it)
-- [ ] non-2xx is an error with its status (index: refresh fails, old keys
+- [x] non-2xx is an error with its status (index: refresh fails, old keys
       kept; one key: skipped); a 401 with a cached token re-fetches it once
-- [ ] a failure warns once, not every 30 s, until it changes or recovers
-- [ ] unit tests against an in-process stand-in (token/both/header/v1
+- [x] a failure warns once, not every 30 s, until it changes or recovers
+- [x] unit tests against an in-process stand-in (token/both/header/v1
       modes, 401, expiry); README § SSH; changelog; sc-build; patch release
 - Keys at `keys/` vs `public-keys/` is stormimds#5 (theirs, open)
+- Verified: 4 stand-in unit tests; live against stormimds 743e9e7 built in
+  the sc-build job (ignored test `cloudid::tests::live_stormimds`): in
+  `token`, `both` and `header` modes a bare GET is 401, stormd's request gets
+  `instance-id` with a token issued; the key index is 404 (stormimds#5)
 
-**Issue #22 — exit handling serialized behind restart cooloffs.** Next.
+**Issue #22 — exit handling serialized behind restart cooloffs (2026-09-26) ✅ done, v0.7.4.**
+`run_exit_handler` awaited each `handle_exit`, which sleeps the cooloff.
+- [x] One task per exit event; regression test
+      `exit_handler_tests::a_cooloff_does_not_hold_up_another_exit`
+- [x] Long suite on dev: resident 64 processes settle 1.1 s (was 6.1 s), a
+      128-process wave 4.4 s (was 13.5 s); the rest is the 250 ms dependency
+      poll behind one-shots
 
 **Issue #15 — short/medium/long test containers (2026-09-26) ✅ done.** Per
 stormcentral `docs/test-standard.md`, shaped like stormcast's `test/`.
@@ -482,6 +492,7 @@ exit to `code == 0`. Adding a per-process carve-out:
 | v0.7.1 | 2026-09-26 | A one-shot dependency satisfies when it finishes cleanly, not when it spawns (#16) |
 | v0.7.2 | 2026-09-26 | SIGTERM/SIGINT always stop stormd: shutdown ends the start order, is bounded at 30 s (#17) |
 | v0.7.3 | 2026-09-26 | Cron jobs run (#21); test container short/medium/long (#15); test crate out of default-members (#20) |
+| v0.7.4 | 2026-09-26 | CloudID keys over IMDSv2 (#19); one restart cooloff no longer holds up other exits (#22) |
 
 ---
 

@@ -3,13 +3,15 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
-### 2026-09-26
-- **fix:** #22 exits were handled one at a time, and a restart's cooloff
+## [v0.7.4] — 2026-09-26 (stormd)
+
+### Fixed
+- #22 exits were handled one at a time, and a restart's cooloff
   (up to 30 s) was slept inside that handling — so while one process cooled
   off, every other process that died stayed `running`, unrestarted. Each exit
   is now handled on its own task. Found by the #15 long suite (waves took
   ~100 ms per process to settle)
-- **fix:** #19 the CloudID SSH-key refresh sent bare GETs, which stormimds
+- #19 the CloudID SSH-key refresh sent bare GETs, which stormimds
   (default `security.mode = "both"`) answers 401 with an empty body — parsed
   as an index with no entries: no keys, no warning. It now speaks IMDSv2
   (`PUT /latest/api/token`, then `X-aws-ec2-metadata-token` on each GET,
