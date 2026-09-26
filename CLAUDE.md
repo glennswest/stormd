@@ -298,6 +298,23 @@ the plugin summary merge).
 
 ### In Progress
 
+**Issue #19 — CloudID key refresh speaks IMDSv2 (2026-09-26).** stormimds
+(default `security.mode = "both"`) answers a bare GET 401 with an empty body;
+`fetch_keys` parsed that as an empty index — no keys, no warning. Plan:
+- [ ] `PUT /latest/api/token` (`X-aws-ec2-metadata-token-ttl-seconds: 21600`),
+      token cached until near expiry, `X-aws-ec2-metadata-token` on each GET;
+      a refused PUT falls back to no token (IMDSv1 / other services).
+      `Metadata-Flavor: StormIMDS` on every request too, so stormimds's
+      `header` mode works as well (real EC2 ignores it)
+- [ ] non-2xx is an error with its status (index: refresh fails, old keys
+      kept; one key: skipped); a 401 with a cached token re-fetches it once
+- [ ] a failure warns once, not every 30 s, until it changes or recovers
+- [ ] unit tests against an in-process stand-in (token/both/header/v1
+      modes, 401, expiry); README § SSH; changelog; sc-build; patch release
+- Keys at `keys/` vs `public-keys/` is stormimds#5 (theirs, open)
+
+**Issue #22 — exit handling serialized behind restart cooloffs.** Next.
+
 **Issue #15 — short/medium/long test containers (2026-09-26) ✅ done.** Per
 stormcentral `docs/test-standard.md`, shaped like stormcast's `test/`.
 Decisions (from the code, not asked):
@@ -518,9 +535,9 @@ cd web && npm install && npm run build
 stormd is not a golden of its own: it is `/stormd` in every stormdbase golden
 (stormcos `deploy/build-goldens.sh` `stormdbase_stage` / `golden_stormd`;
 stormcentral registry `kind = "special"`). Authority: stormcos
-`docs/goldens.md`. A commit reaches a node only when a component golden that
-pins it is rebuilt and released — `stormcentral component build <component>
---url http://stormcentral.g8.lo`. Sibling crates (stormcast, stormview,
+`docs/goldens.md`. A commit reaches a node when stormcos composes a release and
+rebuilds the goldens that carry it. **stormd never requests goldens** (owner,
+2026-09-26): no `stormcentral component build` after a stormd issue. Sibling crates (stormcast, stormview,
 stormpull) are pinned by `Cargo.lock`; a fix there needs `cargo update -p`.
 stormd's API port per container: fastetcd 9081, rustkube 9082–9085, service
 goldens port+100.
