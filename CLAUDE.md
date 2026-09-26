@@ -298,6 +298,19 @@ the plugin summary merge).
 
 ### In Progress
 
+**Issue #17 — SIGTERM did not stop stormd (2026-09-26).** Not signal
+delivery: the handler fires, then shutdown awaits `start_handle`, and
+`start_all` was parked forever in `wait_for_dependencies` on a dependency that
+can never be satisfied (the #16 live test: `held` behind a failed one-shot).
+Later SIGTERMs land on a tokio stream nobody reads. Same hang as PID 1. Plan:
+- [ ] Supervisor `shutting_down` flag set by `stop_all`: dependency waits and
+      `start_all` give up, `spawn_process` refuses, restart paths stand down
+- [ ] `stop_all` waits (bounded) for kills to land; main calls it again after
+      startup ends (closes the spawn-during-stop window), exits explicitly
+- [ ] Watchdog: a std thread forces exit 30 s after shutdown begins
+- [ ] Live test with `timeout -k 5 10` (held dependency, running child);
+      README, changelog; sc-build; patch release
+
 **Issue #16 — a one-shot dependency satisfied at spawn (2026-09-25) ✅ done, stormd v0.7.1.**
 `wait_for_dependencies` accepts `Running && ready`, and a process with no
 `ready_probe` is ready at spawn — so a one-shot (`on_exit = "stop"`, no probe)
