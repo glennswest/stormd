@@ -3,8 +3,10 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
-### 2026-09-26
-- **fix:** #17 SIGTERM/SIGINT did not stop stormd when its start order was
+## [v0.7.2] — 2026-09-26 (stormd)
+
+### Fixed
+- #17 SIGTERM/SIGINT did not stop stormd when its start order was
   waiting on a `depends_on` that could never be satisfied (e.g. a dependent
   of a one-shot that failed): the signal was received, then shutdown waited
   for the start order forever — ten hours under `timeout 10` on dev, holding a
@@ -13,9 +15,11 @@
   `stop_all` waits up to 10 s for the kills to land and runs again once the
   start order has ended; and a watchdog thread exits stormd 30 s after
   shutdown began if anything else stalls
-- **fix:** #17 a process that exits while stormd is shutting down (a
-  `timeout` or supervisor that signals the whole process group reaches the
-  child first) is recorded as stopped — not a crash, and no restart scheduled
+- #17 a process whose exit is handled after shutdown began is recorded as
+  stopped — not a crash, no restart. (Under `timeout`, which signals the whole
+  process group, the child can die before stormd starts shutting down; that
+  exit is still logged as a crash and a restart scheduled, which then stands
+  down.)
 
 ## [v0.7.1] — 2026-09-26 (stormd)
 
