@@ -112,7 +112,10 @@ the updater). A fix in one of them does not arrive here until `cargo update -p
 ## Tests
 
 Unit tests run with `cargo test` (so in every `sc-build`), including
-`config/example.toml` being parsed and validated.
+`config/example.toml` being parsed and validated. The test container's crate
+is a workspace member but not a default one, so a golden's release build never
+compiles it: `sc-build 'cargo build --workspace && cargo test --workspace'`
+covers it too.
 
 **The test container**, `stormd-test-<suite>`, follows stormcentral's
 [test standard](https://github.com/glennswest/stormcentral/blob/main/docs/test-standard.md):

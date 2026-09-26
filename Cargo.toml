@@ -1,5 +1,10 @@
 [workspace]
 members = ["crates/stormd", "crates/stormlog", "crates/stormsh", "test"]
+# What a bare `cargo build` / `cargo test` at the root builds — the release
+# build of every stormdbase golden among them. The test container's crate is
+# left out, so a mistake in test code cannot break a golden (stormd#20);
+# `-p stormd-test` or `--workspace` builds it.
+default-members = ["crates/stormd", "crates/stormlog", "crates/stormsh"]
 resolver = "2"
 
 [workspace.package]

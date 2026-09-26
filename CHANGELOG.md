@@ -4,6 +4,10 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-09-26
+- **fix:** #20 a compile error in the new test crate (9205cd5, fixed in
+  265acc1) broke every service golden's `build stormd` step, because the
+  golden build compiles the whole workspace. `test/` is now out of the
+  workspace's `default-members`: a bare `cargo build` no longer compiles it
 - **fix:** #21 no `[[cron]]` job ever ran: the scheduler ran a job when
   `upcoming().next()` was not in the future, which it never is. Each job now
   keeps its next fire time and advances it when it comes; `GET /api/v1/cron`
