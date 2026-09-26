@@ -184,7 +184,7 @@ fn api_control(env: &Env) -> Outcome {
                 (s, b) => Err(format!("{action}: HTTP {s}: {b:.200}")),
             }
         };
-        let run = || -> Result<String, String> {
+        let mut run = || -> Result<String, String> {
             let p0 = sd.wait_state("worker", "running", S(10))?;
             step(sd, "stop", "stopped")?;
             let p1 = step(sd, "start", "running")?;
