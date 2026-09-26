@@ -64,13 +64,14 @@ crates/stormd/    the init/supervisor daemon (binary + lib)
   src/cron.rs events.rs backup.rs updater.rs cloudid.rs stats.rs debug.rs
 crates/stormlog/  logging: rotated files, multicast emit, VT100, streams
 crates/stormsh/   TUI client (ratatui)
+test/             stormd-test: the test container (short/medium/long suites)
 web/              Svelte 5 SPA source; web/dist is the built output (committed)
 config/           example.toml — every key, parsed by a unit test
 docs/             plugin UI guide, design notes
 vendor/           vendored russh-sftp
 ```
 
-Versions: stormd 0.7.0, stormsh 0.4.0, stormlog 0.3.0 (each crate's
+Versions: stormd 0.7.2, stormsh 0.4.0, stormlog 0.3.0 (each crate's
 `Cargo.toml`).
 
 ## Building
@@ -107,6 +108,47 @@ Sibling dependencies are git dependencies pinned in `Cargo.lock`: stormcast
 (log wire), stormview (UI contract), stormpull (from the stormbase repo, for
 the updater). A fix in one of them does not arrive here until `cargo update -p
 <name>` and a commit of the lock file.
+
+## Tests
+
+Unit tests run with `cargo test` (so in every `sc-build`), including
+`config/example.toml` being parsed and validated.
+
+**The test container**, `stormd-test-<suite>`, follows stormcentral's
+[test standard](https://github.com/glennswest/stormcentral/blob/main/docs/test-standard.md):
+built from `test/`, run by stormcentral as a Job in the run's own namespace
+(`test/stormd-test.yaml`), one JSON object per test on stdout and in
+`/results/results.jsonl`, exit 0 (all passed), 1 (a test failed) or 2 (could
+not run).
+
+It runs **the stormd of the commit under test** (`/stormd` in the image) as
+its child, on configs it writes, and checks it through the REST API; the
+processes stormd supervises are the test binary itself (`/test helper …`),
+since the image is `FROM scratch`. So it needs no hardware (`requires: []`),
+no cluster API and no ServiceAccount token, and everything it makes lives and
+dies in the pod.
+
+| suite | budget | covers |
+|---|---|---|
+| `short` | < 2 min | API up; a dependent waits for a tcp ready probe and for a one-shot to finish; a crash is restarted; stdout and stderr reach the logs API; SIGTERM exits 0 with no process left behind; the node's own stormds (ports 9081–9085) answer `/api/v1/health` — a skip where none do |
+| `medium` | < 30 min | a failed one-shot holds its dependents, and SIGTERM still stops stormd; `no_restart_exit_codes` hold and fail; `on_failure = "fail"`; `max_restarts`; `on_exit = "restart"`; liveness restarts; API stop/start/restart and shutdown with an exit code; bearer-token auth; `/metrics`; the component feed; cron; a config that does not parse exits 1 |
+| `long` | the night window | waves of processes sized from the pod's own CPU, memory and pid limits (mostly long-running, some crash-once, one-shots with dependents), started, settled and stopped with SIGTERM; one resident stormd has its processes restarted through the API every wave. Per wave: settle time, stop time, leftover processes, the resident's RSS and fds. A wave twice as slow as the first of its size, a leftover, or growing residue fails |
+
+Build it on the build box (stormd needs `stormpull` over `ssh://`, so the
+binaries are built by cargo there, not inside a container build):
+
+```bash
+test/build.sh short                   # static musl binaries → podman build stormd-test-short
+STAGE_ONLY=1 test/build.sh            # just stage the context in test/.stage/
+```
+
+Run it by hand against a cargo build — it finds `stormd` next to itself, or
+`STORMD_BIN`; scratch goes to a temp directory when there is no `/results`:
+
+```bash
+STORM_SUITE=short target/debug/stormd-test
+STORM_SUITE=long STORM_TIMEOUT=600 target/debug/stormd-test
+```
 
 ## How it ships
 

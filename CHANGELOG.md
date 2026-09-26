@@ -3,6 +3,17 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-09-26
+- **test:** #15 the test container, `stormd-test-<suite>`, per stormcentral's
+  test standard: `test/` (workspace member `stormd-test`), `test/build.sh`,
+  `test/Containerfile` (scratch: `/stormd` of the commit + `/test`),
+  `test/stormd-test.yaml` (the Job). It runs the stormd under test as its
+  child and drives it through the REST API; `short` (start order, ready
+  probe, one-shot, crash restart, logs, SIGTERM with nothing left, the node's
+  stormds' health), `medium` (failure paths and features end to end), `long`
+  (waves sized from the pod's allowance, measured for slowdown and residue)
+- **docs:** README "Tests" section; README's stormd version was stale (0.7.0)
+
 ## [v0.7.2] — 2026-09-26 (stormd)
 
 ### Fixed
