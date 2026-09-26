@@ -13,6 +13,9 @@
   `stop_all` waits up to 10 s for the kills to land and runs again once the
   start order has ended; and a watchdog thread exits stormd 30 s after
   shutdown began if anything else stalls
+- **fix:** #17 a process that exits while stormd is shutting down (a
+  `timeout` or supervisor that signals the whole process group reaches the
+  child first) is recorded as stopped — not a crash, and no restart scheduled
 
 ## [v0.7.1] — 2026-09-26 (stormd)
 

@@ -500,6 +500,18 @@ impl Supervisor {
             )
         };
 
+        // An exit while stormd is stopping is the stop, not a crash — under a
+        // supervisor or `timeout`, the signal often reaches the whole process
+        // group, so the child dies before stormd's own kill does. Counting
+        // that as a crash and scheduling a restart is noise in the last lines
+        // anyone reads.
+        if self.is_shutting_down() {
+            proc_arc.lock().await.state = ProcessState::Stopped;
+            self.stormlog.archive_run(name, false).await;
+            info!(process = %name, code = ?exit_code, "process exited during shutdown");
+            return;
+        }
+
         let success = exit_code == Some(0);
         let failed = !success;
 
