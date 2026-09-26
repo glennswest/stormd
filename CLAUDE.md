@@ -298,6 +298,41 @@ the plugin summary merge).
 
 ### In Progress
 
+**Issue #15 — short/medium/long test containers (2026-09-26).** Per
+stormcentral `docs/test-standard.md`, shaped like stormcast's `test/`.
+Decisions (from the code, not asked):
+- The suites run **the stormd of the commit under test** as a child of the
+  test binary, with generated configs, and drive it through its REST API;
+  the supervised processes are the test binary itself in helper mode
+  (`/test helper …`: sleep, exit N, serve TCP/HTTP, write/check files,
+  print markers). stormd's job is supervising processes in a container, so
+  that is what runs; it needs no hardware (`requires: []`) and no cluster
+  API (`automountServiceAccountToken: false`).
+- The node's own stormds (control-plane ports 9081–9085, `/api/v1/health`
+  is public) are probed read-only; none answering is a **skip**.
+- Packaging: stormd needs `stormpull` over `ssh://` (private), so no
+  in-container cargo build. `test/build.sh` builds static musl binaries on
+  the build box (as the root `Containerfile`s expect); `test/Containerfile`
+  is `FROM scratch` + the two binaries. `test/stormd-test.yaml` is the Job.
+- `test/` is a workspace member (`stormd-test`), so `cargo test` covers its
+  unit tests and one `Cargo.lock` pins it.
+Plan:
+- [ ] Crate skeleton: env, report (JSON lines, /results, exit 0/1/2), helper
+      modes, stormd harness (spawn, config, API client, SIGTERM, residue)
+- [ ] short: boot + API + start order (one-shot → dependent) + ready probe,
+      restart on crash, logs through the API, SIGTERM shutdown with no child
+      left, node stormd health (skip if none)
+- [ ] medium: failure paths — ignore-failed one-shot holds dependents,
+      no_restart hold/fail, on_failure=fail, max_restarts, API stop/start/
+      restart, API shutdown exitCode, auth 401/200, metrics, components,
+      bad config exits 1, SIGTERM with a parked start order, cron
+- [ ] long: waves until STORM_TIMEOUT — N processes sized from the pod's
+      own CPU/memory allowance, churn, drain; start latency, shutdown time,
+      stormd RSS/fds and leftover children per wave; regression = fail
+- [ ] Containerfile, build.sh, Job yaml; README "Tests" section; changelog
+- [ ] Verify on dev via sc-build: build + run each suite natively (long with
+      a short STORM_TIMEOUT); podman build if dev has it
+
 **Issue #17 — SIGTERM did not stop stormd (2026-09-26) ✅ done, stormd v0.7.2.** Not signal
 delivery: the handler fires, then shutdown awaits `start_handle`, and
 `start_all` was parked forever in `wait_for_dependencies` on a dependency that
