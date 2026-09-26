@@ -10,7 +10,6 @@ pub struct Env {
     /// The node's address, for the read-only probe of its own stormds. Empty
     /// on a hand run.
     pub node: String,
-    pub commit: String,
     /// The stormd under test: `STORMD_BIN`, else `/stormd` (the image), else
     /// a `stormd` next to this binary (a cargo target directory).
     pub stormd: PathBuf,
@@ -59,7 +58,6 @@ impl Env {
             suite,
             run_id,
             node: var("STORM_NODE"),
-            commit: var("STORM_COMMIT"),
             stormd,
             me,
             work,

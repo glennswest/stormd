@@ -76,10 +76,12 @@ pub fn run(env: &Env, r: &mut Report) {
         let n = ((cap.procs as f64 * sizes[si]) as usize).max(4);
         let t = Instant::now();
         let m = one_wave(env, wave, n);
-        last_wave = t.elapsed();
+        let wave_time = t.elapsed();
 
         // The resident: churn, then read its residue.
         let churned = churn(&mut resident, resident_n.min(64));
+        // What the next round will cost, churn included.
+        last_wave = t.elapsed();
         let rss = resident.rss_kb().unwrap_or(0);
         let fds = resident.fds().unwrap_or(0);
 
@@ -130,7 +132,7 @@ pub fn run(env: &Env, r: &mut Report) {
             first_regressed.get_or_insert(wave);
             Outcome::Fail(problems.join("; "))
         };
-        r.record(&format!("wave-{wave}"), outcome, last_wave.as_millis(), Some(&extra));
+        r.record(&format!("wave-{wave}"), outcome, wave_time.as_millis(), Some(&extra));
         if resident.exit_status().is_some() {
             break;
         }

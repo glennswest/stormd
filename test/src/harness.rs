@@ -21,8 +21,6 @@ pub struct Stormd {
     pub dir: PathBuf,
     pub port: u16,
     pub token: Option<String>,
-    /// This binary, for `command = …` in process configs.
-    pub me: String,
     child: Child,
     exited: Option<ExitStatus>,
 }
@@ -52,7 +50,7 @@ impl Stormd {
             body = body.replace("{me}", &me).replace("{dir}", &dir.display().to_string()),
         );
         std::fs::write(dir.join("config.toml"), &config).map_err(|e| e.to_string())?;
-        Self::spawn(env, dir, port, me, opts.token)
+        Self::spawn(env, dir, port, opts.token)
     }
 
     /// Start stormd on a config file that is already written (a test of a
@@ -60,10 +58,10 @@ impl Stormd {
     pub fn start_raw(env: &Env, label: &str, config: &str) -> Result<Stormd, String> {
         let dir = env.instance_dir(label).map_err(|e| e.to_string())?;
         std::fs::write(dir.join("config.toml"), config).map_err(|e| e.to_string())?;
-        Self::spawn(env, dir, 0, env.me.display().to_string(), None)
+        Self::spawn(env, dir, 0, None)
     }
 
-    fn spawn(env: &Env, dir: PathBuf, port: u16, me: String, token: Option<String>) -> Result<Stormd, String> {
+    fn spawn(env: &Env, dir: PathBuf, port: u16, token: Option<String>) -> Result<Stormd, String> {
         if !env.stormd.exists() {
             return Err(format!("no stormd binary at {}", env.stormd.display()));
         }
@@ -79,7 +77,7 @@ impl Stormd {
             .stderr(err)
             .spawn()
             .map_err(|e| format!("cannot run {}: {e}", env.stormd.display()))?;
-        Ok(Stormd { dir, port, token, me, child, exited: None })
+        Ok(Stormd { dir, port, token, child, exited: None })
     }
 
     pub fn pid(&self) -> u32 {
