@@ -322,7 +322,9 @@ progress. Open-issue validation done three times today (no code change between; 
 #1, #3, #7–#12 still real, priorities unchanged (P1 #9 #11; P2 #1 #3 #8 #12;
 P3 #7 #10); #4–#6 and #15 closed. Comment mining done twice (second pass: 29 issues
 updated since 09-18, every finding already filed): nothing unfiled, one
-live sighting added to stormpump#38. Newer open issues #23–#30 are not yet
+live sighting added to stormpump#38. Third pass (26 issues updated since 09-25, 19 comments): all
+already filed except #32's callers — stormconsole#49 filed (P2, stormd feed TLS/auth),
+stormcos#64 told its stormd scrape jobs need TLS + bearer once #32 lands. Newer open issues #23–#30 are not yet
 validated or started. Next: pick up by priority.
 
 **Issue #19 — CloudID key refresh speaks IMDSv2 (2026-09-26) ✅ done, v0.7.4.** stormimds
