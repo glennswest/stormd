@@ -316,7 +316,8 @@ match. What the docs lacked is behaviour filed since as issues:
 **Session state (2026-09-27, before the session restart):** nothing in
 progress. Open-issue validation done three times today (no code change between; third pass re-checked each against c8efd03, #11 comment points its orphan half at #23):
 #1, #3, #7–#12 still real, priorities unchanged (P1 #9 #11; P2 #1 #3 #8 #12;
-P3 #7 #10); #4–#6 and #15 closed. Comment mining done: nothing unfiled, one
+P3 #7 #10); #4–#6 and #15 closed. Comment mining done twice (second pass: 29 issues
+updated since 09-18, every finding already filed): nothing unfiled, one
 live sighting added to stormpump#38. Newer open issues #23–#30 are not yet
 validated or started. Next: pick up by priority.
 
