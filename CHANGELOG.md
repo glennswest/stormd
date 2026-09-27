@@ -4,6 +4,10 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-09-27
+- **docs:** third check of the docs against the code (no code change since
+  v0.7.4): every route, config default, port, the 63 applets, the log-volume/PVC
+  wording and how-it-ships re-checked against the source; README and
+  presentation already describe #1, #3, #7–#12 and #23–#30. Nothing to correct.
 - **docs:** refreshed from the code at v0.7.4. README: one-shot dependencies,
   bounded shutdown and IMDSv2 in the overview. Startup order corrected: SSH
   starts before the API binds, and a failed SSH bind is only logged. A failed
