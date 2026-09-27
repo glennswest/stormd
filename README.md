@@ -318,7 +318,11 @@ Theme ids (from stormview): `storm`, `one`, `gruvbox`, `catppuccin`, `rose`,
 | `[api.hosts]` | — | `"host.name" = "/path"`: a request for `/` whose `Host:` matches is redirected there (default `/ui/`) |
 
 Any of `auth_token`, `password` or a user turns authentication on — see
-[Authentication](#authentication).
+[Authentication](#authentication). With none of them, the API is anonymous.
+It is always plain HTTP: there is no TLS option, no token file and no client
+certificates. On a stormcos node every container's stormd answers on the
+node's address, so today anyone on that network can read logs and stop
+processes (#32).
 
 ### `[[process]]`
 
@@ -350,7 +354,8 @@ Any of `auth_token`, `password` or a user turns authentication on — see
 (`interval_secs` is required). Polled in the background after each spawn,
 5 s timeout per attempt; HTTP passes on 2xx/3xx (certificates not verified),
 TCP connects to `127.0.0.1:port`, exec passes on exit 0. It gates dependents
-only.
+only. A stormd applet always exits 0 (see [Busybox commands](#busybox-commands)),
+so an exec probe built on one, such as `stat /file`, can never fail (#31).
 
 **`[process.liveness]`**
 
@@ -584,7 +589,8 @@ webhook on, the event is also POSTed as JSON:
 
 ## REST API
 
-On `[api] bind`. With auth on, everything except the endpoints marked *open*
+On `[api] bind`, plain HTTP only (#32). With auth off (the default) every
+route is open. With auth on, everything except the endpoints marked *open*
 needs a session cookie or `Authorization: Bearer <auth_token>`.
 
 | Method | Path | |
@@ -767,6 +773,11 @@ Tab completion (commands, process names, paths), history, `|` pipes, and
 `stormd --install DIR` links them all to the running binary; stormd also does
 this at every start for `/bin`, `/usr/bin`, `/sbin` and `/usr/sbin`. Piped
 stdin works (`ls /app | grep server`).
+
+**Exit status:** `false` exits 1 and an unknown name exits 127. Every other
+applet exits **0, even when it fails**: `stat /missing` prints the error and
+exits 0, and so does `grep` with no match. So an applet cannot express "wait
+until this file exists" as a one-shot or an exec probe (#31).
 
 ## Cloud ID
 

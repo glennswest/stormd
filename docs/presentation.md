@@ -199,6 +199,9 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 - **Docs** were rewritten from the code (#5) and refreshed for v0.7.4.
   `config/example.toml` is covered by a test.
 - **Open issues that matter:**
+  - **#32** — the API is **plain HTTP and anonymous** unless a password or
+    token is set; on a node, anyone on the network can read logs and stop
+    processes.
   - **#9** — stop, restart and shutdown are **SIGKILL**, with no SIGTERM or
     grace period.
   - **#12** — container logs reach the multicast group **without stormcast's
@@ -219,6 +222,8 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
   - **#3** — refuse to spawn with an unexpanded `${NODE_IP}`.
   - **#1** — the log writer should create `log_dir` on demand and rate-limit
     open failures.
+  - **#31** — every applet but `false` exits 0, even on error, so no
+    one-shot or exec probe can wait for a file.
   - **#7, #10** — config keys that do nothing, cron timeouts that don't kill,
     the liveness counter resetting, the proxy dropping headers.
 
@@ -228,6 +233,9 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 
 From the open issues. **None of this works today:**
 
+- TLS on the API with stormcert pairs, a token file or client certificates,
+  and nothing anonymous but health (#32).
+- Applets that exit non-zero on error (#31).
 - Graceful stop: SIGTERM, a per-process timeout, then SIGKILL, with shutdown
   going in reverse dependency order (#9).
 - Rate limiting and repeat-collapsing, per process, on the multicast group

@@ -314,6 +314,8 @@ match. What the docs lacked is behaviour filed since as issues:
       (example.toml parse test).
 - Third pass (later 2026-09-27): no code change since cc11049; routes,
       defaults, ports, applets, PVC wording re-checked — docs still match.
+- Fourth pass: still no code change; README + presentation now record
+      #31 (applets always exit 0) and #32 (API plaintext, anonymous by default).
 
 **Session state (2026-09-27, before the session restart):** nothing in
 progress. Open-issue validation done three times today (no code change between; third pass re-checked each against c8efd03, #11 comment points its orphan half at #23):

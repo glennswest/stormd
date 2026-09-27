@@ -4,6 +4,10 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-09-27
+- **docs:** README and presentation say what #31 and #32 record: every
+  standalone applet but `false` (1) and unknown names (127) exits 0 even on
+  error, so an exec probe or one-shot built on an applet cannot fail; the API
+  is plain HTTP only and anonymous unless `auth_token`/`password`/a user is set.
 - **docs:** third check of the docs against the code (no code change since
   v0.7.4): every route, config default, port, the 63 applets, the log-volume/PVC
   wording and how-it-ships re-checked against the source; README and
