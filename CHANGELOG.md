@@ -3,6 +3,20 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-09-27
+- **docs:** refreshed from the code at v0.7.4. README: one-shot dependencies,
+  bounded shutdown and IMDSv2 in the overview. Startup order corrected: SSH
+  starts before the API binds, and a failed SSH bind is only logged. A failed
+  API bind leaves spawned processes running (#23). The shutdown crash line
+  under process-group signals (#26), the 250 ms dependency poll (#25), and
+  cron jobs running one at a time with `next_run`. How it ships: goldens
+  build stormd at main, stormcos rebuilds them at release, stormd never
+  requests one, and the stormdbase applet list links `ps` (#11). The test
+  container predates the runner's contract (#24). The presentation is
+  updated to v0.7.4 (shipped since v0.7.0, open and planned issues). The
+  shutdown design note records #17's bounded shutdown. CLAUDE.md: the
+  workspace's test member, goldens at main, binary size
+
 ## [v0.7.4] — 2026-09-26 (stormd)
 
 ### Fixed

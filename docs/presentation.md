@@ -3,19 +3,19 @@ marp: true
 theme: default
 paginate: true
 title: stormd — the init inside every stormcos component
-description: Purpose and functionality of stormd v0.7.0, from the code
+description: Purpose and functionality of stormd v0.7.4, from the code
 ---
 
 <!-- Render: npx @marp-team/marp-cli docs/presentation.md          (HTML)
              npx @marp-team/marp-cli --pdf docs/presentation.md    (PDF)
-     Written 2026-09-24 against stormd v0.7.0. Every claim is checkable in
+     Written 2026-09-24 against stormd v0.7.0; refreshed 2026-09-27 for v0.7.4. Every claim is checkable in
      the source; README.md has the full reference. -->
 
 # stormd
 
 ### The init inside every stormcos component container
 
-v0.7.0 · github.com/glennswest/stormd
+v0.7.4 · github.com/glennswest/stormd
 
 ---
 
@@ -102,6 +102,9 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
   SIGUSR1, then 5 s, then SIGKILL.
 - **`${NODE_IP}` / `${NODE_NAME}`** in args and env are filled in at every
   spawn, so a control plane advertises an address other nodes can reach.
+- **Shutdown** (SIGTERM, SIGINT, API, container failure) stops the start
+  order, stands restarts down, kills every process and waits up to 10 s, and
+  exits within 30 s whatever stalls. Each exit is handled on its own task.
 
 ---
 
@@ -136,7 +139,8 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 - **stormsh.** A TUI that renders **the same** `/api/v1/components` feed.
 - **SSH.** A management shell with pipes, redirection and tab completion,
   plus SFTP. The password is the configured one or the cloud ID; public keys
-  come from CloudID.
+  come from CloudID over IMDSv2 (keys arrive once stormimds serves
+  `public-keys/`, stormimds#5).
 - **63 busybox-style applets** through `argv[0]` (`ls`, `curl`, `ping`, …),
   so a scratch container can be looked around in.
 - **Also:** cron (6 fields), log backup (tar.gz POSTed on failure), an OCI
@@ -169,10 +173,11 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
     limits sized to the 64 MiB log volume;
   - it seals a deterministic tar.
 - **Start.** The container's argv is `/stormd`. It loads the config
-  (exit 1 if invalid), starts the processes, and binds the API.
-- **Update.** A stormd commit reaches a node only when a component golden
-  pinning it is rebuilt and released. The authority for that is stormcos
-  `docs/goldens.md`.
+  (exit 1 if invalid), starts the processes, and binds the API (a failed
+  bind exits without stopping them — #23).
+- **Update.** stormcos builds goldens with stormd at main and rebuilds the
+  goldens that carry it when it composes a release; stormd never requests
+  one. The authority is stormcos `docs/goldens.md`.
 - **Operate.**
   - Web console at `http://<node>:<port>/ui/`.
   - `stormsh -H <node> -p <port>`.
@@ -182,13 +187,17 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 
 ---
 
-## Status — v0.7.0
+## Status — v0.7.4
 
 - **Shipped.** Supervision with ready and liveness probes, the component feed
   and both dashboards, login, themes, the stormview UI system, stormcast log
   wire, and non-retryable exit codes (#2).
-- **Docs** were rewritten from the code (#5). `config/example.toml` is now
-  covered by a test.
+- **Since v0.7.0:** one-shot dependencies wait for the exit (#16); SIGTERM
+  always stops stormd, bounded at 30 s (#17); cron jobs run at all (#21);
+  one restart delay no longer holds up other exits (#22); CloudID keys over
+  IMDSv2 (#19); a short/medium/long test container (#15).
+- **Docs** were rewritten from the code (#5) and refreshed for v0.7.4.
+  `config/example.toml` is covered by a test.
 - **Open issues that matter:**
   - **#9** — stop, restart and shutdown are **SIGKILL**, with no SIGTERM or
     grace period.
@@ -196,8 +205,10 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
     limiter**; a looping process floods it.
   - **#8** — the updater does not start an image process whose rootfs
     already exists.
-  - **#11** — an unknown applet name (`/bin/ps` in goldens) starts a second
-    init.
+  - **#11, #23** — an unknown applet name (`/bin/ps` in goldens) starts a
+    second init, and a failed API bind leaves what it spawned running.
+  - **#24** — the test container does not yet build the way stormcentral's
+    runner expects.
   - **#3** — refuse to spawn with an unexpanded `${NODE_IP}`.
   - **#1** — the log writer should create `log_dir` on demand and rate-limit
     open failures.
@@ -216,6 +227,11 @@ From the open issues. **None of this works today:**
   (#12).
 - Refusing to start as init under a name that is not an applet (#11), and
   refusing an unexpanded `${NODE_IP}` (#3).
+- Binding the API before starting processes, or stopping them if it fails
+  (#23).
+- Waking dependents on a state change instead of a 250 ms poll (#25), and
+  not logging a crash for a child that died of the shutdown signal (#26).
+- The test container built as one image from the repo root (#24).
 - Starting image processes from an existing rootfs after a restart (#8).
 - Warnings for unknown config keys, and dead keys removed or implemented (#7).
 - A real liveness counter, a cron timeout that kills, and a header-preserving

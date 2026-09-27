@@ -499,7 +499,8 @@ exit to `code == 0`. Adding a per-process carve-out:
 ## Project Context
 
 ### Tech Stack
-- Language: Rust (edition 2021), workspace of three crates
+- Language: Rust (edition 2021), workspace of three crates plus `test/`
+  (stormd-test, a member but not a default member)
 - Framework: axum 0.8 (REST + WS), tokio, russh (SSH/SFTP), ratatui (stormsh TUI)
 - Web UI: Svelte 5 + Vite SPA in `web/`, built to `web/dist` (committed) and
   embedded in the stormd binary
@@ -547,8 +548,10 @@ stormd is not a golden of its own: it is `/stormd` in every stormdbase golden
 (stormcos `deploy/build-goldens.sh` `stormdbase_stage` / `golden_stormd`;
 stormcentral registry `kind = "special"`). Authority: stormcos
 `docs/goldens.md`. A commit reaches a node when stormcos composes a release and
-rebuilds the goldens that carry it. **stormd never requests goldens** (owner,
-2026-09-26): no `stormcentral component build` after a stormd issue. Sibling crates (stormcast, stormview,
+rebuilds the goldens that carry it; they build stormd at **main** (`component
+stage` fetches main), so main must always build. **stormd never requests
+goldens** (owner, 2026-09-26): no `stormcentral component build` after a
+stormd issue. Sibling crates (stormcast, stormview,
 stormpull) are pinned by `Cargo.lock`; a fix there needs `cargo update -p`.
 stormd's API port per container: fastetcd 9081, rustkube 9082–9085, service
 goldens port+100.
@@ -562,7 +565,7 @@ crates/stormlog/Cargo.toml  → version
 
 ### Known Decisions & Context
 - Web UI is a static SPA; no SSR, no node at runtime — assets embedded in the
-  9 MB binary. `web/dist` is committed so cargo-only builds keep working.
+  ~10 MB binary. `web/dist` is committed so cargo-only builds keep working.
 - One component-summary contract (`/api/v1/components`) feeds both the web
   dashboard and stormsh's dashboard view; new subsystems appear in both UIs by
   implementing one summary source in Rust, zero frontend changes.

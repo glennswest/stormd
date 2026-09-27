@@ -1,11 +1,13 @@
 # Enhancement: Container Shutdown REST Endpoint
 
-> **Status (2026-09-24): implemented, with one difference.** `POST
+> **Status (2026-09-27, v0.7.4): implemented, with one difference.** `POST
 > /api/v1/shutdown` with optional `{"exitCode": N}` exists and exits with that
 > code (`api.rs` `shutdown`, `main.rs`). Step 1 below is **not** what the code
-> does: processes are stopped with SIGKILL straight away — there is no SIGTERM
-> and no timeout (`supervisor.rs` `stop_all`). The original proposal follows
-> unchanged. mkube, its consumer, was retired on 2026-08-27.
+> does: processes are killed with SIGKILL, not SIGTERM (#9). Since v0.7.2
+> (#17) shutdown is bounded: `supervisor.rs` `stop_all` starts nothing new,
+> waits up to 10 s for the kills to land, and stormd exits within 30 s of the
+> request whatever stalls. The original proposal follows unchanged. mkube, its
+> consumer, was retired on 2026-08-27.
 
 ## Summary
 

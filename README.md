@@ -8,7 +8,7 @@ In stormcos, stormd is PID 1 of every supervised component container —
 fastetcd, the rustkube control plane, the kubelet, stormdrive, stormstorage,
 stormconsole, cadvisor, stormlb and the rest (see [How it ships](#how-it-ships)).
 
-This README is written from the code at v0.7.0. Where something is parsed but
+This README is written from the code at v0.7.4 (refreshed 2026-09-27). Where something is parsed but
 does nothing, it says so.
 
 A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
@@ -20,6 +20,7 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
   restart policies for crashes (`on_failure`) and clean exits (`on_exit`), an
   escalating restart delay capped at 30 s, a restart budget per window, and
   exit codes a process can declare not worth retrying (`no_restart_exit_codes`).
+  A one-shot (`on_exit = "stop"`) satisfies its dependents once it has exited 0.
 - **Liveness probes** — HTTP or TCP; on failure, SIGUSR1, 5 s grace, then
   SIGKILL, and the restart policy takes over.
 - **Fills in node values** — `${NODE_IP}` and `${NODE_NAME}` in a process's
@@ -35,7 +36,8 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
   from the same component feed as the TUI; plugin tabs for supervised
   processes that have their own UI.
 - **SSH server** — a management shell (process control, logs, attach, 60-odd
-  file/network/system commands, pipes and redirection) and an SFTP subsystem.
+  file/network/system commands, pipes and redirection) and an SFTP subsystem;
+  public keys from the CloudID metadata service, over IMDSv2.
 - **Busybox-style multi-call binary** — 63 commands through `argv[0]` symlinks,
   so a scratch container has `ls`, `cat`, `curl`, `ping`, … .
 - **Cron** — 6-field (seconds-first) schedules.
@@ -43,8 +45,9 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
   container fails, or on demand.
 - **OCI image updater** — processes with an `image` are pulled, unpacked into a
   rootfs directory, and swapped when the registry digest changes.
-- **PID 1 duties** — reaps zombies, handles SIGTERM/SIGINT, writes a few
-  network sysctls, and has a `--healthcheck` mode for Docker `HEALTHCHECK`.
+- **PID 1 duties** — reaps zombies, shuts down on SIGTERM/SIGINT (bounded:
+  it exits within 30 s whatever stalls), writes a few network sysctls, and has
+  a `--healthcheck` mode for Docker `HEALTHCHECK`.
 
 ## Workspace
 
@@ -118,7 +121,11 @@ compiles it: `sc-build 'cargo build --workspace && cargo test --workspace'`
 covers it too.
 
 **The test container**, `stormd-test-<suite>`, follows stormcentral's
-[test standard](https://github.com/glennswest/stormcentral/blob/main/docs/test-standard.md):
+[test standard](https://github.com/glennswest/stormcentral/blob/main/docs/test-standard.md)
+as it stood on 2026-09-26. The standard and stormcentral's runner have since
+moved to one image for all suites, built with the repo root as context and
+started as `/test <suite>`; this container does not build that way yet
+(#24):
 built from `test/`, run by stormcentral as a Job in the run's own namespace
 (`test/stormd-test.yaml`), one JSON object per test on stdout and in
 `/results/results.jsonl`, exit 0 (all passed), 1 (a test failed) or 2 (could
@@ -165,8 +172,13 @@ The authority for how goldens are built is
 In short, stormcos `deploy/build-goldens.sh` (and stormcentral's golden
 builder, which mirrors it and pins the stormd commit per build):
 
-- builds stormd static for musl from this repo;
-- `stormdbase_stage`: `/stormd`, applet links in `/bin` and `/usr/bin`
+- builds stormd static for musl from this repo, at **main** (stormcentral's
+  `component stage` fetches stormd at main; `component build` rebuilds a
+  service golden whenever stormd has a new commit), with a bare
+  `cargo build --release` — which is why the test crate is not a default
+  workspace member;
+- `stormdbase_stage`: `/stormd`, applet links in `/bin` and `/usr/bin` (its
+  list also links `ps`, which is not a stormd applet — see #11)
   (relative targets, `../stormd`, because a golden is mounted as a clone and an
   absolute target only resolves when the root is `/`), `/etc/stormd`,
   `/var/log/stormd` as the log volume's mount point;
@@ -175,10 +187,10 @@ builder, which mirrors it and pins the stormd commit per build):
   `max_runs = 5`), and seals a deterministic tar into the golden;
 - the container's `argv` is `/stormd`, and it reads `/etc/stormd/config.toml`.
 
-So **a commit here reaches a node only when a new golden (and release) is
-built** that picks it up. After work is pushed and sc-build passes, request
-it with `stormcentral component build <component> --url
-http://stormcentral.g8.lo` for the component whose golden should carry it.
+So **a commit here reaches a node when stormcos composes a release** and
+rebuilds the goldens that carry stormd. stormd itself never requests a golden:
+after work is pushed and sc-build passes, there is nothing to rebuild from
+here.
 
 ### stormd's API port on a node
 
@@ -225,8 +237,11 @@ that command and exits instead (see [Busybox commands](#busybox-commands)).
 Startup, in order: install applet symlinks into `/bin`, `/usr/bin`, `/sbin`,
 `/usr/sbin` (skipping names that exist; errors ignored) → load and validate the
 config (exit 1 on error) → resolve the cloud ID → start logging → start cron
-and the updater → start processes → bind the API (exit 1 if it cannot) and the
-SSH server → reap zombies and set sysctls (Linux).
+and the updater → start processes → start the SSH server (in the background;
+a failed bind is logged and stormd carries on) → bind the API → reap zombies
+and set sysctls (Linux). If the API cannot bind, stormd exits 1 at
+once — **without stopping the processes the start order already spawned**,
+which keep running unsupervised (#23).
 
 It shuts down on SIGTERM, SIGINT, `POST /api/v1/shutdown`, or container
 failure — the same whether it is PID 1 or an ordinary process under a
@@ -238,7 +253,11 @@ for them to go, flushes logs, runs the backup if the container failed and
 `[backup] on_failure` is set, and exits with the API-requested code, else 1 if
 the container failed, else 0. If shutdown has not finished 30 s after it
 began, stormd exits 1 regardless. A test that starts stormd should still use
-`timeout -k 5 N`, so a regression here cannot hang a build.
+`timeout -k 5 N`, so a regression here cannot hang a build. An exit handled
+after shutdown began is recorded as a stop, not a crash; under something that
+signals the whole process group (`timeout`, a terminal's Ctrl-C) a child can
+die before shutdown begins, and that exit is still logged as a crash with a
+restart scheduled, which then stands down (#26).
 
 Logging goes to stderr as plain compact lines — no timestamp, no ANSI, no JSON
 (the envelope that carries them already has those). `RUST_LOG` overrides the
@@ -361,6 +380,12 @@ summary). See [docs/plugin-ui.md](docs/plugin-ui.md).
 | `timeout_secs` | `300` | after this the run is recorded as failed; **the job is not killed** |
 | `capture_output` | `true` | once the job ends, its stdout/stderr are logged as process `cron.<name>` (stderr as warnings) |
 
+Each job keeps its next fire time and runs when it comes (`GET /api/v1/cron`
+shows it as `next_run`). Jobs run **one at a time**, inside the scheduler's
+loop: a job that runs long delays every other job, for up to its
+`timeout_secs`, and a fire time that passes meanwhile is run once, when the
+loop comes round — not once per missed time.
+
 ### `[events]`
 
 | Key | Default | |
@@ -440,7 +465,8 @@ used.** Rotation is `[stormlog.file]`.
 ## Process supervision
 
 Processes without `image` are started at boot **in config order**; each first
-waits for its `depends_on` (polled every 250 ms), then `startup_delay_secs`,
+waits for its `depends_on` (polled every 250 ms, so up to a quarter second per
+dependency — #25), then `startup_delay_secs`,
 then is spawned. A dependency is satisfied when it is running and its
 `ready_probe` (if any) has passed. A one-shot (`on_exit = "stop"`) — a
 migration, a cert-minting task — satisfies when it has **finished**: stopped
@@ -473,8 +499,9 @@ that must shut down cleanly has to be told another way first.
 The delay before restart *n* within the window is `restart_delay_secs × 2^(n-1)`,
 capped at 30 s — a process that can never start costs a restart every 30 s,
 not every second. Each exit is handled on its own, so one process waiting out
-its delay does not hold up another's exit, restart or state. `no_restart_exit_codes` is how a process says a restart
-cannot help (sysexits 78 `EX_CONFIG`, 64 `EX_USAGE`; stormconsole exits 78): it
+its delay does not hold up another's exit, restart or state.
+
+`no_restart_exit_codes` is how a process says a restart cannot help (sysexits 78 `EX_CONFIG`, 64 `EX_USAGE`; stormconsole exits 78): it
 logs `process exited with a non-retryable code — not restarting` once, and the
 `process_crashed` event carries `code` and `no_restart`. A clean exit is never
 treated as one, and a death by signal has no code to match.
