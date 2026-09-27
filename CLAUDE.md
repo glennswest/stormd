@@ -310,6 +310,15 @@ match. What the docs lacked is behaviour filed since as issues:
       belongs on a PVC (on stormcos, the built-in stormblock PVC driver)
 - [x] example.toml comments (`off`, `log_dir`); presentation status/planned
       slides; changelog
+- Verified: `sc-build 'cargo test -p stormd config::'` on 701e577 passes
+      (example.toml parse test).
+
+**Session state (2026-09-27, before the session restart):** nothing in
+progress. Open-issue validation done twice today (no code change between):
+#1, #3, #7–#12 still real, priorities unchanged (P1 #9 #11; P2 #1 #3 #8 #12;
+P3 #7 #10); #4–#6 and #15 closed. Comment mining done: nothing unfiled, one
+live sighting added to stormpump#38. Newer open issues #23–#30 are not yet
+validated or started. Next: pick up by priority.
 
 **Issue #19 — CloudID key refresh speaks IMDSv2 (2026-09-26) ✅ done, v0.7.4.** stormimds
 (default `security.mode = "both"`) answers a bare GET 401 with an empty body;
