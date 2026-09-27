@@ -9,7 +9,7 @@ fastetcd, the rustkube control plane, the kubelet, stormdrive, stormstorage,
 stormconsole, cadvisor, stormlb and the rest (see [How it ships](#how-it-ships)).
 
 This README is written from the code at v0.7.4 (refreshed 2026-09-27). Where something is parsed but
-does nothing, it says so.
+does nothing, or does something other than it says, it says so and names the issue.
 
 A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
 `npx @marp-team/marp-cli docs/presentation.md`).
@@ -27,7 +27,7 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
   `args` and `env` values are expanded each time it is spawned.
 - **Logs** — stdout/stderr per process to a rotated file on the log volume,
   each run's file kept (and pruned) when it exits, every line on the fleet's
-  multicast syslog group (the [stormcast](https://github.com/glennswest/stormcast)
+  multicast syslog group (unlimited — #12) (the [stormcast](https://github.com/glennswest/stormcast)
   wire), a VT100 screen per process, and live streams to follow.
 - **Events** — lifecycle events written to the log always, and optionally
   POSTed to a webhook.
@@ -181,7 +181,9 @@ builder, which mirrors it and pins the stormd commit per build):
   list also links `ps`, which is not a stormd applet — see #11)
   (relative targets, `../stormd`, because a golden is mounted as a clone and an
   absolute target only resolves when the root is `/`), `/etc/stormd`,
-  `/var/log/stormd` as the log volume's mount point;
+  `/var/log/stormd` as the mount point of the component's log volume — a
+  copy-on-write clone of its `<component>-logs` golden (stormcos
+  `docs/goldens.md`: service, `-data` and `-logs` goldens);
 - adds the component binary and `/etc/stormd/config.toml`, appends log limits
   sized to the 64 MiB log volume (`max_size_bytes = 8388608`, `max_files = 3`,
   `max_runs = 5`), and seals a deterministic tar into the golden;
@@ -296,7 +298,7 @@ process; `[events]` with `transport = "webhook"` needs `webhook_url`;
 | Key | Default | |
 |---|---|---|
 | `name` | `"stormd"` | container name: UI, events, metrics `container` label |
-| `log_dir` | `"/var/log/stormd"` | per-process log files and `.cloudid`; created at start. **Overrides `[stormlog.file] log_dir`** |
+| `log_dir` | `"/var/log/stormd"` | per-process log files and `.cloudid`; created at start (exit 1 if it cannot be). **Overrides `[stormlog.file] log_dir`**. Put it on a volume: in a stormcos golden it is the component's `-logs` volume; a stormd run as a pod wants a PVC (on stormcos, the built-in stormblock PVC driver) — a container-local path is RAM on some hosts |
 | `cloud_id` | — | see [Cloud ID](#cloud-id) |
 | `theme` | — | default web UI theme id (below); a viewer's own pick wins |
 | `pid_file` | `"/run/stormd.pid"` | **parsed, not used** — no PID file is written |
@@ -452,7 +454,7 @@ See [Image updater](#image-updater).
 | `file.max_files` | `10` | rotated generations kept per process |
 | `file.max_runs` | `10` | finished runs kept per process |
 | `file.log_dir` | — | **ignored**: always `[general] log_dir` |
-| `mcast.group` | `239.255.42.1:5514` | `host:port`, or `"off"` |
+| `mcast.group` | `239.255.42.1:5514` | `host:port`. **`"off"` (or `""`) does not silence today: it is replaced by the default group, so the lines still go out (#27)** |
 | `mcast.host` | this machine's hostname | syslog HOSTNAME field (the node, not the container) |
 | `terminal.rows` / `cols` | `24` / `80` | VT100 screen per process |
 | `terminal.scrollback` | `1000` | lines |
@@ -516,7 +518,10 @@ process is still there; the exit then goes through the table above.
 **`${NODE_IP}` and `${NODE_NAME}`** in `args` and `env` values (not `command`)
 are replaced at every spawn. `NODE_IP` is the source address the routing table
 picks for an off-node destination (no packet is sent); `NODE_NAME` is
-`/proc/sys/kernel/hostname`. A name with no value is left as written.
+`/proc/sys/kernel/hostname`. A name with no value is left as written, and the
+process is spawned anyway: on a node with no address a `${NODE_IP}` argument
+reaches the program literally, and the failure shows up as that program's own
+parse error, not as "no address" (#3).
 
 ## Logging
 
@@ -527,11 +532,21 @@ Every line of every process, and every event, goes three places:
    renamed `{process}.{run_id}.{failed|exited}.log` and the next run starts a
    fresh one; the oldest runs past `max_runs` are deleted. Before the rename
    stormd waits (up to 5 s) for the output pipes to drain, so the line that
-   explains a crash is in the file.
+   explains a crash is in the file. The file is opened for every line; if the
+   open fails (the directory removed, a mount gone, the disk full) each line
+   logs its own `failed to open log file` ERROR on stormd's stderr, with no
+   back-off and no attempt to recreate the directory (#1).
 2. **The fleet's multicast group** — RFC 5424 syslog over UDP, framed by
    [stormcast](https://github.com/glennswest/stormcast) (shared with
    stormpump). Send only; collecting and searching a fleet's logs is
-   mcastsyslog's job.
+   mcastsyslog's job. **Every line is sent**: stormd does not use stormcast's
+   limiter, so a process looping on one line, or printing thousands a second,
+   puts each one on the group — no repeat collapse, no rate limit (#12;
+   stormpump limits on the host, containers do not). The stormcast commit
+   pinned in `Cargo.lock` (0.1.0, `9244121`) truncates a long line with
+   `String::truncate` and **panics** when byte 8192 falls inside a multibyte
+   character; the fix is in stormcast and arrives with `cargo update -p
+   stormcast` (#28).
 3. **Live streams** — the VT100 screen per process and a broadcast channel,
    followed by the web console, stormsh, `attach`, and `/ws/logs`.
 
@@ -544,6 +559,13 @@ no level is info on stdout and warning on stderr. A crash adds
 
 `POST /api/v1/logs/ingest` (`{process, line, stream?, severity?}`) adds a line
 from outside.
+
+**stormd's own output** (stderr) carries stormd's log lines, not its
+children's. A process that exits non-zero shows there only as
+`WARN process exited with error process=<p> code=Some(N)`; the error it printed
+is in its run file and on the multicast group, not in stormd's output. So a
+host supervisor that keeps only stormd's output (stormpump, on a node console)
+sees that it failed but not why (#29).
 
 ## Events
 
@@ -697,6 +719,14 @@ with `Metadata-Flavor: StormIMDS` — so every stormimds `security.mode`
 works, and a service that issues no token is asked without one. A non-2xx
 answer is a failed refresh, logged with its status once (and again only when
 it changes, or when it recovers).
+
+**On a stormcos node** the default `cloudid_url` does not reach cloudid: the
+node puts `169.254.169.254/32` on `lo` and stormimds answers it. stormimds
+knows only registered guests, so it answers a node's stormd 404, and it serves
+no `public-keys/` yet (stormimds#5). Which service should answer a node's own
+processes is undecided (stormimds#9); until then the refresh gets no keys
+there (#30). No stormcos golden sets `[ssh] owner` today, so no node runs the
+refresh.
 
 A session is an interactive shell (a PTY is expected); `ssh host command`
 (exec requests) is not supported. The `sftp` subsystem is, so `sftp` and

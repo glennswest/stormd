@@ -16,6 +16,17 @@
   updated to v0.7.4 (shipped since v0.7.0, open and planned issues). The
   shutdown design note records #17's bounded shutdown. CLAUDE.md: the
   workspace's test member, goldens at main, binary size
+- **docs:** Second refresh pass. There was no code change since the first; defaults,
+  routes, applets and validation were re-checked against the source. The README now says
+  what the issues filed since record: `[stormlog.mcast] group = "off"` still
+  sends (#27), no limiter on the group (#12), the pinned stormcast's multibyte
+  truncation panic (#28), a failed process's error not reaching stormd's own
+  output (#29), the per-line ERROR on a failed log open (#1), an unexpanded
+  `${NODE_IP}` spawned anyway (#3), and CloudID on a stormcos node reaching
+  stormimds (#30). The log volume is named as stormcos names it (the component's
+  `-logs` golden clone). Outside a golden, `log_dir` belongs on a PVC (on
+  stormcos, the built-in stormblock driver). `config/example.toml` comments
+  and the presentation's status and planned slides are updated to match.
 
 ## [v0.7.4] — 2026-09-26 (stormd)
 

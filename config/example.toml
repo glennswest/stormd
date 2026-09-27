@@ -8,7 +8,9 @@
 
 [general]
 name = "my-service"             # shown in the UI, event lines, metrics labels
-log_dir = "/var/log/stormd"     # per-process log files + .cloudid; point at a volume
+log_dir = "/var/log/stormd"     # per-process log files + .cloudid; put it on a volume:
+                                # a stormcos golden mounts its -logs volume here; a pod
+                                # wants a PVC (on stormcos, the built-in stormblock driver)
 # cloud_id = "my-unique-id"     # else $STORM_CLOUD_ID, else {log_dir}/.cloudid, else a new UUID
 # theme = "storm"               # default web UI theme; a viewer's own pick wins
 
@@ -33,7 +35,8 @@ max_runs = 10               # finished runs kept, per process
 
 # Where lines go on the network. Emitting only — a collector (mcastsyslog)
 # receives, stores and indexes. Defaults to the fleet group, so a container is
-# watchable with no configuration at all. Set to "off" to stay quiet.
+# watchable with no configuration at all. "off" is meant to stay quiet, but
+# today it is replaced by the default group and still sends (stormd#27).
 [stormlog.mcast]
 # group = "239.255.42.1:5514"
 # host = "node1"            # syslog HOSTNAME; defaults to this machine's hostname

@@ -202,7 +202,14 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
   - **#9** — stop, restart and shutdown are **SIGKILL**, with no SIGTERM or
     grace period.
   - **#12** — container logs reach the multicast group **without stormcast's
-    limiter**; a looping process floods it.
+    limiter**; a looping process floods it. And `group = "off"` still sends
+    (#27).
+  - **#28** — the pinned stormcast panics PID 1 on a multibyte character at
+    byte 8192; the fix needs `cargo update -p stormcast`.
+  - **#29** — a failed process's error is in its log file, never in stormd's
+    own output, so a node console shows only "exited with error".
+  - **#30** — on a node, CloudID's address is stormimds, which does not know
+    the node (decision pending in stormimds#9).
   - **#8** — the updater does not start an image process whose rootfs
     already exists.
   - **#11, #23** — an unknown applet name (`/bin/ps` in goldens) starts a
@@ -224,7 +231,10 @@ From the open issues. **None of this works today:**
 - Graceful stop: SIGTERM, a per-process timeout, then SIGKILL, with shutdown
   going in reverse dependency order (#9).
 - Rate limiting and repeat-collapsing, per process, on the multicast group
-  (#12).
+  (#12); `group = "off"` meaning no emitter (#27); stormcast bumped past the
+  multibyte truncation panic (#28).
+- The last stderr lines of a failed process echoed to stormd's own output
+  (#29).
 - Refusing to start as init under a name that is not an applet (#11), and
   refusing an unexpanded `${NODE_IP}` (#3).
 - Binding the API before starting processes, or stopping them if it fails

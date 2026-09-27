@@ -298,17 +298,17 @@ the plugin summary merge).
 
 ### In Progress
 
-**Docs refresh, second pass (2026-09-27).** No code since cc11049; defaults,
+**Docs refresh, second pass (2026-09-27) ✅ done.** No code since cc11049; defaults,
 routes, applets (63) and validation re-checked against the source and still
 match. What the docs lacked is behaviour filed since as issues:
-- [ ] README: `mcast.group = "off"` still sends (#27); no limiter on the group
+- [x] README: `mcast.group = "off"` still sends (#27); no limiter on the group
       (#12); pinned stormcast panics on a multibyte char at byte 8192 (#28);
       a failed process's stderr never reaches stormd's own output (#29); an
       open failure logs an ERROR per line (#1); unexpanded `${NODE_IP}` (#3);
       CloudID on a node reaches stormimds (#30, stormimds#9); the log volume
       is the component's `-logs` golden clone; outside a golden, `log_dir`
       belongs on a PVC (on stormcos, the built-in stormblock PVC driver)
-- [ ] example.toml comments (`off`, `log_dir`); presentation status/planned
+- [x] example.toml comments (`off`, `log_dir`); presentation status/planned
       slides; changelog
 
 **Issue #19 — CloudID key refresh speaks IMDSv2 (2026-09-26) ✅ done, v0.7.4.** stormimds
