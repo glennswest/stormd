@@ -324,7 +324,10 @@ P3 #7 #10); #4–#6 and #15 closed. Comment mining done twice (second pass: 29 i
 updated since 09-18, every finding already filed): nothing unfiled, one
 live sighting added to stormpump#38. Third pass (26 issues updated since 09-25, 19 comments): all
 already filed except #32's callers — stormconsole#49 filed (P2, stormd feed TLS/auth),
-stormcos#64 told its stormd scrape jobs need TLS + bearer once #32 lands. Newer open issues #23–#30 are not yet
+stormcos#64 told its stormd scrape jobs need TLS + bearer once #32 lands. Fourth pass
+(2026-09-28, 19 issues updated since 09-27, 6 comments): #10's newest comment
+(the proxy drops `Authorization`, which breaks stormstorage UI writes) split out as
+#34 (P2); stormcos#64 told that stormd exports no per-process RSS/CPU/fds (#33). Newer open issues #23–#30 are not yet
 validated or started. Next: pick up by priority.
 
 **Issue #19 — CloudID key refresh speaks IMDSv2 (2026-09-26) ✅ done, v0.7.4.** stormimds
