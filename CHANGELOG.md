@@ -4,6 +4,12 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-06
+- **fix:** stormd under a name that is neither `stormd` (or a renamed copy,
+  `stormd-*`/`stormd.*`) nor an applet — `/bin/ps` linked to it, say — prints
+  `stormd: <name>: not a stormd applet (see stormd --list-commands)` and exits
+  127, instead of starting a full init on the default config that spawned a
+  second copy of every supervised process (#11). Medium suite:
+  `unknown-argv0-refused`.
 - **feat:** the API can be served over TLS and closed to anonymous callers
   (#32). `[api] tls_cert_file`/`tls_key_file` (PEM, rustls, HTTP/1.1,
   re-read when either file changes so a rotated stormcert pair is picked up

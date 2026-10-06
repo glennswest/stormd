@@ -218,8 +218,7 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
     the node (decision pending in stormimds#9).
   - **#8** — the updater does not start an image process whose rootfs
     already exists.
-  - **#11, #23** — an unknown applet name (`/bin/ps` in goldens) starts a
-    second init, and a failed API bind leaves what it spawned running.
+  - **#23** — a failed API bind leaves what stormd spawned running.
   - **#24** — the test container does not yet build the way stormcentral's
     runner expects.
   - **#3** — refuse to spawn with an unexpanded `${NODE_IP}`.
@@ -244,8 +243,7 @@ From the open issues. **None of this works today:**
   multibyte truncation panic (#28).
 - The last stderr lines of a failed process echoed to stormd's own output
   (#29).
-- Refusing to start as init under a name that is not an applet (#11), and
-  refusing an unexpanded `${NODE_IP}` (#3).
+- Refusing an unexpanded `${NODE_IP}` (#3).
 - Binding the API before starting processes, or stopping them if it fails
   (#23).
 - Waking dependents on a state change instead of a 250 ms poll (#25), and

@@ -25,6 +25,7 @@ pub fn run(env: &Env, r: &mut Report) {
     r.run("components-feed", || components(env));
     r.run("cron-job-runs", || cron(env));
     r.run("bad-config-refused", || bad_config(env));
+    r.run("unknown-argv0-refused", || unknown_argv0(env));
     r.run("node-stormd", || crate::short::node_stormd(env));
 }
 
@@ -242,7 +243,7 @@ fn api_shutdown(env: &Env) -> Outcome {
 fn auth(env: &Env) -> Outcome {
     let token = format!("t-{}", env.run_id);
     let body = proc("worker", "\"sleep\"", "");
-    with(env, "auth", &body, Opts { token: Some(token.clone()) }, |sd| {
+    with(env, "auth", &body, Opts { token: Some(token.clone()), ..Opts::default() }, |sd| {
         let res = (|| -> Result<(), String> {
             match sd.get_as("/api/v1/processes", None)? {
                 (401, _) => {}
@@ -343,6 +344,28 @@ fn cron(env: &Env) -> Outcome {
             Err(e) => Outcome::Fail(e),
         }
     })
+}
+
+/// Run as `ps` (a name linked to stormd that is not an applet) on a good
+/// config: exit 127 and spawn nothing, not a second init (stormd#11).
+fn unknown_argv0(env: &Env) -> Outcome {
+    let body = proc("oneshot", "\"touch-after\", \"0\", \"{dir}/ran\"", "on_exit = \"stop\"");
+    let opts = Opts { arg0: Some("ps".into()), ..Opts::default() };
+    let mut sd = match Stormd::start(env, "argv0", &body, opts) {
+        Ok(s) => s,
+        Err(e) => return Outcome::Infra(e),
+    };
+    let exit = sd.wait_exit(S(10));
+    std::thread::sleep(S(1));
+    let ran = sd.dir.join("ran").exists();
+    let said = sd.output().contains("ps: not a stormd applet");
+    match exit {
+        Some((s, _)) if s.code() == Some(127) && !ran && said => {
+            Outcome::Pass("argv[0] ps: exit 127, said why, the one-shot never ran".into())
+        }
+        Some((s, _)) => Outcome::Fail(format!("exited {s} (want 127), one-shot ran: {ran}, message: {said}: {}", sd.tail(5))),
+        None => Outcome::Fail("still running as `ps` — started as init".into()),
+    }
 }
 
 fn bad_config(env: &Env) -> Outcome {

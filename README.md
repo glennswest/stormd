@@ -179,8 +179,8 @@ builder, which mirrors it and pins the stormd commit per build):
   service golden whenever stormd has a new commit), with a bare
   `cargo build --release` — which is why the test crate is not a default
   workspace member;
-- `stormdbase_stage`: `/stormd`, applet links in `/bin` and `/usr/bin` (its
-  list also links `ps`, which is not a stormd applet — see #11)
+- `stormdbase_stage`: `/stormd`, applet links in `/bin` and `/usr/bin` —
+  exactly what `stormd --list-commands` prints, and no `ps` (stormcos#66)
   (relative targets, `../stormd`, because a golden is mounted as a clone and an
   absolute target only resolves when the root is `/`), `/etc/stormd`,
   `/var/log/stormd` as the mount point of the component's log volume — a
@@ -237,6 +237,11 @@ stormd --version
 
 Invoked through a symlink whose name is one of the 63 applets, stormd runs
 that command and exits instead (see [Busybox commands](#busybox-commands)).
+stormd starts as init only when the basename of `argv[0]` is `stormd`, or a
+renamed copy (`stormd-*`, `stormd.*`). Under any other name — `/bin/ps`
+linked to stormd, say — it prints `stormd: ps: not a stormd applet (see
+stormd --list-commands)` and exits 127 before reading a config or starting
+anything (#11).
 
 Startup, in order: install applet symlinks into `/bin`, `/usr/bin`, `/sbin`,
 `/usr/sbin` (skipping names that exist; errors ignored) → load and validate the
@@ -809,7 +814,8 @@ Tab completion (commands, process names, paths), history, `|` pipes, and
 this at every start for `/bin`, `/usr/bin`, `/sbin` and `/usr/sbin`. Piped
 stdin works (`ls /app | grep server`).
 
-**Exit status:** `false` exits 1 and an unknown name exits 127. Every other
+**Exit status:** `false` exits 1 and an unknown name exits 127 (without
+starting init, #11). Every other
 applet exits **0, even when it fails**: `stat /missing` prints the error and
 exits 0, and so does `grep` with no match. So an applet cannot express "wait
 until this file exists" as a one-shot or an exec probe (#31).

@@ -29,6 +29,8 @@ pub struct Stormd {
 #[derive(Default)]
 pub struct Opts {
     pub token: Option<String>,
+    /// Run stormd under this `argv[0]` instead of its own path (stormd#11).
+    pub arg0: Option<String>,
 }
 
 impl Stormd {
@@ -50,7 +52,7 @@ impl Stormd {
             body = body.replace("{me}", &me).replace("{dir}", &dir.display().to_string()),
         );
         std::fs::write(dir.join("config.toml"), &config).map_err(|e| e.to_string())?;
-        Self::spawn(env, dir, port, opts.token)
+        Self::spawn(env, dir, port, opts.token, opts.arg0)
     }
 
     /// Start stormd on a config file that is already written (a test of a
@@ -58,16 +60,20 @@ impl Stormd {
     pub fn start_raw(env: &Env, label: &str, config: &str) -> Result<Stormd, String> {
         let dir = env.instance_dir(label).map_err(|e| e.to_string())?;
         std::fs::write(dir.join("config.toml"), config).map_err(|e| e.to_string())?;
-        Self::spawn(env, dir, 0, None)
+        Self::spawn(env, dir, 0, None, None)
     }
 
-    fn spawn(env: &Env, dir: PathBuf, port: u16, token: Option<String>) -> Result<Stormd, String> {
+    fn spawn(env: &Env, dir: PathBuf, port: u16, token: Option<String>, arg0: Option<String>) -> Result<Stormd, String> {
         if !env.stormd.exists() {
             return Err(format!("no stormd binary at {}", env.stormd.display()));
         }
         let out = File::create(dir.join("stormd.out")).map_err(|e| e.to_string())?;
         let err = out.try_clone().map_err(|e| e.to_string())?;
-        let child = Command::new(&env.stormd)
+        let mut cmd = Command::new(&env.stormd);
+        if let Some(a) = arg0 {
+            std::os::unix::process::CommandExt::arg0(&mut cmd, a);
+        }
+        let child = cmd
             .arg("--config")
             .arg(dir.join("config.toml"))
             .env("HELPER_PIDS", dir.join("pids"))
