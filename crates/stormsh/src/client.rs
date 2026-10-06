@@ -2,12 +2,20 @@ use anyhow::Result;
 use serde::Deserialize;
 
 /// HTTP + WebSocket client for connecting to stormd. When stormd has auth
-/// enabled (`[api] auth_token` / `password`), pass the token — every request
-/// carries it as a bearer credential.
+/// enabled (`[api] auth_token` / `token_file`), pass the token — every
+/// request carries it as a bearer credential. With [`Tls`], it speaks https
+/// and trusts only the given CA (stormd#32).
 pub struct StormClient {
     base_url: String,
     http: reqwest::Client,
     token: Option<String>,
+}
+
+/// https to stormd: the CA its certificate must chain to, and optionally a
+/// client certificate + key (PEM, concatenated) for `[api] client_ca_file`.
+pub struct Tls {
+    pub ca: Vec<u8>,
+    pub identity: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -30,12 +38,27 @@ pub struct HealthResponse {
 pub use stormview::ComponentSummary;
 
 impl StormClient {
-    pub fn new(host: &str, port: u16, token: Option<String>) -> Self {
-        Self {
-            base_url: format!("http://{}:{}", host, port),
-            http: reqwest::Client::new(),
+    pub fn new(host: &str, port: u16, token: Option<String>, tls: Option<Tls>) -> Result<Self> {
+        let (scheme, http) = match tls {
+            None => ("http", reqwest::Client::new()),
+            Some(tls) => {
+                let mut b = reqwest::Client::builder()
+                    .use_rustls_tls()
+                    .tls_built_in_root_certs(false);
+                for cert in reqwest::Certificate::from_pem_bundle(&tls.ca)? {
+                    b = b.add_root_certificate(cert);
+                }
+                if let Some(pem) = &tls.identity {
+                    b = b.identity(reqwest::Identity::from_pem(pem)?);
+                }
+                ("https", b.build()?)
+            }
+        };
+        Ok(Self {
+            base_url: format!("{}://{}:{}", scheme, host, port),
+            http,
             token,
-        }
+        })
     }
 
     fn get(&self, path: &str) -> reqwest::RequestBuilder {

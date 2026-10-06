@@ -27,13 +27,53 @@ struct Cli {
     /// Falls back to the STORMD_TOKEN environment variable.
     #[arg(short = 't', long)]
     token: Option<String>,
+
+    /// Read the bearer token from this file (e.g. stormd's [api] token_file).
+    #[arg(long, conflicts_with = "token")]
+    token_file: Option<std::path::PathBuf>,
+
+    /// Connect over https, verifying stormd's certificate against this PEM
+    /// CA (the node CA). Without it stormsh speaks plain http.
+    #[arg(long)]
+    ca_file: Option<std::path::PathBuf>,
+
+    /// Client certificate (PEM) for stormd's [api] client_ca_file; needs --key.
+    #[arg(long, requires = "key", requires = "ca_file")]
+    cert: Option<std::path::PathBuf>,
+
+    /// Private key (PEM, PKCS#8) for --cert.
+    #[arg(long, requires = "cert")]
+    key: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let token = cli.token.clone().or_else(|| std::env::var("STORMD_TOKEN").ok());
-    let client = client::StormClient::new(&cli.host, cli.port, token);
+    let token = match &cli.token_file {
+        Some(path) => Some(
+            std::fs::read_to_string(path)
+                .map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))?
+                .trim()
+                .to_string(),
+        ),
+        None => cli.token.clone().or_else(|| std::env::var("STORMD_TOKEN").ok()),
+    };
+    let tls = match &cli.ca_file {
+        Some(ca) => Some(client::Tls {
+            ca: std::fs::read(ca).map_err(|e| anyhow::anyhow!("{}: {}", ca.display(), e))?,
+            identity: match (&cli.cert, &cli.key) {
+                (Some(c), Some(k)) => {
+                    let mut pem = std::fs::read(c).map_err(|e| anyhow::anyhow!("{}: {}", c.display(), e))?;
+                    pem.push(b'\n');
+                    pem.extend(std::fs::read(k).map_err(|e| anyhow::anyhow!("{}: {}", k.display(), e))?);
+                    Some(pem)
+                }
+                _ => None,
+            },
+        }),
+        None => None,
+    };
+    let client = client::StormClient::new(&cli.host, cli.port, token, tls)?;
 
     let mut app = App::new(client);
 

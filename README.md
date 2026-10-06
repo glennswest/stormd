@@ -701,8 +701,8 @@ Credentials are compared in constant time. Open paths: `/api/v1/health` and
 `/ui/proxy/*` (the static SPA, no data) and `/api/v1/auth/*`. `/metrics` is
 not open (#32). The TLS certificate and key are re-read when either changes;
 a pair that fails to load keeps the previous one and logs a warning. The
-client CA is read at start. stormsh passes the token with `-t`/`--token` or
-`STORMD_TOKEN`.
+client CA is read at start. stormsh passes the token with `-t`/`--token`,
+`--token-file` or `STORMD_TOKEN`, and speaks https with `--ca-file` (below).
 
 ## Web UI
 
@@ -730,8 +730,15 @@ same-origin at `/ui/proxy/{name}/`, and may feed its dashboard card through a
 A ratatui client for a running stormd.
 
 ```
-stormsh [-H HOST] [-p PORT] [-t TOKEN]    # defaults 127.0.0.1, 9080, $STORMD_TOKEN
+stormsh [-H HOST] [-p PORT] [-t TOKEN | --token-file FILE]
+        [--ca-file CA.pem [--cert CERT.pem --key KEY.pem]]
+                                          # defaults 127.0.0.1, 9080, $STORMD_TOKEN, http
 ```
+
+`--ca-file` switches to https and trusts only that CA (the node CA for a
+stormd with `[api] tls_cert_file`); `--cert`/`--key` present a client
+certificate for `[api] client_ca_file`. With TLS, `-H` must be a name or
+address in stormd's certificate.
 
 Views: `1` dashboard (the component feed as tiles), `2` processes, `3`
 terminal, `4` logs; `Tab` cycles. `↑/↓` or `j/k` select, `s`/`x`/`r`
