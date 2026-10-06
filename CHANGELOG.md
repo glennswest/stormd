@@ -3,6 +3,17 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-10-06
+- **fix:** the plugin proxy (`/ui/proxy/{name}/…`) forwards the request's
+  headers (minus hop-by-hop ones, `Host`, `Content-Length`) and its body as
+  bytes, passes any method through, and returns the plugin's response headers
+  (`Set-Cookie`, `Location`, caching…) instead of only `Content-Type`.
+  Redirects go back to the browser instead of being followed, and one client
+  is reused. A plugin's own `Authorization` now reaches it, so stormstorage
+  UI writes work with its `api_token` set (#34). stormd's own credentials
+  (its `auth_token` bearer, the `stormd_session` cookie) are not passed on,
+  and a plugin cannot set `stormd_session`.
+
 ### 2026-09-27
 - **docs:** README and presentation say what #31 and #32 record: every
   standalone applet but `false` (1) and unknown names (127) exits 0 even on

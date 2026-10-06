@@ -225,7 +225,7 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
   - **#31** — every applet but `false` exits 0, even on error, so no
     one-shot or exec probe can wait for a file.
   - **#7, #10** — config keys that do nothing, cron timeouts that don't kill,
-    the liveness counter resetting, the proxy dropping headers.
+    the liveness counter resetting.
 
 ---
 
@@ -252,8 +252,7 @@ From the open issues. **None of this works today:**
 - The test container built as one image from the repo root (#24).
 - Starting image processes from an existing rootfs after a restart (#8).
 - Warnings for unknown config keys, and dead keys removed or implemented (#7).
-- A real liveness counter, a cron timeout that kills, and a header-preserving
-  plugin proxy (#10).
+- A real liveness counter and a cron timeout that kills (#10).
 - The log writer creating `log_dir` on demand and rate-limiting open
   failures (#1).
 

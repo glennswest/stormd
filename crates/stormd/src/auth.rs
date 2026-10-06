@@ -82,6 +82,11 @@ impl AuthState {
         matched
     }
 
+    /// stormd's machine bearer token, if one is configured.
+    pub fn token(&self) -> Option<&str> {
+        self.token.as_deref()
+    }
+
     async fn new_session(&self, user: &str) -> String {
         let id = format!(
             "{}{}",
@@ -142,6 +147,15 @@ fn is_public(path: &str) -> bool {
         || path == "/api/v1/health"
         || path.starts_with("/api/v1/auth/")
         || (path.starts_with("/ui/") && !path.starts_with("/ui/proxy/"))
+}
+
+/// Whether a `name=value` cookie pair (or a `Set-Cookie` value) is
+/// stormd's own session cookie.
+pub fn is_session_cookie(pair: &str) -> bool {
+    pair.trim_start()
+        .split_once('=')
+        .map(|(name, _)| name.trim() == COOKIE)
+        .unwrap_or(false)
 }
 
 fn session_cookie(req: &Request) -> Option<String> {

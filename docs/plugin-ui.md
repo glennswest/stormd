@@ -36,20 +36,29 @@ What the proxy does, exactly:
 
 - Same origin as stormd, so the plugin need not be reachable from the browser
   and needs no CORS.
-- Methods: GET, POST, PUT, DELETE, PATCH, HEAD (anything else is sent as GET).
-- Request: forwards the `Content-Type` header and, for non-GET/HEAD, the body
-  **as text** — binary uploads do not survive. No other request header is
-  forwarded: not `Cookie`, not `Authorization`.
-- Response: the status and `Content-Type` only — no `Set-Cookie`, no
-  `Location`, no caching headers. Redirects are followed by the proxy itself.
+- Methods: any — the request method is passed through unchanged.
+- Request: every header the browser sent, minus hop-by-hop ones
+  (`Connection` and what it lists, `Keep-Alive`, `Transfer-Encoding`,
+  `Upgrade`, `TE`, `Trailer`, `Proxy-*`) and `Host`/`Content-Length`; the
+  body as bytes, so binary uploads survive. A plugin's own
+  `Authorization: Bearer …` (stormstorage's `api_token`, say) reaches the
+  plugin. stormd's own credentials stop at the proxy: an `Authorization`
+  carrying stormd's `auth_token`, and the `stormd_session` cookie.
+- Response: the status and every upstream header minus hop-by-hop ones —
+  `Set-Cookie`, `Location`, caching and encoding headers included — except a
+  `Set-Cookie` for `stormd_session`, which is dropped. Redirects are not
+  followed; the browser gets the `Location`. An absolute `Location` (`/login`)
+  is not rewritten to the `/ui/proxy/{name}/` prefix, so use relative ones.
 - No WebSocket upgrade.
 - A plugin that cannot be reached answers 500 with `{"error": "proxy: ..."}`.
 - With stormd auth on, `/ui/proxy/*` requires a session (the browser's
-  session cookie rides along with the iframe's requests).
+  session cookie rides along with the iframe's requests) or stormd's bearer.
+  A request carrying a plugin's bearer is let in by the session cookie: a
+  bearer that is not stormd's is not a failure, it is just not stormd's.
 
-So a plugin UI should use relative URLs (it is mounted under a prefix), keep
-its state in the page or its own API rather than cookies, and use plain
-`fetch` for anything live.
+So a plugin UI should use relative URLs (it is mounted under a prefix), name
+its cookies anything but `stormd_session`, and use plain `fetch` for anything
+live.
 
 ## Host-based routing
 

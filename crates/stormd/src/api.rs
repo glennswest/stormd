@@ -742,7 +742,7 @@ async fn proxy_plugin(
     method: axum::http::Method,
     OriginalUri(uri): OriginalUri,
     headers: axum::http::HeaderMap,
-    body: String,
+    body: axum::body::Bytes,
 ) -> Result<axum::response::Response, AppError> {
     let path = uri.path();
     let after = path.strip_prefix("/ui/proxy/").unwrap_or("");
@@ -768,50 +768,151 @@ async fn proxy_plugin(
         query
     );
 
-    let client = reqwest::Client::new();
-    let mut builder = match method.as_str() {
-        "POST" => client.post(&target),
-        "PUT" => client.put(&target),
-        "DELETE" => client.delete(&target),
-        "PATCH" => client.patch(&target),
-        "HEAD" => client.head(&target),
-        _ => client.get(&target),
-    };
+    let own_token = state.auth.as_ref().and_then(|a| a.token());
+    proxy_to(&target, method, &headers, body, own_token).await
+}
 
-    if let Some(ct) = headers.get("content-type") {
-        if let Ok(ct_str) = ct.to_str() {
-            builder = builder.header("content-type", ct_str);
+/// Hop-by-hop headers (RFC 9110 §7.6.1) plus the ones the client library
+/// sets itself for the new connection. Never forwarded either way.
+const HOP_BY_HOP: &[&str] = &[
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "content-length",
+];
+
+fn is_hop_by_hop(name: &axum::http::HeaderName, connection: &[String]) -> bool {
+    let n = name.as_str();
+    HOP_BY_HOP.contains(&n) || connection.iter().any(|c| c == n)
+}
+
+/// Header names listed in `Connection:` are hop-by-hop for this message too.
+fn connection_tokens(headers: &axum::http::HeaderMap) -> Vec<String> {
+    headers
+        .get_all(axum::http::header::CONNECTION)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(|t| t.trim().to_ascii_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// What goes to the plugin: the client's headers minus hop-by-hop ones and
+/// minus stormd's own credentials. A plugin's `Authorization` (its own
+/// bearer, e.g. stormstorage's `api_token`) passes through; one carrying
+/// stormd's `auth_token` was for stormd and stops here, as does the
+/// `stormd_session` cookie.
+fn upstream_request_headers(
+    headers: &axum::http::HeaderMap,
+    own_token: Option<&str>,
+) -> axum::http::HeaderMap {
+    use axum::http::header::{AUTHORIZATION, COOKIE};
+    let connection = connection_tokens(headers);
+    let mut out = axum::http::HeaderMap::new();
+    for (name, value) in headers {
+        if is_hop_by_hop(name, &connection) {
+            continue;
         }
+        if name == AUTHORIZATION {
+            let bearer = value.to_str().ok().and_then(|v| v.strip_prefix("Bearer "));
+            if matches!((bearer, own_token), (Some(b), Some(t)) if b == t) {
+                continue;
+            }
+        }
+        if name == COOKIE {
+            let kept: Vec<&str> = value
+                .to_str()
+                .unwrap_or("")
+                .split(';')
+                .map(str::trim)
+                .filter(|c| !c.is_empty() && !crate::auth::is_session_cookie(c))
+                .collect();
+            if !kept.is_empty() {
+                if let Ok(v) = axum::http::HeaderValue::from_str(&kept.join("; ")) {
+                    out.append(COOKIE, v);
+                }
+            }
+            continue;
+        }
+        out.append(name.clone(), value.clone());
     }
+    out
+}
 
-    if method != axum::http::Method::GET
-        && method != axum::http::Method::HEAD
-        && !body.is_empty()
-    {
+/// What comes back from the plugin: its headers minus hop-by-hop ones, so
+/// `Set-Cookie`, `Location`, caching and encoding headers survive. A
+/// `Set-Cookie` for stormd's own session cookie is dropped — a plugin
+/// must not be able to sign the browser in or out of stormd.
+fn downstream_response_headers(headers: &axum::http::HeaderMap) -> axum::http::HeaderMap {
+    use axum::http::header::SET_COOKIE;
+    let connection = connection_tokens(headers);
+    let mut out = axum::http::HeaderMap::new();
+    for (name, value) in headers {
+        if is_hop_by_hop(name, &connection) {
+            continue;
+        }
+        if name == SET_COOKIE
+            && value
+                .to_str()
+                .map(crate::auth::is_session_cookie)
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        out.append(name.clone(), value.clone());
+    }
+    out
+}
+
+/// One client for every proxied request (connection reuse). Redirects are
+/// not followed: a plugin's `Location` goes back to the browser.
+fn proxy_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("proxy client")
+    })
+}
+
+async fn proxy_to(
+    target: &str,
+    method: axum::http::Method,
+    headers: &axum::http::HeaderMap,
+    body: axum::body::Bytes,
+    own_token: Option<&str>,
+) -> Result<axum::response::Response, AppError> {
+    let mut builder = proxy_client()
+        .request(method, target)
+        .headers(upstream_request_headers(headers, own_token));
+    if !body.is_empty() {
         builder = builder.body(body);
     }
-
     let resp = builder
         .send()
         .await
         .map_err(|e| AppError(anyhow::anyhow!("proxy: {}", e)))?;
 
-    let status = axum::http::StatusCode::from_u16(resp.status().as_u16())
-        .unwrap_or(axum::http::StatusCode::BAD_GATEWAY);
-    let ct = resp.headers().get("content-type").cloned();
+    let status = resp.status();
+    let resp_headers = downstream_response_headers(resp.headers());
     let resp_body = resp
         .bytes()
         .await
         .map_err(|e| AppError(anyhow::anyhow!("proxy: {}", e)))?;
 
-    let mut response = axum::http::Response::builder().status(status);
-    if let Some(ct) = ct {
-        response = response.header("content-type", ct);
-    }
-
-    Ok(response
-        .body(axum::body::Body::from(resp_body.to_vec()))
-        .unwrap())
+    let mut response = axum::http::Response::new(axum::body::Body::from(resp_body));
+    *response.status_mut() = status;
+    *response.headers_mut() = resp_headers;
+    Ok(response)
 }
 
 // --- Error handling ---
@@ -836,5 +937,130 @@ impl From<anyhow::Error> for AppError {
 impl From<std::io::Error> for AppError {
     fn from(err: std::io::Error) -> Self {
         AppError(err.into())
+    }
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue, Method};
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Seen {
+        method: String,
+        path: String,
+        headers: HeaderMap,
+        body: Vec<u8>,
+    }
+
+    /// A stand-in plugin: records what reaches it, answers with a cookie,
+    /// a redirect target and a hop-by-hop header that must not come back.
+    async fn upstream() -> (String, Arc<Mutex<Seen>>) {
+        let seen = Arc::new(Mutex::new(Seen::default()));
+        let st = seen.clone();
+        let app = Router::new().fallback(
+            move |method: Method, uri: axum::http::Uri, headers: HeaderMap, body: axum::body::Bytes| {
+                let st = st.clone();
+                async move {
+                    *st.lock().unwrap() = Seen {
+                        method: method.to_string(),
+                        path: uri.to_string(),
+                        headers,
+                        body: body.to_vec(),
+                    };
+                    axum::http::Response::builder()
+                        .status(302)
+                        .header("set-cookie", "plugin_sid=abc; Path=/")
+                        .header("set-cookie", "stormd_session=evil; Path=/")
+                        .header("location", "/login")
+                        .header("x-plugin", "yes")
+                        .header("keep-alive", "timeout=5")
+                        .body(axum::body::Body::from("moved"))
+                        .unwrap()
+                }
+            },
+        );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        (url, seen)
+    }
+
+    fn h(pairs: &[(&'static str, &str)]) -> HeaderMap {
+        let mut m = HeaderMap::new();
+        for (k, v) in pairs {
+            m.append(*k, HeaderValue::from_str(v).unwrap());
+        }
+        m
+    }
+
+    #[tokio::test]
+    async fn plugin_bearer_reaches_the_plugin_and_cookies_come_back() {
+        let (url, seen) = upstream().await;
+        let req = h(&[
+            ("authorization", "Bearer plugin-token"),
+            ("content-type", "application/json"),
+            ("cookie", "stormd_session=secret; plugin_sid=old"),
+            ("x-requested-with", "fetch"),
+            ("connection", "keep-alive, x-drop-me"),
+            ("x-drop-me", "1"),
+            ("host", "stormd.example"),
+        ]);
+        let body = axum::body::Bytes::from_static(b"{\"size\":\"1G\"}\xff");
+        let resp = proxy_to(
+            &format!("{}/api/volumes?x=1", url),
+            Method::POST,
+            &req,
+            body.clone(),
+            Some("stormd-token"),
+        )
+        .await
+        .ok()
+        .unwrap();
+
+        let s = seen.lock().unwrap();
+        assert_eq!(s.method, "POST");
+        assert_eq!(s.path, "/api/volumes?x=1");
+        assert_eq!(s.headers["authorization"], "Bearer plugin-token");
+        assert_eq!(s.headers["content-type"], "application/json");
+        assert_eq!(s.headers["x-requested-with"], "fetch");
+        assert_eq!(s.headers["cookie"], "plugin_sid=old");
+        assert!(s.headers.get("x-drop-me").is_none());
+        assert_ne!(s.headers["host"], "stormd.example");
+        assert_eq!(s.body, body.to_vec(), "body is passed as bytes, not text");
+
+        assert_eq!(resp.status(), 302, "redirects are returned, not followed");
+        let rh = resp.headers();
+        assert_eq!(rh["location"], "/login");
+        assert_eq!(rh["x-plugin"], "yes");
+        let cookies: Vec<_> = rh.get_all("set-cookie").iter().collect();
+        assert_eq!(cookies, vec!["plugin_sid=abc; Path=/"]);
+        assert!(rh.get("keep-alive").is_none());
+    }
+
+    #[test]
+    fn stormds_own_bearer_stops_at_the_proxy() {
+        let req = h(&[("authorization", "Bearer stormd-token"), ("cookie", "stormd_session=s")]);
+        let out = upstream_request_headers(&req, Some("stormd-token"));
+        assert!(out.get("authorization").is_none());
+        assert!(out.get("cookie").is_none());
+        // With stormd auth off there is no token of its own to strip.
+        let out = upstream_request_headers(&req, None);
+        assert_eq!(out["authorization"], "Bearer stormd-token");
+    }
+
+    #[tokio::test]
+    async fn get_without_body_and_other_methods() {
+        let (url, seen) = upstream().await;
+        for m in [Method::GET, Method::OPTIONS, Method::DELETE] {
+            proxy_to(&format!("{}/", url), m.clone(), &HeaderMap::new(), Default::default(), None)
+                .await
+                .ok()
+                .unwrap();
+            let s = seen.lock().unwrap();
+            assert_eq!(s.method, m.as_str());
+            assert!(s.body.is_empty());
+        }
     }
 }
