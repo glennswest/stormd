@@ -330,6 +330,15 @@ stormcos#64 told its stormd scrape jobs need TLS + bearer once #32 lands. Fourth
 #34 (P2); stormcos#64 told that stormd exports no per-process RSS/CPU/fds (#33). Newer open issues #23–#30 are not yet
 validated or started. Next: pick up by priority.
 
+**Issue #37 — `[process] env_default` (2026-10-06) — in progress.** For
+stormcos#282 / stormpump#88 env.d overrides: `env` overrides the inherited
+environment, so env.d can never win. Precedence at spawn: `env` > inherited
+(stormd's own environment, i.e. env.d) > `env_default`. A key present but
+empty in stormd's environment counts as set. Values expanded like `env`.
+- [ ] config key + pure helper (testable without touching the process env)
+      + spawn; unit tests; README table, example.toml, changelog; sc-build +
+      live check (inherited vs not)
+
 **Issue #34 — plugin proxy forwards headers (2026-10-06) ✅ done (3e4719f).**
 `/ui/proxy/{name}/…` sent only `Content-Type` + a `String` body and returned
 only status + `Content-Type`, so stormstorage's UI bearer retry never arrived.
