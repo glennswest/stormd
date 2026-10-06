@@ -40,7 +40,8 @@ What the proxy does, exactly:
 - Request: every header the browser sent, minus hop-by-hop ones
   (`Connection` and what it lists, `Keep-Alive`, `Transfer-Encoding`,
   `Upgrade`, `TE`, `Trailer`, `Proxy-*`) and `Host`/`Content-Length`; the
-  body as bytes, so binary uploads survive. A plugin's own
+  body as bytes, so binary uploads survive — up to 2 MB (axum's default
+  request-body limit; a larger body is a 413 from stormd). A plugin's own
   `Authorization: Bearer …` (stormstorage's `api_token`, say) reaches the
   plugin. stormd's own credentials stop at the proxy: an `Authorization`
   carrying stormd's `auth_token`, and the `stormd_session` cookie.

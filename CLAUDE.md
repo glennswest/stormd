@@ -330,7 +330,7 @@ stormcos#64 told its stormd scrape jobs need TLS + bearer once #32 lands. Fourth
 #34 (P2); stormcos#64 told that stormd exports no per-process RSS/CPU/fds (#33). Newer open issues #23–#30 are not yet
 validated or started. Next: pick up by priority.
 
-**Issue #34 — plugin proxy forwards headers (2026-10-06) — in progress.**
+**Issue #34 — plugin proxy forwards headers (2026-10-06) ✅ done (3e4719f).**
 `/ui/proxy/{name}/…` sent only `Content-Type` + a `String` body and returned
 only status + `Content-Type`, so stormstorage's UI bearer retry never arrived.
 Decision on #32 interaction (taken from the code, not asked): stormd's
@@ -339,10 +339,19 @@ so the browser path needs nothing new. The proxy strips only *stormd's own*
 credentials — an `Authorization` equal to stormd's `auth_token` and the
 `stormd_session` cookie — and passes everything else (a plugin's bearer
 included). Upstream `Set-Cookie: stormd_session=…` is dropped.
-- [ ] request headers minus hop-by-hop/`Host`/`Content-Length`; body as bytes;
+- [x] request headers minus hop-by-hop/`Host`/`Content-Length`; body as bytes;
       any method; response headers minus hop-by-hop (`Set-Cookie`, `Location`
       kept); one shared client, redirects not followed
-- [ ] tests against an in-process upstream; README; changelog; sc-build
+- [x] tests against an in-process upstream; plugin-ui.md, presentation;
+      changelog; sc-build (`cargo build && cargo test` passes)
+- Verified live via sc-build: stormd with `auth_token` + password, a Python
+  stand-in plugin answering writes 401 without `Bearer plugin-token`. No stormd
+  credential → 401 from stormd; session cookie only → plugin's 401; session +
+  plugin bearer + 1 MB binary POST → 201, plugin saw the bearer, the query and
+  all 1,000,000 bytes, no `stormd_session` cookie, `Set-Cookie` came back;
+  stormd's bearer through the proxy → let in, not forwarded. Bodies over 2 MB
+  are a 413 (axum default, unchanged from before). No version bump: stormd
+  never requests goldens; the fix rides the next stormcos release.
 
 **Issue #19 — CloudID key refresh speaks IMDSv2 (2026-09-26) ✅ done, v0.7.4.** stormimds
 (default `security.mode = "both"`) answers a bare GET 401 with an empty body;
