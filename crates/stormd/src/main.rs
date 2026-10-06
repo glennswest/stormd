@@ -107,12 +107,21 @@ async fn main() {
 
     // Healthcheck mode — probe the running instance and exit
     if cli.healthcheck {
-        let url = format!("http://127.0.0.1:{}/api/v1/health", cli.healthcheck_port);
+        // Plain HTTP first; a port serving TLS ([api] tls_cert_file) fails
+        // that at the connection, so try https. The certificate is not
+        // checked: this is loopback, it carries no credential, and it only
+        // asks whether stormd answers (stormd#32).
+        let path = format!("127.0.0.1:{}/api/v1/health", cli.healthcheck_port);
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(5))
+            .danger_accept_invalid_certs(true)
             .build()
             .unwrap_or_default();
-        match client.get(&url).send().await {
+        let mut result = client.get(format!("http://{}", path)).send().await;
+        if result.is_err() {
+            result = client.get(format!("https://{}", path)).send().await;
+        }
+        match result {
             Ok(resp) if resp.status().is_success() => std::process::exit(0),
             Ok(resp) => {
                 eprintln!("healthcheck failed: HTTP {}", resp.status());

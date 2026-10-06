@@ -648,8 +648,9 @@ client certificate, a session cookie, or `Authorization: Bearer <token>`
 **Health:** `GET /api/v1/health` (and `/healthz`) answers `{"status":"ok"}` whenever the API
 is up; it does not reflect process state (use `/api/v1/status` or
 `/metrics`). `stormd --healthcheck` GETs it on `127.0.0.1:--healthcheck-port`
-(default 9080 — pass the real port if `[api] bind` differs) with a 5 s
-timeout and exits 0 or 1.
+(default 9080 — pass the real port if `[api] bind` differs) over http, then
+https if the port speaks TLS (certificate not checked: loopback, no
+credential), with a 5 s timeout, and exits 0 or 1.
 
 ### Metrics
 

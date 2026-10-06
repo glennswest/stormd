@@ -13,6 +13,8 @@
   bad pair or CA stops stormd at start, before anything is spawned. stormd
   warns at start when auth is off, or on without TLS. `/healthz` is a new
   alias of `/api/v1/health`.
+- **feat:** `stormd --healthcheck` falls back to https when the port speaks
+  TLS (loopback, no credential, certificate not checked) (#32).
 - **feat(stormsh):** `--ca-file` (https, trusting only that CA),
   `--cert`/`--key` (client certificate) and `--token-file`, for a stormd
   behind TLS and auth (#32).
