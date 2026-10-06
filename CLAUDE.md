@@ -330,6 +330,20 @@ stormcos#64 told its stormd scrape jobs need TLS + bearer once #32 lands. Fourth
 #34 (P2); stormcos#64 told that stormd exports no per-process RSS/CPU/fds (#33). Newer open issues #23–#30 are not yet
 validated or started. Next: pick up by priority.
 
+**Issue #34 — plugin proxy forwards headers (2026-10-06) — in progress.**
+`/ui/proxy/{name}/…` sent only `Content-Type` + a `String` body and returned
+only status + `Content-Type`, so stormstorage's UI bearer retry never arrived.
+Decision on #32 interaction (taken from the code, not asked): stormd's
+middleware already accepts a session cookie when the bearer is not stormd's,
+so the browser path needs nothing new. The proxy strips only *stormd's own*
+credentials — an `Authorization` equal to stormd's `auth_token` and the
+`stormd_session` cookie — and passes everything else (a plugin's bearer
+included). Upstream `Set-Cookie: stormd_session=…` is dropped.
+- [ ] request headers minus hop-by-hop/`Host`/`Content-Length`; body as bytes;
+      any method; response headers minus hop-by-hop (`Set-Cookie`, `Location`
+      kept); one shared client, redirects not followed
+- [ ] tests against an in-process upstream; README; changelog; sc-build
+
 **Issue #19 — CloudID key refresh speaks IMDSv2 (2026-09-26) ✅ done, v0.7.4.** stormimds
 (default `security.mode = "both"`) answers a bare GET 401 with an empty body;
 `fetch_keys` parsed that as an empty index — no keys, no warning. Plan:
