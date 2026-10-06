@@ -373,6 +373,40 @@ pub const STANDALONE_COMMANDS: &[&str] = &[
     "sort", "uniq", "cut", "tr", "sed", "rev", "base64", "xxd", "grep",
 ];
 
+/// What stormd was asked to be, from its `argv[0]`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Invocation {
+    /// The init/supervisor.
+    Init,
+    /// A standalone applet (busybox-style symlink).
+    Applet(String),
+    /// A name that is neither: refuse, start nothing (stormd#11).
+    Unknown(String),
+}
+
+/// Classify `argv[0]` by its basename. Init only under `stormd` itself, or a
+/// renamed copy (`stormd-aarch64`, `stormd.new`), or no name at all; an applet
+/// name runs that applet. Anything else — `/bin/ps` linked to stormd, say —
+/// used to fall through to a full init that loaded the default config and
+/// spawned a second copy of every supervised process (stormd#11).
+pub fn classify_argv0(argv0: &str) -> Invocation {
+    let name = std::path::Path::new(argv0)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if name.is_empty()
+        || name == "stormd"
+        || name.starts_with("stormd-")
+        || name.starts_with("stormd.")
+    {
+        Invocation::Init
+    } else if STANDALONE_COMMANDS.contains(&name.as_str()) {
+        Invocation::Applet(name)
+    } else {
+        Invocation::Unknown(name)
+    }
+}
+
 /// Execute a command in standalone mode (busybox multi-call binary).
 /// Returns exit code (0 = success).
 pub async fn execute_standalone(cmd: &str, args: &[String]) -> i32 {
@@ -624,4 +658,29 @@ async fn complete_path(prefix: &str) -> Vec<String> {
     }
     results.sort();
     results
+}
+
+#[cfg(test)]
+mod argv0_tests {
+    use super::{classify_argv0, Invocation};
+
+    #[test]
+    fn stormd_and_renamed_copies_are_init() {
+        for a in ["stormd", "/stormd", "./target/release/stormd", "/opt/stormd-aarch64", "stormd.new", ""] {
+            assert_eq!(classify_argv0(a), Invocation::Init, "{a:?}");
+        }
+    }
+
+    #[test]
+    fn applet_names_run_the_applet() {
+        assert_eq!(classify_argv0("/bin/ls"), Invocation::Applet("ls".into()));
+        assert_eq!(classify_argv0("../../stormd/../usr/bin/grep"), Invocation::Applet("grep".into()));
+    }
+
+    #[test]
+    fn any_other_name_is_refused() {
+        for (a, n) in [("/bin/ps", "ps"), ("top", "top"), ("/usr/bin/stormdrive", "stormdrive"), ("init", "init")] {
+            assert_eq!(classify_argv0(a), Invocation::Unknown(n.into()), "{a:?}");
+        }
+    }
 }

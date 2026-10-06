@@ -44,17 +44,21 @@ struct Cli {
 async fn main() {
     // --- Busybox multi-call dispatch ---
     // Check argv[0] BEFORE clap parsing. If invoked as a known command
-    // (via symlink), run it directly and exit.
+    // (via symlink), run it directly and exit. A name that is neither stormd
+    // nor an applet starts nothing: falling through to init there spawned a
+    // second copy of every supervised process (stormd#11).
     let argv0 = std::env::args().next().unwrap_or_default();
-    let cmd_name = std::path::Path::new(&argv0)
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    if cmd_name != "stormd" && stormd::shell::STANDALONE_COMMANDS.contains(&cmd_name.as_str()) {
-        let args: Vec<String> = std::env::args().skip(1).collect();
-        let exit_code = stormd::shell::execute_standalone(&cmd_name, &args).await;
-        std::process::exit(exit_code);
+    match stormd::shell::classify_argv0(&argv0) {
+        stormd::shell::Invocation::Init => {}
+        stormd::shell::Invocation::Applet(cmd_name) => {
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            let exit_code = stormd::shell::execute_standalone(&cmd_name, &args).await;
+            std::process::exit(exit_code);
+        }
+        stormd::shell::Invocation::Unknown(name) => {
+            eprintln!("stormd: {name}: not a stormd applet (see stormd --list-commands)");
+            std::process::exit(127);
+        }
     }
 
     // Plain lines, not JSON.
