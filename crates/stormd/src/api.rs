@@ -53,6 +53,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/", get(root_redirect))
         // Health & status
         .route("/api/v1/health", get(health))
+        .route("/healthz", get(health))
         .route("/api/v1/status", get(status))
         .route("/api/v1/stats", get(stats))
         // Prometheus text format, at the path everything that scrapes expects.
@@ -768,8 +769,8 @@ async fn proxy_plugin(
         query
     );
 
-    let own_token = state.auth.as_ref().and_then(|a| a.token());
-    proxy_to(&target, method, &headers, body, own_token).await
+    let own_tokens = state.auth.as_ref().map(|a| a.tokens()).unwrap_or_default();
+    proxy_to(&target, method, &headers, body, &own_tokens).await
 }
 
 /// Hop-by-hop headers (RFC 9110 §7.6.1) plus the ones the client library
@@ -812,7 +813,7 @@ fn connection_tokens(headers: &axum::http::HeaderMap) -> Vec<String> {
 /// `stormd_session` cookie.
 fn upstream_request_headers(
     headers: &axum::http::HeaderMap,
-    own_token: Option<&str>,
+    own_tokens: &[String],
 ) -> axum::http::HeaderMap {
     use axum::http::header::{AUTHORIZATION, COOKIE};
     let connection = connection_tokens(headers);
@@ -823,7 +824,7 @@ fn upstream_request_headers(
         }
         if name == AUTHORIZATION {
             let bearer = value.to_str().ok().and_then(|v| v.strip_prefix("Bearer "));
-            if matches!((bearer, own_token), (Some(b), Some(t)) if b == t) {
+            if matches!(bearer, Some(b) if own_tokens.iter().any(|t| t == b)) {
                 continue;
             }
         }
@@ -889,11 +890,11 @@ async fn proxy_to(
     method: axum::http::Method,
     headers: &axum::http::HeaderMap,
     body: axum::body::Bytes,
-    own_token: Option<&str>,
+    own_tokens: &[String],
 ) -> Result<axum::response::Response, AppError> {
     let mut builder = proxy_client()
         .request(method, target)
-        .headers(upstream_request_headers(headers, own_token));
+        .headers(upstream_request_headers(headers, own_tokens));
     if !body.is_empty() {
         builder = builder.body(body);
     }
@@ -1013,7 +1014,7 @@ mod proxy_tests {
             Method::POST,
             &req,
             body.clone(),
-            Some("stormd-token"),
+            &["stormd-token".to_string()],
         )
         .await
         .ok()
@@ -1042,11 +1043,11 @@ mod proxy_tests {
     #[test]
     fn stormds_own_bearer_stops_at_the_proxy() {
         let req = h(&[("authorization", "Bearer stormd-token"), ("cookie", "stormd_session=s")]);
-        let out = upstream_request_headers(&req, Some("stormd-token"));
+        let out = upstream_request_headers(&req, &["stormd-token".to_string()]);
         assert!(out.get("authorization").is_none());
         assert!(out.get("cookie").is_none());
         // With stormd auth off there is no token of its own to strip.
-        let out = upstream_request_headers(&req, None);
+        let out = upstream_request_headers(&req, &[]);
         assert_eq!(out["authorization"], "Bearer stormd-token");
     }
 
@@ -1054,7 +1055,7 @@ mod proxy_tests {
     async fn get_without_body_and_other_methods() {
         let (url, seen) = upstream().await;
         for m in [Method::GET, Method::OPTIONS, Method::DELETE] {
-            proxy_to(&format!("{}/", url), m.clone(), &HeaderMap::new(), Default::default(), None)
+            proxy_to(&format!("{}/", url), m.clone(), &HeaderMap::new(), Default::default(), &[])
                 .await
                 .ok()
                 .unwrap();

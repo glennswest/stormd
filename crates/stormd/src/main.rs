@@ -1,5 +1,4 @@
 use clap::Parser;
-use std::future::IntoFuture;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -147,6 +146,16 @@ async fn main() {
         }
     };
 
+    // API TLS (stormd#32) — loaded before anything is spawned, so a missing or
+    // mismatched pair stops stormd here instead of leaving processes behind.
+    let api_tls = match stormd::tls::server_config(&config.api) {
+        Ok(t) => t,
+        Err(e) => {
+            error!(error = %e, "failed to load [api] TLS configuration");
+            std::process::exit(1);
+        }
+    };
+
     // Resolve cloud_id (config → env → persisted file → generate)
     let cloud_id = config::resolve_cloud_id(&config.general);
 
@@ -287,6 +296,11 @@ async fn main() {
     let auth_state = stormd::auth::AuthState::from_config(&config.api);
     if auth_state.is_some() {
         info!("API authentication enabled");
+        if api_tls.is_none() {
+            warn!("API authentication is on over plain HTTP — credentials cross the network in the clear; set [api] tls_cert_file/tls_key_file");
+        }
+    } else {
+        warn!("API authentication is off — anyone who reaches the API port can read logs and stop processes; set [api] token_file or client_ca_file");
     }
 
     // Start SSH server
@@ -348,7 +362,16 @@ async fn main() {
         }
     };
 
-    info!(addr = %bind_addr, "REST API listening");
+    info!(addr = %bind_addr, tls = api_tls.is_some(), "REST API listening");
+    let api_server = async move {
+        match api_tls {
+            Some(tls) => {
+                stormd::tls::serve(listener, router, tls).await;
+                Ok(())
+            }
+            None => axum::serve(listener, router).await,
+        }
+    };
 
     // Set up signal handlers
     let sup_shutdown = supervisor.clone();
@@ -427,7 +450,7 @@ async fn main() {
         _ = monitor_handle => {
             error!("container failure — initiating shutdown");
         }
-        result = axum::serve(listener, router).into_future() => {
+        result = api_server => {
             if let Err(e) = result {
                 error!(error = %e, "API server error");
             }

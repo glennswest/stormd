@@ -342,6 +342,20 @@ pub struct ApiConfig {
     /// above) being configured turns authentication on.
     #[serde(default)]
     pub users: Vec<ApiUser>,
+    /// The machine bearer token, read from a file (whitespace trimmed) and
+    /// re-read when the file changes. Works like `auth_token`; both may be set.
+    #[serde(default)]
+    pub token_file: Option<PathBuf>,
+    /// Serve the API over TLS with this PEM certificate chain and key. Both or
+    /// neither; re-read when either file changes (stormcert rotation).
+    #[serde(default)]
+    pub tls_cert_file: Option<PathBuf>,
+    #[serde(default)]
+    pub tls_key_file: Option<PathBuf>,
+    /// With TLS: a client certificate that verifies against this PEM CA
+    /// bundle authenticates the request. Turns authentication on. Needs TLS.
+    #[serde(default)]
+    pub client_ca_file: Option<PathBuf>,
     /// Reusable, config-driven host-based routing: `Host:` header -> redirect
     /// target path (e.g. "manager.mob.lo" = "/ui/", "api.x" = "/api/v1/health").
     #[serde(default)]
@@ -355,6 +369,10 @@ impl Default for ApiConfig {
             auth_token: None,
             password: None,
             users: Vec::new(),
+            token_file: None,
+            tls_cert_file: None,
+            tls_key_file: None,
+            client_ca_file: None,
             hosts: std::collections::HashMap::new(),
         }
     }
@@ -506,6 +524,12 @@ impl Config {
         }
         if self.backup.enabled && self.backup.destination_url.is_none() {
             anyhow::bail!("backup enabled but destination_url not set");
+        }
+        if self.api.tls_cert_file.is_some() != self.api.tls_key_file.is_some() {
+            anyhow::bail!("[api] tls_cert_file and tls_key_file must be set together");
+        }
+        if self.api.client_ca_file.is_some() && self.api.tls_cert_file.is_none() {
+            anyhow::bail!("[api] client_ca_file needs TLS (tls_cert_file + tls_key_file)");
         }
         Ok(())
     }

@@ -13,6 +13,9 @@ pub mod shell;
 pub mod ssh;
 pub mod stats;
 pub mod supervisor;
+pub mod tls;
+#[cfg(test)]
+mod tls_fixtures;
 pub mod updater;
 pub mod web;
 pub mod ws;

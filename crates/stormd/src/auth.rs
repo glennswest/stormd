@@ -1,8 +1,9 @@
 //! Authentication hooks for the API and UI. Off unless `[api]` configures
 //! `[[api.users]]` (name + password), a legacy `password` (the "admin"
-//! user), or `auth_token` (machine bearer token) — then everything except
-//! the health check, metrics, the auth endpoints and the static UI assets
-//! requires a session cookie or a bearer token.
+//! user), `auth_token` / `token_file` (machine bearer token) or
+//! `client_ca_file` (client certificates, over TLS) — then everything except
+//! the health checks, the auth endpoints and the static UI assets requires a
+//! verified client certificate, a session cookie or a bearer token.
 //!
 //! Sessions live in memory: a restart signs everyone out, which for a
 //! container's init is the right default. Anything longer-lived (users,
@@ -17,7 +18,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
@@ -34,7 +36,49 @@ pub struct AuthState {
     /// the "admin" user.
     users: Vec<(String, String)>,
     token: Option<String>,
+    token_file: Option<TokenFile>,
     sessions: RwLock<HashMap<String, Session>>,
+}
+
+/// Request extension the TLS listener sets when the connection presented a
+/// client certificate that verified against `[api] client_ca_file`.
+#[derive(Clone, Copy, Debug)]
+pub struct ClientCertVerified;
+
+/// A bearer token kept in a file, re-read whenever the file's modification
+/// time or size changes — a rotated token works without restarting stormd.
+/// An unreadable or empty file means no token (nothing matches), not an open
+/// API.
+struct TokenFile {
+    path: PathBuf,
+    cached: Mutex<(Option<(std::time::SystemTime, u64)>, Option<String>)>,
+}
+
+impl TokenFile {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            cached: Mutex::new((None, None)),
+        }
+    }
+
+    fn current(&self) -> Option<String> {
+        let stamp = std::fs::metadata(&self.path)
+            .ok()
+            .and_then(|m| Some((m.modified().ok()?, m.len())));
+        let mut cached = self.cached.lock().unwrap_or_else(|e| e.into_inner());
+        if stamp.is_none() || cached.0 != stamp {
+            let token = std::fs::read_to_string(&self.path)
+                .ok()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty());
+            if token.is_none() {
+                tracing::warn!(path = %self.path.display(), "[api] token_file unreadable or empty — no bearer token accepted from it");
+            }
+            *cached = (stamp, token);
+        }
+        cached.1.clone()
+    }
 }
 
 impl AuthState {
@@ -48,12 +92,17 @@ impl AuthState {
         if let Some(p) = &api.password {
             users.push(("admin".to_string(), p.clone()));
         }
-        if users.is_empty() && api.auth_token.is_none() {
+        if users.is_empty()
+            && api.auth_token.is_none()
+            && api.token_file.is_none()
+            && api.client_ca_file.is_none()
+        {
             return None;
         }
         Some(Arc::new(Self {
             users,
             token: api.auth_token.clone(),
+            token_file: api.token_file.clone().map(TokenFile::new),
             sessions: RwLock::new(HashMap::new()),
         }))
     }
@@ -72,19 +121,29 @@ impl AuthState {
             }
         }
         if matched.is_none() {
-            if let Some(token) = &self.token {
-                let admin = username.is_empty() || username == "admin";
-                if ct_eq(password, token) && admin {
-                    matched = Some("admin".to_string());
-                }
+            let admin = username.is_empty() || username == "admin";
+            if admin && self.token_matches(password) {
+                matched = Some("admin".to_string());
             }
         }
         matched
     }
 
-    /// stormd's machine bearer token, if one is configured.
-    pub fn token(&self) -> Option<&str> {
-        self.token.as_deref()
+    /// stormd's machine bearer tokens: `auth_token` and the current contents
+    /// of `token_file`, whichever are configured.
+    pub fn tokens(&self) -> Vec<String> {
+        let mut out: Vec<String> = self.token.iter().cloned().collect();
+        if let Some(t) = self.token_file.as_ref().and_then(TokenFile::current) {
+            out.push(t);
+        }
+        out
+    }
+
+    /// Every token is compared, so timing says nothing about which matched.
+    fn token_matches(&self, given: &str) -> bool {
+        self.tokens()
+            .iter()
+            .fold(false, |ok, t| ct_eq(given, t) | ok)
     }
 
     async fn new_session(&self, user: &str) -> String {
@@ -137,13 +196,15 @@ fn ct_eq(a: &str, b: &str) -> bool {
     diff == 0
 }
 
-/// Paths that stay open even with auth on: liveness for orchestrators,
-/// metrics for scrapers, the auth endpoints themselves, and the static SPA
-/// (which shows the login screen — the data behind it is what's protected).
-/// The plugin proxy is NOT public: it reaches into other processes.
+/// Paths that stay open even with auth on: liveness for orchestrators, the
+/// auth endpoints themselves, and the static SPA (which shows the login
+/// screen — the data behind it is what's protected). `/metrics` is NOT
+/// public (stormd#32): it names every process, so a scraper sends the bearer
+/// token or a client certificate like any other caller. Nor is the plugin
+/// proxy: it reaches into other processes.
 fn is_public(path: &str) -> bool {
     path == "/"
-        || path == "/metrics"
+        || path == "/healthz"
         || path == "/api/v1/health"
         || path.starts_with("/api/v1/auth/")
         || (path.starts_with("/ui/") && !path.starts_with("/ui/proxy/"))
@@ -177,16 +238,19 @@ pub async fn require_auth(State(state): State<Arc<AppState>>, req: Request, next
         return next.run(req).await;
     }
 
-    if let Some(expect) = &auth.token {
-        if let Some(given) = req
-            .headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-        {
-            if ct_eq(given, expect) {
-                return next.run(req).await;
-            }
+    // A client certificate the TLS listener verified against client_ca_file.
+    if req.extensions().get::<ClientCertVerified>().is_some() {
+        return next.run(req).await;
+    }
+
+    if let Some(given) = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+    {
+        if auth.token_matches(given) {
+            return next.run(req).await;
         }
     }
 
@@ -296,12 +360,54 @@ mod tests {
     #[test]
     fn public_paths() {
         assert!(is_public("/api/v1/health"));
-        assert!(is_public("/metrics"));
+        assert!(is_public("/healthz"));
+        assert!(!is_public("/metrics"));
         assert!(is_public("/api/v1/auth/login"));
         assert!(is_public("/ui/"));
         assert!(is_public("/ui/assets/app.js"));
         assert!(!is_public("/ui/proxy/myapp/"));
         assert!(!is_public("/api/v1/processes"));
         assert!(!is_public("/ws/logs"));
+    }
+
+    fn api(toml_text: &str) -> crate::config::ApiConfig {
+        toml::from_str(toml_text).unwrap()
+    }
+
+    #[test]
+    fn token_file_and_client_ca_turn_auth_on() {
+        assert!(AuthState::from_config(&api("")).is_none());
+        assert!(AuthState::from_config(&api("token_file = \"/nonexistent\"")).is_some());
+        assert!(AuthState::from_config(&api("client_ca_file = \"/ca.pem\"")).is_some());
+    }
+
+    #[test]
+    fn token_file_is_read_trimmed_and_reread_on_change() {
+        let dir = std::env::temp_dir().join(format!("stormd-auth-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("token");
+        std::fs::write(&path, "first-token\n").unwrap();
+        let auth = AuthState::from_config(&api(&format!(
+            "auth_token = \"inline\"\ntoken_file = {:?}",
+            path.to_str().unwrap()
+        )))
+        .unwrap();
+        assert!(auth.token_matches("first-token"));
+        assert!(auth.token_matches("inline"));
+        assert!(!auth.token_matches("first-token\n"));
+        assert_eq!(auth.check_credentials("admin", "first-token").as_deref(), Some("admin"));
+
+        // A different size is a change even within one mtime tick.
+        std::fs::write(&path, "rotated-token-2\n").unwrap();
+        assert!(auth.token_matches("rotated-token-2"));
+        assert!(!auth.token_matches("first-token"));
+
+        // Gone or empty: nothing from the file matches; the inline token still does.
+        std::fs::write(&path, "  \n").unwrap();
+        assert!(!auth.token_matches(""));
+        std::fs::remove_file(&path).unwrap();
+        assert!(!auth.token_matches("rotated-token-2"));
+        assert!(auth.token_matches("inline"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
