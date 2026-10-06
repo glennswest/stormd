@@ -1,108 +1,98 @@
-//! Throwaway certificates for the TLS tests only (stormd#32): a test CA, a
-//! server pair for 127.0.0.1 (two, to test rotation), a client pair the CA
-//! issued, and one from an unrelated CA. Generated once with openssl, valid
-//! for 100 years, used nowhere else. Not secrets.
+//! Certificates for the TLS tests only (stormd#32): a test CA, a server pair
+//! for 127.0.0.1 (two, to test rotation), a client pair the CA issued, and
+//! one from an unrelated CA. Generated with rcgen once per test run and never
+//! written anywhere but the tests' temp dirs, so no private key lives in the
+//! repository (a committed key is flagged by secret scanners, test or not).
 
-pub const CA_CERT: &str = "\
------BEGIN CERTIFICATE-----
-MIIBmDCCAT+gAwIBAgIUB/vJkq3wB+8ip4srUdpSUzu4YOYwCgYIKoZIzj0EAwIw
-GTEXMBUGA1UEAwwOc3Rvcm1kIHRlc3QgY2EwIBcNMjYxMDA2MTYwMzIxWhgPMjEy
-NjA5MTIxNjAzMjFaMBkxFzAVBgNVBAMMDnN0b3JtZCB0ZXN0IGNhMFkwEwYHKoZI
-zj0CAQYIKoZIzj0DAQcDQgAExkLl+ONhP4ftPVheT4LUG8IBxqiFfwv3pxb5caEV
-+cF37H7NDqm+/kDPUr7dP1l9b2rWeC2sORKYOrBYPRR+iqNjMGEwHQYDVR0OBBYE
-FGB2YXDa1ALYNldRCpIS4HqO0MCdMB8GA1UdIwQYMBaAFGB2YXDa1ALYNldRCpIS
-4HqO0MCdMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEGMAoGCCqGSM49
-BAMCA0cAMEQCIEzazz27TRlbVnKwegajd450to1XuCMOxlH5/mkrEbHsAiAFPEuw
-d3ArutCGc14YCtX+C9cA34gSFjySrb5ompOtlA==
------END CERTIFICATE-----
-";
+use std::sync::OnceLock;
 
-pub const SERVER_CERT: &str = "\
------BEGIN CERTIFICATE-----
-MIIBvzCCAWSgAwIBAgIUXGBUFqaR2fZlrWwTRs2xuwg1078wCgYIKoZIzj0EAwIw
-GTEXMBUGA1UEAwwOc3Rvcm1kIHRlc3QgY2EwIBcNMjYxMDA2MTYwMzIxWhgPMjEy
-NjA5MTIxNjAzMjFaMBExDzANBgNVBAMMBnNlcnZlcjBZMBMGByqGSM49AgEGCCqG
-SM49AwEHA0IABEcs+eqJlXpXc9xV1QKlGS8ElLTqqJ6lvwIOKHNwm1N2I6KY/dj8
-YS8M1sJIBMMK4jPq2WrDme3A5X+xyCu/ik2jgY8wgYwwCQYDVR0TBAIwADAOBgNV
-HQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwGgYDVR0RBBMwEYcEfwAA
-AYIJbG9jYWxob3N0MB0GA1UdDgQWBBRDYQSt46nuNbQC+YMOOwB38EQoGTAfBgNV
-HSMEGDAWgBRgdmFw2tQC2DZXUQqSEuB6jtDAnTAKBggqhkjOPQQDAgNJADBGAiEA
-uqiFkVUJJawxVFSpTFrphfQWNJBsk8UGaI0KYyf2LggCIQCEB20uHuPeV48sVclW
-5K/YKeEy8+8tNZPu5wspoyqUng==
------END CERTIFICATE-----
-";
+use rcgen::{
+    BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa,
+    KeyPair, KeyUsagePurpose,
+};
 
-pub const SERVER_KEY: &str = "\
------BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgUw+o82SNhoXgb8Wl
-DtCduOEOKPL03TDaUu0Q/ghH39OhRANCAARHLPnqiZV6V3PcVdUCpRkvBJS06qie
-pb8CDihzcJtTdiOimP3Y/GEvDNbCSATDCuIz6tlqw5ntwOV/scgrv4pN
------END PRIVATE KEY-----
-";
+pub struct Fixtures {
+    pub ca_cert: String,
+    pub server_cert: String,
+    pub server_key: String,
+    pub server2_cert: String,
+    pub server2_key: String,
+    pub client_cert: String,
+    pub client_key: String,
+    pub stranger_cert: String,
+    pub stranger_key: String,
+}
 
-pub const SERVER2_CERT: &str = "\
------BEGIN CERTIFICATE-----
-MIIBvjCCAWWgAwIBAgIUXGBUFqaR2fZlrWwTRs2xuwg108AwCgYIKoZIzj0EAwIw
-GTEXMBUGA1UEAwwOc3Rvcm1kIHRlc3QgY2EwIBcNMjYxMDA2MTYwMzIxWhgPMjEy
-NjA5MTIxNjAzMjFaMBIxEDAOBgNVBAMMB3NlcnZlcjIwWTATBgcqhkjOPQIBBggq
-hkjOPQMBBwNCAARlrfn5SrtJmvX0N1coimv2GIR4ti/ljN7w2IYBkwe9vRT58EhQ
-5Y8YFoKavgv1XJRB/wM0TtotFDTJcXsQ+7HKo4GPMIGMMAkGA1UdEwQCMAAwDgYD
-VR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMBMBoGA1UdEQQTMBGHBH8A
-AAGCCWxvY2FsaG9zdDAdBgNVHQ4EFgQU/arkZHsXNvfWJvON02CYNcBLvtUwHwYD
-VR0jBBgwFoAUYHZhcNrUAtg2V1EKkhLgeo7QwJ0wCgYIKoZIzj0EAwIDRwAwRAIg
-YF8z8zh9cV7gMw0FKc0rDmoC4ajkvEZ8UmVx+8uVPxYCIBkhLMfK2J1qtWlTGbGK
-5WHAz/CMU26yycnNbG4DyVqu
------END CERTIFICATE-----
-";
+pub fn fixtures() -> &'static Fixtures {
+    static F: OnceLock<Fixtures> = OnceLock::new();
+    F.get_or_init(|| {
+        let (ca, ca_key) = ca("stormd test ca");
+        let (stranger_ca, stranger_ca_key) = ca("stormd stranger ca");
+        let server = || {
+            leaf(
+                "server",
+                &["127.0.0.1", "localhost"],
+                ExtendedKeyUsagePurpose::ServerAuth,
+                &ca,
+                &ca_key,
+            )
+        };
+        let (server_cert, server_key) = server();
+        let (server2_cert, server2_key) = server();
+        let (client_cert, client_key) = leaf(
+            "client",
+            &[],
+            ExtendedKeyUsagePurpose::ClientAuth,
+            &ca,
+            &ca_key,
+        );
+        let (stranger_cert, stranger_key) = leaf(
+            "stranger",
+            &[],
+            ExtendedKeyUsagePurpose::ClientAuth,
+            &stranger_ca,
+            &stranger_ca_key,
+        );
+        Fixtures {
+            ca_cert: ca.pem(),
+            server_cert,
+            server_key,
+            server2_cert,
+            server2_key,
+            client_cert,
+            client_key,
+            stranger_cert,
+            stranger_key,
+        }
+    })
+}
 
-pub const SERVER2_KEY: &str = "\
------BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgaGhLoU16LUHkvVPR
-I+j4N0LgC/6+Ti7dtA3/lVBVNtChRANCAARlrfn5SrtJmvX0N1coimv2GIR4ti/l
-jN7w2IYBkwe9vRT58EhQ5Y8YFoKavgv1XJRB/wM0TtotFDTJcXsQ+7HK
------END PRIVATE KEY-----
-";
+fn ca(name: &str) -> (Certificate, KeyPair) {
+    let mut p = CertificateParams::new(Vec::<String>::new()).unwrap();
+    p.distinguished_name.push(DnType::CommonName, name);
+    p.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    p.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+    let key = KeyPair::generate().unwrap();
+    let cert = p.self_signed(&key).unwrap();
+    (cert, key)
+}
 
-pub const CLIENT_CERT: &str = "\
------BEGIN CERTIFICATE-----
-MIIBnzCCAUagAwIBAgIUXGBUFqaR2fZlrWwTRs2xuwg108EwCgYIKoZIzj0EAwIw
-GTEXMBUGA1UEAwwOc3Rvcm1kIHRlc3QgY2EwIBcNMjYxMDA2MTYwMzIxWhgPMjEy
-NjA5MTIxNjAzMjFaMBExDzANBgNVBAMMBmNsaWVudDBZMBMGByqGSM49AgEGCCqG
-SM49AwEHA0IABBeWMQxx5bXs4UVZTTbUjlm2OYI21LBd0TmptaxoYC2rF8jcrk33
-BtprAOuN3rdvuHC2GhNxinb2SHnLOQalY7ujcjBwMAkGA1UdEwQCMAAwDgYDVR0P
-AQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMCMB0GA1UdDgQWBBSP1sqPKr2M
-m5rz/60RNW98n7dSUDAfBgNVHSMEGDAWgBRgdmFw2tQC2DZXUQqSEuB6jtDAnTAK
-BggqhkjOPQQDAgNHADBEAiAjSyNL37jdUo3oA8g29B5OMMcE/mY1NuekqtAsFtTH
-fwIgFnEugj5MMkHcbtJyFElKtRkwgeNWOmluVugIfkmBxbA=
------END CERTIFICATE-----
-";
-
-pub const CLIENT_KEY: &str = "\
------BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgqS5DvSE0HxzTfHhm
-ebN7d7TRtiEwZwuC3I+bhzQTIXmhRANCAAQXljEMceW17OFFWU021I5ZtjmCNtSw
-XdE5qbWsaGAtqxfI3K5N9wbaawDrjd63b7hwthoTcYp29kh5yzkGpWO7
------END PRIVATE KEY-----
-";
-
-pub const STRANGER_CERT: &str = "\
------BEGIN CERTIFICATE-----
-MIIBpjCCAUugAwIBAgIUbFBRjBP4IaPpkE1FjBo72dZvsMAwCgYIKoZIzj0EAwIw
-HDEaMBgGA1UEAwwRc3Rvcm1kIHRlc3Qgb3RoZXIwIBcNMjYxMDA2MTYwMzIxWhgP
-MjEyNjA5MTIxNjAzMjFaMBMxETAPBgNVBAMMCHN0cmFuZ2VyMFkwEwYHKoZIzj0C
-AQYIKoZIzj0DAQcDQgAErZiMrPbBlpOkFTkdVvwWZMwGiyJau21k3b/sBHjBuqt0
-H9mX+KLYnuMUc7UYAsDzfwXCIcqN+5Tf/apsXvlQ9KNyMHAwCQYDVR0TBAIwADAO
-BgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwIwHQYDVR0OBBYEFIPe
-xmdK+uPKcXs1qJUDbdUFtcwQMB8GA1UdIwQYMBaAFC4y+aSglat6HkMfR1qMrFht
-6slCMAoGCCqGSM49BAMCA0kAMEYCIQCSbgfGsJxgxW3JgcITTzfMrSFPL5twghpG
-IazCekleTQIhALBs249S0LSCXCDaEhh7VgOVlKPR7ciAZ3pko7zNbPnA
------END CERTIFICATE-----
-";
-
-pub const STRANGER_KEY: &str = "\
------BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdRhzYHQFOhEEF1/d
-D0ZQgBuhz64gD5zwDDDcEjUJwy+hRANCAAStmIys9sGWk6QVOR1W/BZkzAaLIlq7
-bWTdv+wEeMG6q3Qf2Zf4otie4xRztRgCwPN/BcIhyo37lN/9qmxe+VD0
------END PRIVATE KEY-----
-";
+/// A leaf the CA issued, as (cert PEM, PKCS#8 key PEM). An IP literal in
+/// `names` becomes an IP SAN.
+fn leaf(
+    cn: &str,
+    names: &[&str],
+    usage: ExtendedKeyUsagePurpose,
+    ca: &Certificate,
+    ca_key: &KeyPair,
+) -> (String, String) {
+    let mut p =
+        CertificateParams::new(names.iter().map(|n| n.to_string()).collect::<Vec<_>>()).unwrap();
+    p.distinguished_name.push(DnType::CommonName, cn);
+    p.is_ca = IsCa::ExplicitNoCa;
+    p.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    p.extended_key_usages = vec![usage];
+    let key = KeyPair::generate().unwrap();
+    let cert = p.signed_by(&key, ca, ca_key).unwrap();
+    (cert.pem(), key.serialize_pem())
+}

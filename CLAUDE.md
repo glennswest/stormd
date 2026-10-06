@@ -351,8 +351,9 @@ screen loads).
       cert files rotated → next handshake serves the new serial; /ws/logs 101;
       mismatched pair → exit 1, nothing spawned; --healthcheck 0 on TLS port
 - [x] Told stormcos#81 (config to wire), stormcos#64 (scrape), stormconsole#49
-- Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
-  (100-year test CA; the `.pem` gitignore is why they are Rust constants)
+- Test certs are generated per test run by `crates/stormd/src/tls_fixtures.rs`
+  (rcgen). Never commit a key, even a test one: the committed constants from
+  cae99f4 were flagged by an external secret scan (2026-10-06)
 
 **Issue #11 — refuse init under an unknown argv[0] (2026-10-06), in progress.**
 Decisions (from the code and stormcos, not asked): init only when argv[0]'s

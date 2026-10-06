@@ -200,7 +200,7 @@ pub async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tls_fixtures::*;
+    use crate::tls_fixtures::fixtures as f;
     use axum::routing::get;
 
     struct Dir(PathBuf);
@@ -255,7 +255,7 @@ mod tests {
         let mut b = reqwest::Client::builder()
             .use_rustls_tls()
             .tls_built_in_root_certs(false)
-            .add_root_certificate(reqwest::Certificate::from_pem(CA_CERT.as_bytes()).unwrap());
+            .add_root_certificate(reqwest::Certificate::from_pem(f().ca_cert.as_bytes()).unwrap());
         if let Some((cert, key)) = identity {
             b = b.identity(reqwest::Identity::from_pem(format!("{}{}", cert, key).as_bytes()).unwrap());
         }
@@ -263,7 +263,7 @@ mod tests {
     }
 
     fn server_files() -> Dir {
-        files(&[("server.crt", SERVER_CERT), ("server.key", SERVER_KEY), ("ca.crt", CA_CERT)])
+        files(&[("server.crt", &f().server_cert), ("server.key", &f().server_key), ("ca.crt", &f().ca_cert)])
     }
 
     #[test]
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn a_key_that_is_not_the_certificates_is_refused() {
-        let d = files(&[("server.crt", SERVER_CERT), ("server.key", SERVER2_KEY)]);
+        let d = files(&[("server.crt", &f().server_cert), ("server.key", &f().server2_key)]);
         let err = server_config(&api_config(&d.0, false)).unwrap_err();
         assert!(err.to_string().contains("does not match"), "{}", err);
     }
@@ -299,14 +299,14 @@ mod tests {
             let url = url.clone();
             async move { c.get(format!("{}/whoami", url)).send().await.map(|r| r.status()) }
         };
-        let with_cert = client(Some((CLIENT_CERT, CLIENT_KEY)));
+        let with_cert = client(Some((&f().client_cert, &f().client_key)));
         let r = with_cert.get(format!("{}/whoami", url)).send().await.unwrap();
         assert_eq!(r.text().await.unwrap(), "client-cert");
         // No certificate: the handshake still succeeds, the request is anonymous.
         let r = client(None).get(format!("{}/whoami", url)).send().await.unwrap();
         assert_eq!(r.text().await.unwrap(), "anonymous");
         // A certificate from another CA fails the handshake.
-        assert!(who(client(Some((STRANGER_CERT, STRANGER_KEY)))).await.is_err());
+        assert!(who(client(Some((&f().stranger_cert, &f().stranger_key)))).await.is_err());
     }
 
     #[tokio::test]
@@ -323,8 +323,8 @@ mod tests {
         };
         healthy(&client(None)).await;
         // A different size is a change even within one mtime tick.
-        std::fs::write(d.0.join("server.crt"), format!("{}\n", SERVER2_CERT)).unwrap();
-        std::fs::write(d.0.join("server.key"), format!("{}\n", SERVER2_KEY)).unwrap();
+        std::fs::write(d.0.join("server.crt"), format!("{}\n", f().server2_cert)).unwrap();
+        std::fs::write(d.0.join("server.key"), format!("{}\n", f().server2_key)).unwrap();
         // Both pairs are from the same CA, so the client cannot tell them
         // apart; check the reload itself on a resolver over the same files.
         let resolver = ReloadingCert::load(
@@ -333,7 +333,7 @@ mod tests {
             Arc::new(rustls::crypto::ring::default_provider()),
         )
         .unwrap();
-        let expected = CertificateDer::pem_slice_iter(SERVER2_CERT.as_bytes())
+        let expected = CertificateDer::pem_slice_iter(f().server2_cert.as_bytes())
             .next()
             .unwrap()
             .unwrap();
