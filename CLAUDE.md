@@ -337,14 +337,17 @@ unconfigured stormd keeps working); `/metrics` sits behind the same auth on the
 same listener (bearer for scrapers — ironprom supports it, stormcos#64);
 only `/api/v1/health` + new `/healthz` alias stay anonymous for data (the SPA
 shell and the auth endpoints stay open so the login screen loads).
-- [ ] `[api] tls_cert_file`/`tls_key_file`: rustls (ring) over HTTP/1.1,
-      cert re-read when the files change (stormcert rotation)
-- [ ] `[api] token_file` (bearer from a file, re-read on change) and
+- [x] `[api] tls_cert_file`/`tls_key_file`: rustls (ring) over HTTP/1.1,
+      cert re-read when the files change (stormcert rotation) — cae99f4
+- [x] `[api] token_file` (bearer from a file, re-read on change) and
       `client_ca_file` (client certs verified against it count as auth)
-- [ ] `/metrics` no longer public when auth is on; `/healthz`
-- [ ] tests (TLS handshake, client cert, token file, metrics 401); README,
-      example.toml, plugin-ui/presentation, changelog; sc-build; live check
-- [ ] stormsh `--ca-file` (https + node CA) / `--token-file`
+- [x] `/metrics` no longer public when auth is on; `/healthz`
+- [x] tests (TLS handshake, client cert, rotation, token file; medium suite
+      checks /metrics 401); README, example.toml, plugin-ui/presentation,
+      changelog; sc-build passes (36 unit tests) — live check running
+- [x] stormsh `--ca-file`, `--cert`/`--key`, `--token-file` — 1ee62df
+- Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
+  (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 - [ ] tell stormcos#64 / stormconsole#49 the final shape
 
 **Issue #37 — `[process] env_default` (2026-10-06) ✅ done (c34b849).** For
