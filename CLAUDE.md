@@ -330,6 +330,23 @@ stormcos#64 told its stormd scrape jobs need TLS + bearer once #32 lands. Fourth
 #34 (P2); stormcos#64 told that stormd exports no per-process RSS/CPU/fds (#33). Newer open issues #23–#30 are not yet
 validated or started. Next: pick up by priority.
 
+**Issue #32 — API over TLS, no anonymous access (2026-10-06) — in progress.**
+Decisions (from the issue and code, not asked): auth stays "on when any
+credential is configured" (stormcos wires the flags per container, and an
+unconfigured stormd keeps working); `/metrics` sits behind the same auth on the
+same listener (bearer for scrapers — ironprom supports it, stormcos#64);
+only `/api/v1/health` + new `/healthz` alias stay anonymous for data (the SPA
+shell and the auth endpoints stay open so the login screen loads).
+- [ ] `[api] tls_cert_file`/`tls_key_file`: rustls (ring) over HTTP/1.1,
+      cert re-read when the files change (stormcert rotation)
+- [ ] `[api] token_file` (bearer from a file, re-read on change) and
+      `client_ca_file` (client certs verified against it count as auth)
+- [ ] `/metrics` no longer public when auth is on; `/healthz`
+- [ ] tests (TLS handshake, client cert, token file, metrics 401); README,
+      example.toml, plugin-ui/presentation, changelog; sc-build; live check
+- [ ] stormsh `--ca-file` (https + node CA) / `--token-file`
+- [ ] tell stormcos#64 / stormconsole#49 the final shape
+
 **Issue #37 — `[process] env_default` (2026-10-06) ✅ done (c34b849).** For
 stormcos#282 / stormpump#88 env.d overrides: `env` overrides the inherited
 environment, so env.d can never win. Precedence at spawn: `env` > inherited
