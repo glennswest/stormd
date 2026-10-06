@@ -330,25 +330,29 @@ stormcos#64 told its stormd scrape jobs need TLS + bearer once #32 lands. Fourth
 #34 (P2); stormcos#64 told that stormd exports no per-process RSS/CPU/fds (#33). Newer open issues #23–#30 are not yet
 validated or started. Next: pick up by priority.
 
-**Issue #32 — API over TLS, no anonymous access (2026-10-06) — in progress.**
+**Issue #32 — API over TLS, no anonymous access (2026-10-06) ✅ done.**
 Decisions (from the issue and code, not asked): auth stays "on when any
 credential is configured" (stormcos wires the flags per container, and an
-unconfigured stormd keeps working); `/metrics` sits behind the same auth on the
-same listener (bearer for scrapers — ironprom supports it, stormcos#64);
-only `/api/v1/health` + new `/healthz` alias stay anonymous for data (the SPA
-shell and the auth endpoints stay open so the login screen loads).
-- [x] `[api] tls_cert_file`/`tls_key_file`: rustls (ring) over HTTP/1.1,
-      cert re-read when the files change (stormcert rotation) — cae99f4
-- [x] `[api] token_file` (bearer from a file, re-read on change) and
-      `client_ca_file` (client certs verified against it count as auth)
-- [x] `/metrics` no longer public when auth is on; `/healthz`
-- [x] tests (TLS handshake, client cert, rotation, token file; medium suite
-      checks /metrics 401); README, example.toml, plugin-ui/presentation,
-      changelog; sc-build passes (36 unit tests) — live check running
+unconfigured stormd keeps working, with a warning at start); `/metrics` sits
+behind the same auth on the same listener (bearer or client cert — ironprom
+supports both, stormcos#64); only `/api/v1/health` + new `/healthz` stay
+anonymous for data (the SPA shell and `/api/v1/auth/*` stay open so the login
+screen loads).
+- [x] `[api] tls_cert_file`/`tls_key_file` (rustls/ring, HTTP/1.1, pair re-read
+      on change), `client_ca_file`, `token_file` (re-read on change) — cae99f4
+- [x] `/metrics` behind auth, `/healthz`; `--healthcheck` falls back to https
 - [x] stormsh `--ca-file`, `--cert`/`--key`, `--token-file` — 1ee62df
+- [x] unit tests (TLS, client cert, stranger CA, rotation, token file), medium
+      suite (`auth-token` checks /metrics 401/200, /healthz); docs, changelog
+- [x] Live on dev via sc-build (real binary, curl): plain http to the port
+      fails; healthz/health 200 anon; processes, metrics, stop 401 anon / wrong
+      token; 200 with token or client cert; stranger-CA cert and untrusted
+      server refused at handshake; token file rotated → old 401, new 200;
+      cert files rotated → next handshake serves the new serial; /ws/logs 101;
+      mismatched pair → exit 1, nothing spawned; --healthcheck 0 on TLS port
+- [x] Told stormcos#81 (config to wire), stormcos#64 (scrape), stormconsole#49
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
-- [ ] tell stormcos#64 / stormconsole#49 the final shape
 
 **Issue #37 — `[process] env_default` (2026-10-06) ✅ done (c34b849).** For
 stormcos#282 / stormpump#88 env.d overrides: `env` overrides the inherited
