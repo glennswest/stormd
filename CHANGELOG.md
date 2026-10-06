@@ -4,6 +4,7 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-06
+- **chore:** test-fixture credentials marked `not a secret` (inline, or `.github/secret_scanning.yml` for files that cannot hold a comment) — owner
 - **fix:** stormd under a name that is neither `stormd` (or a renamed copy,
   `stormd-*`/`stormd.*`) nor an applet — `/bin/ps` linked to it, say — prints
   `stormd: <name>: not a stormd applet (see stormd --list-commands)` and exits

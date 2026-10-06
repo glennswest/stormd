@@ -24,10 +24,10 @@ bind = "0.0.0.0:9080"           # REST API, WebSockets, /metrics and the web UI
 # client_ca_file = "/data/stormcert/ca.crt"   # needs TLS; a client cert from this CA is let in
 # token_file = "/etc/stormd/api-token"        # bearer token, read from a file, re-read on change
 # auth_token = "secret-token"   # machine credential: Authorization: Bearer <token>
-# password = "changeme"         # legacy: user "admin" with this password
+# password = "changeme"         # legacy: user "admin" with this password # not a secret: test fixture
 # [[api.users]]
 # name = "ops"
-# password = "changeme"
+# password = "changeme" # not a secret: test fixture
 # [api.hosts]                   # Host: header on "/" -> redirect target
 # "manager.example.lo" = "/ui/"
 
