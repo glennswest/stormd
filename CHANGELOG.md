@@ -4,12 +4,6 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-06
-- **fix(security):** the TLS tests' certificates and private keys are no
-  longer committed: `tls_fixtures.rs` generates the CA, server, client and
-  stranger pairs with `rcgen` (dev-dependency) once per test run. The old
-  constants were throwaway test-only keys (compiled under `#[cfg(test)]`,
-  trusted nowhere), but a committed key is flagged by secret scanners
-  regardless (reported against cae99f4).
 - **fix:** stormd under a name that is neither `stormd` (or a renamed copy,
   `stormd-*`/`stormd.*`) nor an applet — `/bin/ps` linked to it, say — prints
   `stormd: <name>: not a stormd applet (see stormd --list-commands)` and exits

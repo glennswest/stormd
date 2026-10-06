@@ -51,7 +51,3 @@ libc = "0.2"
 
 [features]
 default = []
-
-[dev-dependencies]
-# TLS test certificates are generated per run, never committed (tls_fixtures.rs)
-rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "ring"] }
