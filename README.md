@@ -314,17 +314,23 @@ Theme ids (from stormview): `storm`, `one`, `gruvbox`, `catppuccin`, `rose`,
 | Key | Default | |
 |---|---|---|
 | `bind` | `"0.0.0.0:9080"` | REST API, WS, metrics and UI |
+| `tls_cert_file`, `tls_key_file` | — | PEM certificate chain and key: serve the API over TLS (HTTP/1.1). Both or neither; re-read when either file changes |
+| `client_ca_file` | — | PEM CA bundle (needs TLS): a client certificate that verifies against it authenticates the request; one that does not fails the handshake |
+| `token_file` | — | file holding the bearer token (whitespace trimmed), re-read when it changes; an unreadable or empty file accepts no token |
 | `auth_token` | — | bearer token for any request; also the `admin` login password |
 | `password` | — | legacy: user `admin` with this password |
 | `[[api.users]]` | — | `name`, `password` — UI login users |
 | `[api.hosts]` | — | `"host.name" = "/path"`: a request for `/` whose `Host:` matches is redirected there (default `/ui/`) |
 
-Any of `auth_token`, `password` or a user turns authentication on — see
-[Authentication](#authentication). With none of them, the API is anonymous.
-It is always plain HTTP: there is no TLS option, no token file and no client
-certificates. On a stormcos node every container's stormd answers on the
-node's address, so today anyone on that network can read logs and stop
-processes (#32).
+Any of `token_file`, `auth_token`, `client_ca_file`, `password` or a user
+turns authentication on — see [Authentication](#authentication). With none of
+them the API is anonymous, and stormd logs a warning at start saying so; with
+auth on but no TLS it warns that credentials travel in the clear. On a
+stormcos node every container's stormd answers on the node's address, so a
+node's stormd should have all three: a stormcert serving pair, the node CA as
+`client_ca_file`, and a `token_file` (#32). A missing, unreadable or
+mismatched pair or CA stops stormd at start (exit 1), before any process is
+spawned.
 
 ### `[[process]]`
 
@@ -592,15 +598,17 @@ webhook on, the event is also POSTed as JSON:
 
 ## REST API
 
-On `[api] bind`, plain HTTP only (#32). With auth off (the default) every
-route is open. With auth on, everything except the endpoints marked *open*
-needs a session cookie or `Authorization: Bearer <auth_token>`.
+On `[api] bind`, over TLS when `tls_cert_file`/`tls_key_file` are set, plain
+HTTP otherwise. With auth off (no credential configured) every route is open.
+With auth on, everything except the endpoints marked *open* needs a verified
+client certificate, a session cookie, or `Authorization: Bearer <token>`
+(`auth_token` or the contents of `token_file`).
 
 | Method | Path | |
 |---|---|---|
 | GET | `/` | *open* — redirect by `Host:` (`[api.hosts]`, plugin `host`), else `/ui/` |
-| GET | `/api/v1/health` | *open* — `{"status":"ok"}` |
-| GET | `/metrics` | *open* — Prometheus text, below |
+| GET | `/api/v1/health`, `/healthz` | *open* — `{"status":"ok"}` |
+| GET | `/metrics` | Prometheus text, below — behind auth like the rest |
 | GET | `/api/v1/status` | `container_failed`, stats, processes, cron jobs |
 | GET | `/api/v1/stats` | uptime, memory, process counts |
 | GET | `/api/v1/cloudid` | `{cloud_id, container_name}` |
@@ -637,7 +645,7 @@ needs a session cookie or `Authorization: Bearer <auth_token>`.
 | POST | `/api/v1/debug/processes/{name}/signal` | with `allow_signal` |
 | POST | `/api/v1/debug/processes/{name}/stdin` | with `allow_stdin` |
 
-**Health:** `GET /api/v1/health` answers `{"status":"ok"}` whenever the API
+**Health:** `GET /api/v1/health` (and `/healthz`) answers `{"status":"ok"}` whenever the API
 is up; it does not reflect process state (use `/api/v1/status` or
 `/metrics`). `stormd --healthcheck` GETs it on `127.0.0.1:--healthcheck-port`
 (default 9080 — pass the real port if `[api] bind` differs) with a 5 s
@@ -646,6 +654,9 @@ timeout and exits 0 or 1.
 ### Metrics
 
 `GET /metrics`, Prometheus text 0.0.4, read at request time and kept nowhere.
+With auth on it needs credentials like any other route (it names every
+process): a scraper sends `Authorization: Bearer <token>` or presents a client
+certificate, and with TLS uses `scheme: https` with the node CA.
 Label `container` is `[general] name`; `process` is the supervised process.
 
 | Metric | Type | |
@@ -672,13 +683,26 @@ types are the [stormview](https://github.com/glennswest/stormview) crate.
 
 ## Authentication
 
-Off unless `[api]` sets `auth_token`, `password` or `[[api.users]]`. Then:
-the UI shows a login screen; a login sets an HttpOnly `stormd_session` cookie
-(sessions are in memory, 24 h, gone on restart); `auth_token` works as a bearer
-token on any request and as the password for `admin`; credentials are
-compared in constant time. Open paths: `/`, `/metrics`, `/api/v1/health`,
-`/api/v1/auth/*`, and `/ui/*` except `/ui/proxy/*`. stormsh passes the token
-with `-t`/`--token` or `STORMD_TOKEN`.
+Off unless `[api]` sets `token_file`, `auth_token`, `client_ca_file`,
+`password` or `[[api.users]]`. Then a request is let in by any one of:
+
+- a **client certificate** that verified against `client_ca_file` during the
+  TLS handshake (a certificate from another CA fails the handshake; no
+  certificate at all is fine — the other ways still apply);
+- `Authorization: Bearer <token>`, where the token is `auth_token` or the
+  current contents of `token_file` (re-read when the file changes, so a
+  rotated token works without a restart); either also works as the password
+  for `admin`;
+- an HttpOnly `stormd_session` cookie from a UI login (sessions are in
+  memory, 24 h, gone on restart).
+
+Credentials are compared in constant time. Open paths: `/api/v1/health` and
+`/healthz` (the probes), and what the login screen needs: `/`, `/ui/*` except
+`/ui/proxy/*` (the static SPA, no data) and `/api/v1/auth/*`. `/metrics` is
+not open (#32). The TLS certificate and key are re-read when either changes;
+a pair that fails to load keeps the previous one and logs a warning. The
+client CA is read at start. stormsh passes the token with `-t`/`--token` or
+`STORMD_TOKEN`.
 
 ## Web UI
 

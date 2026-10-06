@@ -44,7 +44,8 @@ What the proxy does, exactly:
   request-body limit; a larger body is a 413 from stormd). A plugin's own
   `Authorization: Bearer …` (stormstorage's `api_token`, say) reaches the
   plugin. stormd's own credentials stop at the proxy: an `Authorization`
-  carrying stormd's `auth_token`, and the `stormd_session` cookie.
+  carrying stormd's bearer token (`auth_token` or `token_file`), and the
+  `stormd_session` cookie.
 - Response: the status and every upstream header minus hop-by-hop ones —
   `Set-Cookie`, `Location`, caching and encoding headers included — except a
   `Set-Cookie` for `stormd_session`, which is dropped. Redirects are not

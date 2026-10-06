@@ -4,6 +4,18 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-06
+- **feat:** the API can be served over TLS and closed to anonymous callers
+  (#32). `[api] tls_cert_file`/`tls_key_file` (PEM, rustls, HTTP/1.1,
+  re-read when either file changes so a rotated stormcert pair is picked up
+  without a restart); `client_ca_file` — a client certificate that verifies
+  against it authenticates the request; `token_file` — the bearer token read
+  from a file and re-read on change. Either of the last two turns auth on. A
+  bad pair or CA stops stormd at start, before anything is spawned. stormd
+  warns at start when auth is off, or on without TLS. `/healthz` is a new
+  alias of `/api/v1/health`.
+- **BREAKING:** with auth on, `/metrics` now needs credentials like every
+  other data route (bearer token or client certificate); scrapers need the
+  token (stormcos#64).
 - **feat:** `[process] env_default = { KEY = "value" }` — each entry is set
   only when KEY is not already in stormd's own environment, so a node's
   override (stormpump `env.d/<spec>`, stormcos#282) beats the golden's

@@ -158,8 +158,9 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 | **Config** | `/etc/stormd/config.toml` (`--config`): `[general] [api] [[process]] [[cron]] [events] [backup] [updater] [ssh] [debug] [stormlog.*]` |
 | **REST** | `:9080/api/v1/…`: status, processes (start/stop/restart), logs, terminal, cron, updates, backup, plugins, `shutdown` |
 | **WebSocket** | `/ws/console/{p}`, `/ws/logs`, `/ws/components` (full snapshot every 2 s) |
-| **Health** | `GET /api/v1/health` → `{"status":"ok"}`, open, answered whenever the API is up. `stormd --healthcheck` calls it |
-| **Metrics** | `GET /metrics`, Prometheus, open: `stormd_up`, `stormd_process_state`, `_restarts_total`, `_crashes_total`, `_uptime_seconds`, `process_resident_memory_bytes`, … |
+| **Health** | `GET /api/v1/health` / `/healthz` → `{"status":"ok"}`, open, answered whenever the API is up. `stormd --healthcheck` calls it |
+| **Auth/TLS** | `[api] tls_cert_file`/`tls_key_file` (re-read on rotation), `client_ca_file` (client certs), `token_file` (bearer); with any credential, nothing but health is anonymous (#32) |
+| **Metrics** | `GET /metrics`, Prometheus, behind the same auth: `stormd_up`, `stormd_process_state`, `_restarts_total`, `_crashes_total`, `_uptime_seconds`, `process_resident_memory_bytes`, … |
 | **Out** | UDP `239.255.42.1:5514` (logs), a webhook, a backup URL, CloudID, registries |
 | **Ports on a node** | fastetcd 9081 · rustkube 9082–9085 · service goldens: the service's port + 100 |
 
@@ -181,9 +182,9 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
   goldens that carry it when it composes a release; stormd never requests
   one. The authority is stormcos `docs/goldens.md`.
 - **Operate.**
-  - Web console at `http://<node>:<port>/ui/`.
+  - Web console at `http(s)://<node>:<port>/ui/` (https once the config sets TLS).
   - `stormsh -H <node> -p <port>`.
-  - `curl …/metrics`.
+  - `curl -H "Authorization: Bearer …" …/metrics` (with auth on).
   - Logs come off the multicast group through mcastsyslog.
 - **Build.** `sc-build` on dev.g8.lo (static musl). `web/dist` is committed.
 
@@ -201,9 +202,9 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 - **Docs** were rewritten from the code (#5) and refreshed for v0.7.4.
   `config/example.toml` is covered by a test.
 - **Open issues that matter:**
-  - **#32** — the API is **plain HTTP and anonymous** unless a password or
-    token is set; on a node, anyone on the network can read logs and stop
-    processes.
+  - **#32** — done in stormd (TLS, client certificates, token file,
+    `/metrics` behind auth); it protects a node once stormcos wires the
+    stormcert pair, node CA and token into each container's config.
   - **#9** — stop, restart and shutdown are **SIGKILL**, with no SIGTERM or
     grace period.
   - **#12** — container logs reach the multicast group **without stormcast's
@@ -235,8 +236,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 
 From the open issues. **None of this works today:**
 
-- TLS on the API with stormcert pairs, a token file or client certificates,
-  and nothing anonymous but health (#32).
 - Applets that exit non-zero on error (#31).
 - Graceful stop: SIGTERM, a per-process timeout, then SIGKILL, with shutdown
   going in reverse dependency order (#9).

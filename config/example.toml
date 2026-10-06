@@ -16,7 +16,13 @@ log_dir = "/var/log/stormd"     # per-process log files + .cloudid; put it on a 
 
 [api]
 bind = "0.0.0.0:9080"           # REST API, WebSockets, /metrics and the web UI
-# Any credential below turns authentication on.
+# TLS: both or neither. Re-read when either file changes (stormcert rotation).
+# tls_cert_file = "/data/stormcert/serving.crt"
+# tls_key_file = "/data/stormcert/serving.key"
+# Any credential below turns authentication on; only /api/v1/health, /healthz,
+# the login screen and /api/v1/auth/* stay open (/metrics too needs one).
+# client_ca_file = "/data/stormcert/ca.crt"   # needs TLS; a client cert from this CA is let in
+# token_file = "/etc/stormd/api-token"        # bearer token, read from a file, re-read on change
 # auth_token = "secret-token"   # machine credential: Authorization: Bearer <token>
 # password = "changeme"         # legacy: user "admin" with this password
 # [[api.users]]
