@@ -354,6 +354,18 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #11 — refuse init under an unknown argv[0] (2026-10-06), in progress.**
+Decisions (from the code and stormcos, not asked): init only when argv[0]'s
+basename is `stormd`, `stormd-*` or `stormd.*` (a renamed copy), or empty;
+an applet runs the applet; anything else → `stormd: <name>: not a stormd
+applet (see stormd --list-commands)`, exit 127, before logging, config or
+any spawn. No standalone `ps`: stormcos links exactly `--list-commands` and
+fails a golden with `/bin/ps` (stormcos#66), so adding one would break it.
+- [ ] pure `classify_argv0` in shell/mod.rs + main.rs dispatch; unit tests
+- [ ] short-suite check: a symlink named `ps` → exit 127, nothing spawned
+- [ ] README (Running, stormdbase note), presentation, changelog; sc-build +
+      live check
+
 **Issue #37 — `[process] env_default` (2026-10-06) ✅ done (c34b849).** For
 stormcos#282 / stormpump#88 env.d overrides: `env` overrides the inherited
 environment, so env.d can never win. Precedence at spawn: `env` > inherited
