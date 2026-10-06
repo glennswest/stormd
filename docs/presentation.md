@@ -102,6 +102,8 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
   SIGUSR1, then 5 s, then SIGKILL.
 - **`${NODE_IP}` / `${NODE_NAME}`** in args and env are filled in at every
   spawn, so a control plane advertises an address other nodes can reach.
+- **`env_default`** — set only when stormd did not inherit the key, so a
+  node's env.d overrides the golden's default; `env` wins over both.
 - **Shutdown** (SIGTERM, SIGINT, API, container failure) stops the start
   order, stands restarts down, kills every process and waits up to 10 s, and
   exits within 30 s whatever stalls. Each exit is handled on its own task.

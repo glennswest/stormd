@@ -25,6 +25,8 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
   SIGKILL, and the restart policy takes over.
 - **Fills in node values** — `${NODE_IP}` and `${NODE_NAME}` in a process's
   `args` and `env` values are expanded each time it is spawned.
+- **Node-overridable defaults** — `env_default` entries apply only when stormd
+  did not inherit the key, so a node's env.d can override them.
 - **Logs** — stdout/stderr per process to a rotated file on the log volume,
   each run's file kept (and pruned) when it exits, every line on the fleet's
   multicast syslog group (unlimited — #12) (the [stormcast](https://github.com/glennswest/stormcast)
@@ -331,7 +333,8 @@ processes (#32).
 | `name` | required | unique |
 | `command` | `""` | binary path; required unless `image` is set |
 | `args` | `[]` | `${NODE_IP}` / `${NODE_NAME}` expanded at spawn |
-| `env` | `{}` | added to stormd's own environment; values expanded like `args` |
+| `env` | `{}` | added to stormd's own environment, over what it inherited; values expanded like `args` |
+| `env_default` | `{}` | each entry set only when its key is **not** in stormd's own environment (an inherited empty value counts as set), so the node can override it — stormpump's `env.d/<spec>` reaches stormd as its environment. `env` wins over both. Values expanded like `args` |
 | `working_dir` | stormd's | |
 | `image` | — | OCI image; the process is then run by the updater (below), not at start |
 | `on_failure` | `"restart"` | non-zero exit or signal: `restart` \| `fail` \| `ignore` |
@@ -520,7 +523,7 @@ A failed container makes stormd shut down (checked every second) and exit 1.
 `liveness_check_failed`, sends SIGUSR1, waits 5 s, and sends SIGKILL if the
 process is still there; the exit then goes through the table above.
 
-**`${NODE_IP}` and `${NODE_NAME}`** in `args` and `env` values (not `command`)
+**`${NODE_IP}` and `${NODE_NAME}`** in `args`, `env` and `env_default` values (not `command`)
 are replaced at every spawn. `NODE_IP` is the source address the routing table
 picks for an off-node destination (no packet is sent); `NODE_NAME` is
 `/proc/sys/kernel/hostname`. A name with no value is left as written, and the

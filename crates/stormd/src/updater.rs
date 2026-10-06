@@ -333,6 +333,7 @@ impl Updater {
                 image: None,
                 args: Vec::new(),
                 env: HashMap::new(),
+                env_default: HashMap::new(),
                 working_dir: None,
                 on_failure: crate::config::FailureAction::Restart,
                 on_exit: crate::config::ExitAction::Restart,

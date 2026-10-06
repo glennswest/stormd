@@ -116,6 +116,10 @@ pub struct ProcessConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Applied only when the key is not in stormd's own environment, so a
+    /// node can override it (stormpump's env.d); `env` still wins over both.
+    #[serde(default)]
+    pub env_default: HashMap<String, String>,
     #[serde(default)]
     pub working_dir: Option<PathBuf>,
     #[serde(default = "default_on_failure")]

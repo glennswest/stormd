@@ -336,8 +336,13 @@ impl Supervisor {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        for (k, v) in &config.env {
-            cmd.env(k, crate::nodevars::expand(v, &vars));
+        for (k, v) in process_env(
+            &config.env,
+            &config.env_default,
+            |k| std::env::var_os(k).is_some(),
+            &vars,
+        ) {
+            cmd.env(k, v);
         }
         if let Some(dir) = &config.working_dir {
             cmd.current_dir(dir);
@@ -1102,6 +1107,72 @@ fn dependency_satisfied(
         finished || (has_ready_probe && *state == ProcessState::Running && ready)
     } else {
         *state == ProcessState::Running && ready
+    }
+}
+
+/// What a process gets on top of the environment it inherits from stormd.
+///
+/// `env` always wins: it is set over whatever stormd inherited. `env_default`
+/// fills only the gaps: an entry whose key stormd inherited (even an empty
+/// value) is left alone, so the node's own override (stormpump's
+/// `env.d/<spec>`, which is stormd's inherited environment) beats the golden's
+/// default. A key in both `env` and `env_default` takes `env`'s value. Both
+/// are expanded like `args`.
+fn process_env(
+    env: &HashMap<String, String>,
+    env_default: &HashMap<String, String>,
+    inherited: impl Fn(&str) -> bool,
+    vars: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = env_default
+        .iter()
+        .filter(|(k, _)| !env.contains_key(*k) && !inherited(k))
+        .map(|(k, v)| (k.clone(), crate::nodevars::expand(v, vars)))
+        .collect();
+    out.extend(
+        env.iter()
+            .map(|(k, v)| (k.clone(), crate::nodevars::expand(v, vars))),
+    );
+    out
+}
+
+#[cfg(test)]
+mod env_tests {
+    use super::process_env;
+    use std::collections::HashMap;
+
+    fn m(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    fn run(
+        env: &[(&str, &str)],
+        def: &[(&str, &str)],
+        inherited: &[&str],
+    ) -> HashMap<String, String> {
+        let vars = m(&[("NODE_IP", "10.0.0.7")]);
+        process_env(&m(env), &m(def), |k| inherited.contains(&k), &vars)
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn a_default_applies_when_not_inherited() {
+        let got = run(&[], &[("APISERVER_URL", "https://${NODE_IP}:6443")], &[]);
+        assert_eq!(got["APISERVER_URL"], "https://10.0.0.7:6443");
+    }
+
+    #[test]
+    fn an_inherited_value_beats_the_default() {
+        let got = run(&[], &[("FASTETCD_DATA_DIR", "/data/fastetcd")], &["FASTETCD_DATA_DIR"]);
+        assert!(!got.contains_key("FASTETCD_DATA_DIR"), "left to the inherited value");
+    }
+
+    #[test]
+    fn env_beats_both_and_is_always_set() {
+        let got = run(&[("K", "env")], &[("K", "default")], &["K"]);
+        assert_eq!(got["K"], "env");
+        assert_eq!(got.len(), 1);
     }
 }
 

@@ -79,7 +79,10 @@ initial_delay_secs = 5
 name = "main-app"
 command = "/app/server"
 args = ["--port", "3000"]
-env = { DATABASE_URL = "postgres://127.0.0.1:5432/app" }
+env = { DATABASE_URL = "postgres://127.0.0.1:5432/app" }    # always set, over stormd's own env
+# Set only when stormd did not inherit the key, so the node can override it
+# (stormpump env.d/<spec>); env above still wins over both.
+env_default = { APP_DATA_DIR = "/data/app", APP_PEER = "${NODE_IP}:7000" }
 on_failure = "restart"          # restart | fail | ignore
 on_exit = "restart"             # restart | stop
 restart_delay_secs = 5          # base; doubles per restart in the window, capped at 30s

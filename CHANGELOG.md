@@ -4,6 +4,11 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-06
+- **feat:** `[process] env_default = { KEY = "value" }` — each entry is set
+  only when KEY is not already in stormd's own environment, so a node's
+  override (stormpump `env.d/<spec>`, stormcos#282) beats the golden's
+  default; `env` still wins over both. Values get `${NODE_IP}`/`${NODE_NAME}`
+  like `env` (#37).
 - **fix:** the plugin proxy (`/ui/proxy/{name}/…`) forwards the request's
   headers (minus hop-by-hop ones, `Host`, `Content-Length`) and its body as
   bytes, passes any method through, and returns the plugin's response headers
