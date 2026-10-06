@@ -256,13 +256,25 @@ fn auth(env: &Env) -> Outcome {
                 (200, _) => {}
                 (s, _) => return Err(format!("right token: HTTP {s}, want 200")),
             }
-            match sd.get_as("/api/v1/health", None)? {
-                (200, _) => Ok(()),
-                (s, _) => Err(format!("health without a token: HTTP {s}, want 200 (it is public)")),
+            // /metrics names every process: behind auth like the rest (#32).
+            match sd.get_as("/metrics", None)? {
+                (401, _) => {}
+                (s, _) => return Err(format!("metrics without a token: HTTP {s}, want 401")),
             }
+            match sd.get_as("/metrics", Some(&token))? {
+                (200, _) => {}
+                (s, _) => return Err(format!("metrics with the token: HTTP {s}, want 200")),
+            }
+            for path in ["/api/v1/health", "/healthz"] {
+                match sd.get_as(path, None)? {
+                    (200, _) => {}
+                    (s, _) => return Err(format!("{path} without a token: HTTP {s}, want 200 (it is public)")),
+                }
+            }
+            Ok(())
         })();
         match res {
-            Ok(()) => Outcome::Pass("401 without or with a wrong token, 200 with it; health open".into()),
+            Ok(()) => Outcome::Pass("401 without or with a wrong token, 200 with it; /metrics too; health and /healthz open".into()),
             Err(e) => Outcome::Fail(e),
         }
     })
