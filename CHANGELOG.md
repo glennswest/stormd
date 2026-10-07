@@ -3,44 +3,20 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
-### 2026-10-07
-- **fix(updater):** an image process whose rootfs already exists is started
-  when stormd starts (#8). Each pull and pivot records the image, digest,
-  command, env and working directory in `<rootfs_dir>/<name>.image.json`,
-  and a restart starts from that record. The record's digest (not the
-  registry's) is the current one, so an image published while stormd was
-  down is pulled on the first poll. An `image` process with the updater
-  disabled gets an ERROR at start instead of silence.
-- **fix(stormlog):** a log file that cannot be opened no longer logs one
-  ERROR per line (#1). A missing directory is created again and the open
-  retried. A persistent failure is said once, retried at most every second,
-  and repeated at most once a minute with the count of lines not written.
-  On recovery the file gets one marker line for the gap.
-- **fix:** the API is bound before anything is started (#23). A taken port
-  used to exit 1 after the start order, cron and the updater had begun,
-  leaving their processes running unsupervised (a second fastetcd or
-  apiserver). Now it exits 1 with nothing started. Medium suite:
-  `api-port-taken`.
-- **fix(stormlog):** lines reach the fleet's multicast group through
-  stormcast's limiter, one per process, as stormpump does on the host (#12).
-  Repeats collapse to `last message repeated N time(s)`, and over 200 lines/s
-  (after a 2000 burst) lines are dropped with a count. The run is flushed
-  when a process's output ends, and stormd's crash marker is never dropped.
-  The file and live streams keep every line.
-- **feat:** `/metrics` reports each running supervised process's own RSS,
+## [v0.8.0] — 2026-10-07 (stormd 0.8.0 · stormlog 0.4.0 · stormsh 0.5.0)
+
+### Breaking
+- with auth on, `/metrics` now needs credentials like every
+  other data route (bearer token or client certificate); scrapers need the
+  token (stormcos#64).
+
+### Added
+- `/metrics` reports each running supervised process's own RSS,
   virtual memory, CPU seconds and open fds (`stormd_process_resident_memory_bytes`,
   `_virtual_memory_bytes`, `_cpu_seconds_total`, `_open_fds`, labelled
   `{container,process}`) (#33). Before, only stormd's own memory was there,
   so a leak in the supervised binary was invisible.
-- **fix:** a process is never spawned with `${NODE_IP}`/`${NODE_NAME}` left
-  unexpanded in its arguments or applied environment (#3). It waits, with
-  one ERROR naming the process, the name and the reason (no address / no
-  route; empty hostname), and starts when the node has the value. This
-  applies at first start and before each restart. An API start is refused
-  with the message. Before, a node without an address failed three layers
-  down: stormcert-init exited 2 parsing `--ip …,${NODE_IP},…`, and the
-  container was retried every 300 s.
-- **feat:** goldens for a process (#36, minismbd#11 option A).
+- goldens for a process (#36, minismbd#11 option A).
   `[[process.golden]]` names a stormblock golden (by name or volume id) as
   `filesystem` or `image`. Before the process first starts, stormd attaches
   each one read-only over ublk from the node's engine (`[goldens]
@@ -50,36 +26,12 @@
   shutdown everything is unmounted and detached. `GET /api/v1/goldens` lists
   what is presented, and `PUT /api/v1/processes/{p}/goldens/{name}` swaps
   one golden for another, restarting the process.
-- **feat:** `[process] wait_for_files` — a process's first start waits until
+- `[process] wait_for_files` — a process's first start waits until
   every listed file exists (absolute paths, `${NODE_IP}`/`${NODE_NAME}`
   expanded, polled every 250 ms, one log line naming what is missing), with
   no restart counted and no cool-off (#38). For fastetcd, which crash-looped
   2–4 s on every boot until its minted cert existed (stormcos#300).
-- **fix:** stop, restart, the updater's pivot and shutdown send SIGTERM,
-  wait up to the process's new `stop_timeout_secs` (default 10; 0 = SIGKILL
-  at once), then SIGKILL, instead of SIGKILL outright, and record the exit
-  code (#9). Shutdown stops processes in reverse dependency order, a tier at
-  a time, waiting for each. Restart and the updater wait for the old run to
-  be gone instead of a fixed 500 ms / 5 s. The shutdown watchdog allows the
-  processes' stop budget plus 20 s, never less than 30 s.
-- **fix:** a liveness task ends with its run, and `liveness_failures` resets
-  at every spawn (#45, P0). A task asleep in `initial_delay_secs` across a
-  crash and restart woke on the new run and probed it at once with the old
-  count, and each restart added one more: once a slow start tripped the
-  threshold, every later run was SIGUSR1'd seconds after it started
-  (fastetcd and the apiserver crash-looping on the Dell). Now one task per
-  run, aborted when the run ends; every check, count and signal applies only
-  to that run, and the signal goes to that run's pid.
-
-### 2026-10-06
-- **chore:** test-fixture credentials marked `not a secret` (inline, or `.github/secret_scanning.yml` for files that cannot hold a comment) — owner
-- **fix:** stormd under a name that is neither `stormd` (or a renamed copy,
-  `stormd-*`/`stormd.*`) nor an applet — `/bin/ps` linked to it, say — prints
-  `stormd: <name>: not a stormd applet (see stormd --list-commands)` and exits
-  127, instead of starting a full init on the default config that spawned a
-  second copy of every supervised process (#11). Medium suite:
-  `unknown-argv0-refused`.
-- **feat:** the API can be served over TLS and closed to anonymous callers
+- the API can be served over TLS and closed to anonymous callers
   (#32). `[api] tls_cert_file`/`tls_key_file` (PEM, rustls, HTTP/1.1,
   re-read when either file changes so a rotated stormcert pair is picked up
   without a restart); `client_ca_file` — a client certificate that verifies
@@ -88,20 +40,71 @@
   bad pair or CA stops stormd at start, before anything is spawned. stormd
   warns at start when auth is off, or on without TLS. `/healthz` is a new
   alias of `/api/v1/health`.
-- **feat:** `stormd --healthcheck` falls back to https when the port speaks
+- `stormd --healthcheck` falls back to https when the port speaks
   TLS (loopback, no credential, certificate not checked) (#32).
-- **feat(stormsh):** `--ca-file` (https, trusting only that CA),
+- stormsh: `--ca-file` (https, trusting only that CA),
   `--cert`/`--key` (client certificate) and `--token-file`, for a stormd
   behind TLS and auth (#32).
-- **BREAKING:** with auth on, `/metrics` now needs credentials like every
-  other data route (bearer token or client certificate); scrapers need the
-  token (stormcos#64).
-- **feat:** `[process] env_default = { KEY = "value" }` — each entry is set
+- `[process] env_default = { KEY = "value" }` — each entry is set
   only when KEY is not already in stormd's own environment, so a node's
   override (stormpump `env.d/<spec>`, stormcos#282) beats the golden's
   default; `env` still wins over both. Values get `${NODE_IP}`/`${NODE_NAME}`
   like `env` (#37).
-- **fix:** the plugin proxy (`/ui/proxy/{name}/…`) forwards the request's
+
+### Fixed
+- updater: an image process whose rootfs already exists is started
+  when stormd starts (#8). Each pull and pivot records the image, digest,
+  command, env and working directory in `<rootfs_dir>/<name>.image.json`,
+  and a restart starts from that record. The record's digest (not the
+  registry's) is the current one, so an image published while stormd was
+  down is pulled on the first poll. An `image` process with the updater
+  disabled gets an ERROR at start instead of silence.
+- stormlog: a log file that cannot be opened no longer logs one
+  ERROR per line (#1). A missing directory is created again and the open
+  retried. A persistent failure is said once, retried at most every second,
+  and repeated at most once a minute with the count of lines not written.
+  On recovery the file gets one marker line for the gap.
+- the API is bound before anything is started (#23). A taken port
+  used to exit 1 after the start order, cron and the updater had begun,
+  leaving their processes running unsupervised (a second fastetcd or
+  apiserver). Now it exits 1 with nothing started. Medium suite:
+  `api-port-taken`.
+- stormlog: lines reach the fleet's multicast group through
+  stormcast's limiter, one per process, as stormpump does on the host (#12).
+  Repeats collapse to `last message repeated N time(s)`, and over 200 lines/s
+  (after a 2000 burst) lines are dropped with a count. The run is flushed
+  when a process's output ends, and stormd's crash marker is never dropped.
+  The file and live streams keep every line.
+- a process is never spawned with `${NODE_IP}`/`${NODE_NAME}` left
+  unexpanded in its arguments or applied environment (#3). It waits, with
+  one ERROR naming the process, the name and the reason (no address / no
+  route; empty hostname), and starts when the node has the value. This
+  applies at first start and before each restart. An API start is refused
+  with the message. Before, a node without an address failed three layers
+  down: stormcert-init exited 2 parsing `--ip …,${NODE_IP},…`, and the
+  container was retried every 300 s.
+- stop, restart, the updater's pivot and shutdown send SIGTERM,
+  wait up to the process's new `stop_timeout_secs` (default 10; 0 = SIGKILL
+  at once), then SIGKILL, instead of SIGKILL outright, and record the exit
+  code (#9). Shutdown stops processes in reverse dependency order, a tier at
+  a time, waiting for each. Restart and the updater wait for the old run to
+  be gone instead of a fixed 500 ms / 5 s. The shutdown watchdog allows the
+  processes' stop budget plus 20 s, never less than 30 s.
+- a liveness task ends with its run, and `liveness_failures` resets
+  at every spawn (#45, P0). A task asleep in `initial_delay_secs` across a
+  crash and restart woke on the new run and probed it at once with the old
+  count, and each restart added one more: once a slow start tripped the
+  threshold, every later run was SIGUSR1'd seconds after it started
+  (fastetcd and the apiserver crash-looping on the Dell). Now one task per
+  run, aborted when the run ends; every check, count and signal applies only
+  to that run, and the signal goes to that run's pid.
+- stormd under a name that is neither `stormd` (or a renamed copy,
+  `stormd-*`/`stormd.*`) nor an applet — `/bin/ps` linked to it, say — prints
+  `stormd: <name>: not a stormd applet (see stormd --list-commands)` and exits
+  127, instead of starting a full init on the default config that spawned a
+  second copy of every supervised process (#11). Medium suite:
+  `unknown-argv0-refused`.
+- the plugin proxy (`/ui/proxy/{name}/…`) forwards the request's
   headers (minus hop-by-hop ones, `Host`, `Content-Length`) and its body as
   bytes, passes any method through, and returns the plugin's response headers
   (`Set-Cookie`, `Location`, caching…) instead of only `Content-Type`.
@@ -111,16 +114,19 @@
   (its `auth_token` bearer, the `stormd_session` cookie) are not passed on,
   and a plugin cannot set `stormd_session`.
 
-### 2026-09-27
-- **docs:** README and presentation say what #31 and #32 record: every
+### Changed
+- test-fixture credentials marked `not a secret` (inline, or `.github/secret_scanning.yml` for files that cannot hold a comment) — owner
+
+### Documentation
+- README and presentation say what #31 and #32 record: every
   standalone applet but `false` (1) and unknown names (127) exits 0 even on
   error, so an exec probe or one-shot built on an applet cannot fail; the API
   is plain HTTP only and anonymous unless `auth_token`/`password`/a user is set.
-- **docs:** third check of the docs against the code (no code change since
+- third check of the docs against the code (no code change since
   v0.7.4): every route, config default, port, the 63 applets, the log-volume/PVC
   wording and how-it-ships re-checked against the source; README and
   presentation already describe #1, #3, #7–#12 and #23–#30. Nothing to correct.
-- **docs:** refreshed from the code at v0.7.4. README: one-shot dependencies,
+- refreshed from the code at v0.7.4. README: one-shot dependencies,
   bounded shutdown and IMDSv2 in the overview. Startup order corrected: SSH
   starts before the API binds, and a failed SSH bind is only logged. A failed
   API bind leaves spawned processes running (#23). The shutdown crash line
@@ -132,7 +138,7 @@
   updated to v0.7.4 (shipped since v0.7.0, open and planned issues). The
   shutdown design note records #17's bounded shutdown. CLAUDE.md: the
   workspace's test member, goldens at main, binary size
-- **docs:** Second refresh pass. There was no code change since the first; defaults,
+- Second refresh pass. There was no code change since the first; defaults,
   routes, applets and validation were re-checked against the source. The README now says
   what the issues filed since record: `[stormlog.mcast] group = "off"` still
   sends (#27), no limiter on the group (#12), the pinned stormcast's multibyte

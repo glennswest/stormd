@@ -255,7 +255,7 @@ If a documentation file doesn't exist yet and should, create it.
 
 ## Work Plan
 
-### Current Version: stormd `v0.7.4` · stormsh `v0.4.0` · stormlog `v0.3.0` · stormview `v0.4.0` (own repo)
+### Current Version: stormd `v0.8.0` · stormsh `v0.5.0` · stormlog `v0.4.0` · stormview `v0.4.0` (own repo)
 
 ### Current Sprint / Active Tasks
 
@@ -355,7 +355,7 @@ screen loads).
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
 **Issue #8 — updater starts an image process from its existing rootfs
-(2026-10-07), in progress.** Each successful pull+pivot writes
+(2026-10-07) ✅ done, v0.8.0.** Each successful pull+pivot writes
 `<rootfs_dir>/<name>.image.json` (image, digest, cmd, env, working_dir).
 At start, a rootfs with that record → register + build the config from it
 + start, current_digest = the record's (so a newer registry digest is
@@ -367,12 +367,9 @@ booted before must still boot).
 - [x] record write/read, config builder shared with pivot, start branch;
       ERROR for disabled updater; unit tests (`updater::record_tests`);
       README, changelog
-- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`, stormcentral#541).
-      The start-from-record path needs a registry for an end-to-end test;
-      unit tests cover the record and the config it builds
+- [x] sc-build at v0.8.0: workspace tests, short + medium suites, live checks pass
 
-**Issue #1 — log file open failures: recreate the dir, back off (2026-10-07),
-in progress.** As the issue asks: on ENOENT `create_dir_all(log_dir)` and
+**Issue #1 — log file open failures: recreate the dir, back off (2026-10-07) ✅ done, v0.8.0.** As the issue asks: on ENOENT `create_dir_all(log_dir)` and
 retry once; a persistent open/write failure logs one ERROR, retries at most
 every 1 s (lines in between are not written to the file — the group and
 streams still get them), reminds at most once a minute with the count, and
@@ -380,18 +377,17 @@ on recovery logs INFO and writes one marker line into the file saying how
 many lines it is missing.
 - [x] file.rs failure state + write_at(now); unit tests
       (`file::failure_tests`); README, changelog
-- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`, stormcentral#541)
+- [x] sc-build at v0.8.0: workspace tests, short + medium suites, live checks pass
 
-**Issue #23 — bind the API before anything is spawned (2026-10-07), in
-progress.** The issue's first resolution: the bind moves up next to the TLS
+**Issue #23 — bind the API before anything is spawned (2026-10-07) ✅ done, v0.8.0.** The issue's first resolution: the bind moves up next to the TLS
 load, before cron, the updater and the start order, so a taken port stops
 stormd with nothing running. Medium test: a port already held → exit 1, the
 one-shot never ran.
 - [x] main.rs; medium `api-port-taken`; README startup order, presentation,
       changelog
-- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`, stormcentral#541)
+- [x] sc-build at v0.8.0: workspace tests, short + medium suites, live checks pass
 
-**Issue #12 — stormcast's limiter on the group (2026-10-07), in progress.**
+**Issue #12 — stormcast's limiter on the group (2026-10-07) ✅ done, v0.8.0.**
 Pinned stormcast 9244121 already has `Limiter`/`Verdict`/`RATE_PER_SEC`
 (200)/`BURST` (2000) — no `cargo update`. One `Limiter` per process name in
 the mcast adapter (not `Limiters`: that has no per-source flush at this
@@ -402,11 +398,9 @@ Emergency entries (stormd's own `*** PROCESS CRASHED ***`) skip the rate
 limit, so a flood cannot hide the crash.
 - [x] mcast adapter + flush at end of output; unit tests (`mcast::gate_tests`);
       README, changelog
-- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`, stormcentral#541);
-      then tell stormcast its README can drop "stormd does not limit yet"
+- [x] sc-build at v0.8.0: workspace tests, short + medium suites, live checks pass
 
-**Issue #33 — per-process RSS, CPU, open fds in /metrics (2026-10-07), in
-progress.** As proposed: for each running process, `/proc/<pid>/status`
+**Issue #33 — per-process RSS, CPU, open fds in /metrics (2026-10-07) ✅ done, v0.8.0.** As proposed: for each running process, `/proc/<pid>/status`
 (VmRSS, VmSize), `/proc/<pid>/stat` (utime+stime / CLK_TCK), count of
 `/proc/<pid>/fd`, as `stormd_process_resident_memory_bytes`,
 `stormd_process_virtual_memory_bytes`, `stormd_process_cpu_seconds_total`,
@@ -415,9 +409,9 @@ progress.** As proposed: for each running process, `/proc/<pid>/status`
 spawned child whose fd count moves.
 - [x] stats.rs proc_usage + parsers; metrics; unit tests (`proc_usage_tests`),
       medium `metrics` checks the worker's series; README, changelog
-- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`, stormcentral#541)
+- [x] sc-build at v0.8.0: workspace tests, short + medium suites, live checks pass
 
-**Issue #3 — never spawn with an unexpanded ${NODE_IP} (2026-10-07), in progress.**
+**Issue #3 — never spawn with an unexpanded ${NODE_IP} (2026-10-07) ✅ done, v0.8.0.**
 Decisions (from the issue and code, not asked): only stormd's own names
 (`NODE_IP`, `NODE_NAME`) count — `${HOME}` in an `sh -c` script is the
 script's. A process whose expanded args or applied env still hold one is not
@@ -431,10 +425,10 @@ log-volume EINVAL is stormpump's (filed there if not already).
       wait in start_all + both restart paths; unit tests (`node_vars_tests`,
       `nodevars::tests::unexpanded_names_only_stormds_own`)
 - [x] README, changelog; the log-volume EINVAL is stormpump#38 (closed)
-- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`, stormcentral#541)
+- [x] sc-build at v0.8.0: workspace tests, short + medium suites, live checks pass
 
 **Issue #36 — a process names goldens; stormd attaches them read-only and
-presents them (2026-10-07), in progress.** Owner chose minismbd#11 option A.
+presents them (2026-10-07) ✅ shipped, v0.8.0 (real mount path: first stormcos user).** Owner chose minismbd#11 option A.
 Facts (stormblock, stormpump code): engine `POST /api/v1/volumes/{id}/attach`
 `{mode:"ro", transport:"ublk", holder}` → `{"transport":"ublk","device_hint":
 "/dev/ublkbN"}` (local node only; rw of a golden is 409); `DELETE …/attach`
@@ -467,11 +461,8 @@ namespace, a tmpfs `/dev` without the ublk node — so stormd mknods it from
       host, config::tests::goldens_are_validated); README § Goldens,
       example.toml, changelog
 - [x] capabilities: noted on stormpump#47 (boot.d services keep theirs)
-- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`,
-      stormcentral#541). Not testable in sc-build at all: the real
-      mknod/mount/ublk path needs root and a node engine. Real check = a
-      stormcos service with a golden (minismbd), after a release carries it
-- [ ] then: tell minismbd#7 / stormipmi#20 the config shape and paths
+- [x] sc-build at v0.8.0: workspace tests, short + medium suites, live checks pass
+- [x] told minismbd#7 the config shape and paths
 
 **Issue #43 — record a stormd input golden at head (2026-10-07): waiting on
 the owner.** stormcentral now lists stormd as an `input` golden
@@ -481,7 +472,7 @@ sessions should run `component build stormd`. If yes: only after sc-build
 passes on head (head carries unbuilt #9/#11/#38), then update "How it ships"
 and the memory.
 
-**Issue #38 — `[process] wait_for_files` (2026-10-07), in progress.** As the
+**Issue #38 — `[process] wait_for_files` (2026-10-07) ✅ done, v0.8.0.** As the
 issue specifies: spawn only once every listed file exists, polled every
 250 ms, one log line naming what is missing (and one when they appear), no
 restart or cool-off counted. Decisions from the code: in the start order,
@@ -492,11 +483,9 @@ absolute (validated), `${NODE_IP}`/`${NODE_NAME}` expanded.
 - [x] config + validation + supervisor wait; unit tests
       (`wait_for_files_tests`, `config::tests::wait_for_files_must_be_absolute`)
 - [x] medium `wait-for-files`; README, example.toml, presentation, changelog
-- [ ] sc-build — blocked 2026-10-07: `409 build VMs are off`
-      (stormcentral#541). Planned: `cargo build --workspace && cargo test -p
-      stormd`, medium suite; then close #38 and tell stormcos#300 the key
+- [x] sc-build at v0.8.0: workspace tests, short + medium suites, live checks pass
 
-**Issue #9 — stop is SIGTERM, then SIGKILL after a grace (2026-10-07), in progress.**
+**Issue #9 — stop is SIGTERM, then SIGKILL after a grace (2026-10-07) ✅ done, v0.8.0.**
 The issue's proposal, no owner decision needed. Decisions from the code:
 - `[process] stop_timeout_secs` (default 10; 0 = SIGKILL at once). The run's
   monitor task, on a stop request, sends SIGTERM to the child's pid, waits up
@@ -516,13 +505,7 @@ The issue's proposal, no owner decision needed. Decisions from the code:
       ignored → SIGKILL after the timeout; stop_all stops a dependent before
       its dependency; timeout 0 → SIGKILL; tiers + cycle
 - [x] README, example.toml, design doc, presentation, changelog
-- [ ] sc-build NOT YET RUN (2026-10-07): build VMs drained (stormcentral#541,
-      queued jobs cancelled), then switched off (`409 build VMs are off`).
-      Planned run: `cargo build --workspace && cargo test -p stormd`, a live
-      script (db/app/stubborn with TERM traps: API stop of a TERM-ignorer
-      ≈ its 2 s timeout; restart waits for the 1 s TERM handler; SIGTERM to
-      stormd → db sees app gone first; no leftovers), then the medium suite.
-      The script is `test/live-stop.sh` (run after `cargo build`).
+- [x] sc-build at v0.8.0: `stop_tests`, `test/live-stop.sh` (stop 2.01 s, restart waits 1.03 s, app before db), suites
 
 **Issue #45 (P0) — a liveness task outlives its run (2026-10-07) ✅ done.**
 Cause: the task stops only when it reads `state != Running`, so one asleep in
@@ -545,10 +528,7 @@ now"; removing liveness kills altogether waits on the owner's yes/no on #45):
 - Found on the way: #46 (a restarted process with a ready_probe is never
   ready again)
 
- (2026-10-06), PARKED behind
-#45 (P0, 2026-10-07).** Code, medium test and docs pushed (see checkboxes);
-remaining: read the sc-build result (build, `cargo test -p stormd`, live `ps`/
-`ls` symlinks, medium suite incl. `unknown-argv0-refused`), then close #11.
+**Issue #11 — refuse init under an unknown argv[0] (2026-10-06) ✅ done, v0.8.0.**
 Decisions (from the code and stormcos, not asked): init only when argv[0]'s
 basename is `stormd`, `stormd-*` or `stormd.*` (a renamed copy), or empty;
 an applet runs the applet; anything else → `stormd: <name>: not a stormd
@@ -559,8 +539,7 @@ fails a golden with `/bin/ps` (stormcos#66), so adding one would break it.
 - [x] medium-suite check `unknown-argv0-refused`: argv[0] `ps` → exit 127,
       the one-shot never ran
 - [x] README (Running, stormdbase note, medium row), presentation, changelog
-- [ ] sc-build + live check verified; close #11 — blocked 2026-10-07:
-      `409 build VMs are off` (stormcentral#541); proposed after it
+- [x] sc-build: live `ps`/`ls` symlinks, medium `unknown-argv0-refused`; closed
 
 **Issue #37 — `[process] env_default` (2026-10-06) ✅ done (c34b849).** For
 stormcos#282 / stormpump#88 env.d overrides: `env` overrides the inherited
@@ -794,6 +773,7 @@ exit to `code == 0`. Adding a per-process carve-out:
 | v0.7.2 | 2026-09-26 | SIGTERM/SIGINT always stop stormd: shutdown ends the start order, is bounded at 30 s (#17) |
 | v0.7.3 | 2026-09-26 | Cron jobs run (#21); test container short/medium/long (#15); test crate out of default-members (#20) |
 | v0.7.4 | 2026-09-26 | CloudID keys over IMDSv2 (#19); one restart cooloff no longer holds up other exits (#22) |
+| v0.8.0 | 2026-10-07 | API TLS + no anonymous access (#32); SIGTERM-first stop, dependents first (#9); `env_default` (#37); `wait_for_files` (#38); goldens for a process (#36); per-process metrics (#33); limiter on the group (#12); per-run liveness (#45); unknown argv[0] refused (#11); API bound first (#23); no unexpanded `${NODE_IP}` (#3); log file back-off (#1); updater starts from an existing rootfs (#8); proxy forwards headers (#34) |
 
 ---
 
