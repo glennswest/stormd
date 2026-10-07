@@ -4,6 +4,16 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-07
+- **feat:** goldens for a process (#36, minismbd#11 option A).
+  `[[process.golden]]` names a stormblock golden (by name or volume id) as
+  `filesystem` or `image`. Before the process first starts, stormd attaches
+  each one read-only over ublk from the node's engine (`[goldens]
+  engine_url`, `token_file`) and makes the device node. A filesystem golden
+  is mounted read-only at its path; an image golden becomes a device node
+  there with the given owner and mode. Failures are retried every 2 s; at
+  shutdown everything is unmounted and detached. `GET /api/v1/goldens` lists
+  what is presented, and `PUT /api/v1/processes/{p}/goldens/{name}` swaps
+  one golden for another, restarting the process.
 - **feat:** `[process] wait_for_files` — a process's first start waits until
   every listed file exists (absolute paths, `${NODE_IP}`/`${NODE_NAME}`
   expanded, polled every 250 ms, one log line naming what is missing), with

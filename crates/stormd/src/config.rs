@@ -666,6 +666,33 @@ mod tests {
         assert!(c.process.iter().any(|p| p.ready_probe.is_some()));
         assert!(c.process.iter().any(|p| p.ui.is_some()));
         assert!(c.process.iter().any(|p| !p.wait_for_files.is_empty()));
+        assert!(c.process.iter().any(|p| p.golden.len() == 2));
+    }
+
+    #[test]
+    fn goldens_are_validated() {
+        let parse = |g: &str| -> anyhow::Result<Config> {
+            let c: Config = toml::from_str(&format!(
+                "[[process]]\nname = \"p\"\ncommand = \"/bin/true\"\n{g}"
+            ))?;
+            c.validate().map(|_| c)
+        };
+        let c = parse("[[process.golden]]\nname = \"boot\"\ngolden = \"golden-x\"\ncontent = \"image\"\nowner = \"65532:65532\"\n").unwrap();
+        let g = &c.process[0].golden[0];
+        assert_eq!((g.mode, g.fstype.as_str(), g.owner_ids()), (0o444, "ext4", Some((65532, 65532))));
+        assert_eq!(c.goldens.engine_url, "http://${NODE_IP}:9090");
+        for (bad, why) in [
+            ("[[process.golden]]\nname = \"b\"\ncontent = \"image\"\n", "exactly one"),
+            ("[[process.golden]]\nname = \"b\"\ngolden = \"g\"\nvolume_id = \"v\"\ncontent = \"image\"\n", "exactly one"),
+            ("[[process.golden]]\nname = \"b\"\ngolden = \"g\"\ncontent = \"image\"\npath = \"rel\"\n", "absolute"),
+            ("[[process.golden]]\nname = \"b\"\ngolden = \"g\"\ncontent = \"image\"\nowner = \"nobody\"\n", "uid:gid"),
+            ("[[process.golden]]\nname = \"a/b\"\ngolden = \"g\"\ncontent = \"image\"\n", "no '/'"),
+            ("[[process.golden]]\nname = \"b\"\ngolden = \"g\"\ncontent = \"image\"\n[[process.golden]]\nname = \"b\"\ngolden = \"h\"\ncontent = \"image\"\n", "unique"),
+        ] {
+            let e = parse(bad).err().map(|e| e.to_string()).unwrap_or_default();
+            assert!(e.contains(why), "{bad:?}: {e:?}");
+        }
+        assert!(parse("[[process.golden]]\nname = \"b\"\ngolden = \"g\"\ncontent = \"tarball\"\n").is_err());
     }
 
     #[test]

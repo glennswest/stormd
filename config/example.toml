@@ -126,6 +126,30 @@ on_exit = "stop"                # one-shot: done is done — its dependents
                                 # start only after it exits 0
 depends_on = ["db"]
 
+# A process given goldens (stormblock), read-only, before it first starts.
+# stormd attaches each one ro over ublk from this node's engine and presents
+# it: a filesystem golden is mounted read-only, an image golden is a device
+# node the service can read. Swap one at runtime with
+# PUT /api/v1/processes/share/goldens/<name> {"golden": "..."}.
+[[process]]
+name = "share"
+command = "/app/share"
+
+[[process.golden]]
+name = "nic-drivers"                       # default path /goldens/nic-drivers
+golden = "golden-nic-drivers-56ea4782ef2a" # or volume_id = "<uuid>"
+content = "filesystem"                     # mounted read-only
+# fstype = "ext4"
+
+[[process.golden]]
+name = "boot"
+golden = "golden-boot-0123456789ab"
+content = "image"                          # a device node at path
+path = "/srv/boot/boot.img"
+owner = "65532:65532"                      # so an unprivileged service can read it
+mode = 0o440                               # default 0o444
+size_bytes = 268435456                     # the image's own length (the volume is larger)
+
 # --- Cron Jobs ---
 
 [[cron]]
@@ -162,6 +186,13 @@ enabled = false
 poll_interval_secs = 60
 data_dir = "/data/images"
 rootfs_dir = "/data/rootfs"
+
+# --- Goldens (stormblock) ---
+
+[goldens]
+engine_url = "http://${NODE_IP}:9090"      # this node's engine (ublk is local)
+token_file = "/run/stormblock/engine/api_token"   # bound in from the node
+dir = "/goldens"                           # where a golden with no path appears
 
 # --- Debug ---
 

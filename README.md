@@ -27,6 +27,10 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
   `args` and `env` values are expanded each time it is spawned.
 - **Node-overridable defaults** — `env_default` entries apply only when stormd
   did not inherit the key, so a node's env.d can override them.
+- **Goldens** — a process can name stormblock goldens; stormd attaches each
+  read-only and presents it (a filesystem golden mounted read-only, an image
+  golden as a readable device node) before the process starts, and swaps one
+  for another at runtime (#36).
 - **Logs** — stdout/stderr per process to a rotated file on the log volume,
   each run's file kept (and pruned) when it exits, every line on the fleet's
   multicast syslog group (unlimited — #12) (the [stormcast](https://github.com/glennswest/stormcast)
@@ -300,7 +304,9 @@ parsed by a unit test.
 Validation at load: at least one `[[process]]` or `[[cron]]`; process names
 unique; each process has `command` or `image`; every `depends_on` names a
 process; `[events]` with `transport = "webhook"` needs `webhook_url`;
-`[backup] enabled` needs `destination_url`.
+`[backup] enabled` needs `destination_url`; a `[[process.golden]]` has a
+unique name without `/`, exactly one of `golden`/`volume_id`, an absolute
+`path` if any, and `owner` as `uid:gid`.
 
 ### `[general]`
 
@@ -365,6 +371,7 @@ spawned.
 | `[process.liveness]` | — | below |
 | `[process.ui]` | — | plugin tab, below |
 | `capture_stdout`, `capture_stderr` | `true` | **parsed, not used** — both are always captured |
+| `[[process.golden]]` | — | goldens presented to the process, below and [Goldens](#goldens) |
 
 **`ready_probe`** — `{ type = "http", url = "...", interval_secs = N }`,
 `{ type = "tcp", port = N, interval_secs = N }` or
@@ -642,6 +649,8 @@ client certificate, a session cookie, or `Authorization: Bearer <token>`
 | GET | `/api/v1/processes` | all process statuses |
 | GET | `/api/v1/processes/{name}` | one |
 | POST | `/api/v1/processes/{name}/start` \| `stop` \| `restart` | |
+| GET | `/api/v1/goldens` | goldens presented: process, name, golden, volume, content, device, path, size_bytes |
+| PUT | `/api/v1/processes/{name}/goldens/{golden}` | `{"golden": "…"}` or `{"volume_id": "…"}` — swap it (see [Goldens](#goldens)) |
 | GET | `/api/v1/logs` | lines from the log files (`?process=&tail=&search=`) |
 | GET | `/api/v1/logs/{process}` | same, one process (`?tail=&search=`) |
 | GET | `/api/v1/logs/{process}/runs` | finished runs |
@@ -864,6 +873,57 @@ manifest and repeats the pull and pivot when the digest changes.
 Two things the updater does not do today: it does not start an image process
 whose rootfs already exists when stormd starts (it only waits for the next
 digest change), and with the updater disabled an `image` process never runs.
+
+## Goldens
+
+A process can be given stormblock goldens, read-only (#36; minismbd#11 option
+A: the service serves plain paths and never talks to stormblock):
+
+```toml
+[[process.golden]]
+name = "nic-drivers"                        # path defaults to <[goldens] dir>/<name>
+golden = "golden-nic-drivers-56ea4782ef2a"  # or volume_id = "<uuid>"
+content = "filesystem"                      # or "image"
+```
+
+| Key | Default | |
+|---|---|---|
+| `name` | required | unique in the process, no `/` |
+| `golden` \| `volume_id` | one required | the golden's name in stormblock, or its volume id |
+| `content` | required | `filesystem` — mounted read-only (`MS_RDONLY`, `nodev`, `nosuid`) at `path`; `image` — a block device node at `path` |
+| `path` | `<dir>/<name>` | absolute |
+| `fstype` | `ext4` | filesystem goldens |
+| `owner`, `mode` | root, `0o444` | image goldens: `uid:gid` and mode of the node, so an unprivileged service can read it |
+| `size_bytes` | — | image goldens: the image's own length (the volume is larger); reported in `/api/v1/goldens`, the service limits reads to it |
+
+`[goldens]`: `engine_url` (default `http://${NODE_IP}:9090`, this node's engine:
+a ublk attach is local), `token_file` (default
+`/run/stormblock/engine/api_token`, re-read on every call; absent → no
+`Authorization`), `dir` (default `/goldens`).
+
+**How:** before the process's first start (after `depends_on` and
+`wait_for_files`), stormd resolves a `golden` name through `GET
+/api/v1/volumes?kind=golden`, asks `POST /api/v1/volumes/{id}/attach` with
+`{"mode":"ro","transport":"ublk","holder":"stormd/<container>/<process>/<name>"}`,
+makes the device node from `/sys/block/<dev>/dev` (a container's `/dev` is a
+tmpfs without it), and mounts or places it. A failure is retried every 2 s,
+one warning per distinct error; the process does not start until all its
+goldens are presented, and shutdown ends the wait. At shutdown, after the
+processes stop, each is unmounted (or its node removed) and detached.
+
+**Swap** (a new release): `PUT /api/v1/processes/{p}/goldens/{name}` with the
+new `golden` or `volume_id` stops the process, releases the old golden,
+presents the new one and starts the process again. If the new one cannot be
+presented, the old one is put back. The swap is in memory: a stormd restart
+presents what the config says.
+
+**What it needs from the container** (stormcos wires these per service): the
+engine's token (a `mount sbrun /run/stormblock ro` stanza, as sbregistry
+has), reach to the engine on `:9090`, and stormd running as root with
+`CAP_SYS_ADMIN`/`CAP_MKNOD`: stormdbase containers have both today, since
+stormpump drops no capabilities (stormpump#<n>). Only the local ublk transport
+is used; an NVMe-TCP answer is an error. Processes owned by the image updater
+are not given goldens.
 
 ## Development notes
 
