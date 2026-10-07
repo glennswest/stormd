@@ -354,14 +354,17 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #31 — applets exit non-zero on failure (2026-10-07), in progress.**
+**Issue #31 — applets exit non-zero on failure (2026-10-07) ✅ done.**
 `ShellOutput.status` (0/1/2), `error`/`usage`/`failed_if` helpers; every
 usage return → 2, error returns and loop-collected errors → 1, grep no match
 → 1, ping with no answer → 1; `execute_standalone` returns it. New `test` /
 `[` applet (stormcos#81: wait for a minted cert). Error text stays on stdout
 (unchanged).
 - [x] code, unit tests (`file::status_tests`), README, presentation, changelog
-- [ ] sc-build + live symlink checks; close; tell stormcos#81
+- [x] sc-build: 68 unit tests, live symlink statuses, a stormd one-shot
+      `test -e` holding its dependent; closed; told stormcos#81
+- Found on the way and fixed: every applet read all of stdin first, so
+  under stormd (child stdin never closes) `test`/`cat FILE` hung
 
 **Issue #8 — updater starts an image process from its existing rootfs
 (2026-10-07) ✅ done, v0.8.0.** Each successful pull+pivot writes
