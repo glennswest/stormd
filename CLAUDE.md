@@ -354,6 +354,40 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #36 — a process names goldens; stormd attaches them read-only and
+presents them (2026-10-07), in progress.** Owner chose minismbd#11 option A.
+Facts (stormblock, stormpump code): engine `POST /api/v1/volumes/{id}/attach`
+`{mode:"ro", transport:"ublk", holder}` → `{"transport":"ublk","device_hint":
+"/dev/ublkbN"}` (local node only; rw of a golden is 409); `DELETE …/attach`
+releases (409 while mounted); names resolve via `GET /api/v1/volumes?kind=golden`;
+Bearer token at `/run/stormblock/engine/api_token` (bound into a container by a
+`mount sbrun /run/stormblock ro` stanza); engine on `:9090`. stormdbase
+containers run as root with no capability drop (stormpump), own mount
+namespace, a tmpfs `/dev` without the ublk node — so stormd mknods it from
+`/sys/block/<dev>/dev`. Design (decisions from the code, not asked):
+- `[[process.golden]]`: `name`, `golden` (name) or `volume_id`, `content =
+  "filesystem" | "image"`, `path` (default `<[goldens] dir>/<name>`,
+  dir default `/goldens`), `fstype` (default ext4), image `owner` uid:gid +
+  `mode` (default 0:0, 0444), optional `size_bytes` (reported, not enforced:
+  minismbd limits reads by its entry's size). `[goldens] engine_url` (default
+  `http://${NODE_IP}:9090`), `token_file`.
+- Before a process's first spawn (after wait_for_files): resolve, attach ro
+  over ublk, mknod; filesystem → mount MS_RDONLY at path; image → the device
+  node at path, chowned/chmodded. Failure retries every 2 s (log once),
+  shutdown-aware. On shutdown: unmount, detach.
+- `GET /api/v1/goldens`; swap `PUT /api/v1/processes/{p}/goldens/{name}`
+  `{golden|volume_id}`: stop the process, unmount, detach, attach the new
+  one, present it, start the process. In memory: a stormd restart goes back
+  to the config.
+- Engine client + host ops (mknod/mount/umount/chown) behind a trait; unit
+  tests against an in-process engine stand-in and a recording fake. The
+  real mount path needs root + a node engine: not testable in sc-build.
+- [ ] config + validation; goldens.rs (client, host ops, present/release)
+- [ ] supervisor hook (first start, shutdown), swap; API routes
+- [ ] unit tests; README section, example.toml, changelog
+- [ ] issues: stormpump (document that stormdbase containers keep
+      CAP_SYS_ADMIN/MKNOD, which this needs); sc-build (blocked, #541)
+
 **Issue #43 — record a stormd input golden at head (2026-10-07): waiting on
 the owner.** stormcentral now lists stormd as an `input` golden
 (golden-stormd-fe3f126b72c8, 8edb89c), which conflicts with the 2026-09-26 rule
