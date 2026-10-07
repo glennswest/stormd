@@ -1703,3 +1703,188 @@ mod liveness_tests {
         assert_eq!(tasks, 1, "liveness tasks alive after a second restart");
     }
 }
+
+#[cfg(test)]
+mod stop_tests {
+    use super::{stop_tiers, ProcessState, Supervisor};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    fn supervisor(label: &str) -> (Arc<Supervisor>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("stormd-stop-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        (Arc::new(Supervisor::new(log, bus)), dir)
+    }
+
+    fn sh(name: &str, script: &str, extra: &str) -> crate::config::ProcessConfig {
+        toml::from_str(&format!(
+            "name = \"{name}\"\ncommand = \"/bin/sh\"\nargs = [\"-c\", '''{script}''']\n{extra}\n"
+        ))
+        .unwrap()
+    }
+
+    /// Stop `name` and time it until the stop has landed.
+    async fn stop(sup: &Supervisor, name: &str) -> Duration {
+        let t = Instant::now();
+        sup.stop_process(name).await.unwrap();
+        sup.wait_stopped(name).await;
+        t.elapsed()
+    }
+
+    /// Wait for a process's start script to have got as far as `marker`.
+    async fn wait_file(path: &std::path::Path) {
+        for _ in 0..100 {
+            if path.exists() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("{} never appeared", path.display());
+    }
+
+    /// stormd#9: a stop is SIGTERM first — the process's handler runs, and
+    /// its exit code is recorded.
+    #[tokio::test]
+    async fn stop_sends_sigterm_and_records_the_exit() {
+        let (sup, dir) = supervisor("term");
+        let up = dir.join("up");
+        let bye = dir.join("bye");
+        let p = sh(
+            "p",
+            &format!(
+                "trap 'echo bye > {b}; exit 7' TERM; touch {u}; while :; do sleep 0.1; done",
+                b = bye.display(),
+                u = up.display()
+            ),
+            "",
+        );
+        sup.start_all(&[p]).await.unwrap();
+        wait_file(&up).await;
+        let took = stop(&sup, "p").await;
+        let s = sup.get_status("p").await.unwrap();
+        let said_bye = bye.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(said_bye, "the TERM handler did not run");
+        assert_eq!(s.state, ProcessState::Stopped);
+        assert_eq!(s.exit_code, Some(7), "the TERM handler's exit code");
+        assert!(took < Duration::from_secs(3), "took {took:?}");
+    }
+
+    /// A process that ignores SIGTERM is SIGKILLed after its stop timeout.
+    #[tokio::test]
+    async fn sigterm_ignored_is_sigkill_after_the_timeout() {
+        let (sup, dir) = supervisor("ignore");
+        let up = dir.join("up");
+        let p = sh(
+            "p",
+            &format!("trap '' TERM; touch {}; while :; do sleep 0.1; done", up.display()),
+            "stop_timeout_secs = 1",
+        );
+        sup.start_all(&[p]).await.unwrap();
+        wait_file(&up).await;
+        let took = stop(&sup, "p").await;
+        let s = sup.get_status("p").await.unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(s.state, ProcessState::Stopped);
+        assert_eq!(s.pid, None);
+        assert_eq!(s.exit_code, None, "killed by signal: no exit code");
+        assert!(took >= Duration::from_millis(900), "SIGKILL before the timeout: {took:?}");
+        assert!(took < Duration::from_secs(4), "took {took:?}");
+    }
+
+    /// `stop_timeout_secs = 0` is SIGKILL at once: the TERM handler never runs.
+    #[tokio::test]
+    async fn zero_timeout_is_sigkill_at_once() {
+        let (sup, dir) = supervisor("zero");
+        let up = dir.join("up");
+        let bye = dir.join("bye");
+        let p = sh(
+            "p",
+            &format!(
+                "trap 'touch {b}; exit 0' TERM; touch {u}; while :; do sleep 0.1; done",
+                b = bye.display(),
+                u = up.display()
+            ),
+            "stop_timeout_secs = 0",
+        );
+        sup.start_all(&[p]).await.unwrap();
+        wait_file(&up).await;
+        stop(&sup, "p").await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let ran = bye.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!ran, "the TERM handler ran: it was sent SIGTERM");
+    }
+
+    /// Shutdown stops a dependent, and waits for it, before what it depends on.
+    #[tokio::test]
+    async fn stop_all_stops_dependents_first() {
+        let (sup, dir) = supervisor("order");
+        let alive = dir.join("app-alive");
+        let verdict = dir.join("verdict");
+        let db = sh(
+            "db",
+            &format!(
+                "trap 'if [ -e {a} ]; then echo early > {v}; else echo late > {v}; fi; exit 0' TERM; \
+                 while :; do sleep 0.1; done",
+                a = alive.display(),
+                v = verdict.display()
+            ),
+            "",
+        );
+        let app = sh(
+            "app",
+            &format!(
+                "trap 'sleep 0.5; rm -f {a}; exit 0' TERM; touch {a}; while :; do sleep 0.1; done",
+                a = alive.display()
+            ),
+            "depends_on = [\"db\"]",
+        );
+        sup.start_all(&[db, app]).await.unwrap();
+        wait_file(&alive).await;
+        sup.stop_all().await;
+        let v = std::fs::read_to_string(&verdict).unwrap_or_default();
+        let db_s = sup.get_status("db").await.unwrap();
+        let app_s = sup.get_status("app").await.unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(v.trim(), "late", "db got SIGTERM while app was still alive");
+        assert_eq!((db_s.state, app_s.state), (ProcessState::Stopped, ProcessState::Stopped));
+    }
+
+    #[test]
+    fn tiers_put_dependents_first_and_survive_cycles() {
+        let deps: HashMap<String, Vec<String>> = [
+            ("etcd", vec![]),
+            ("apiserver", vec!["etcd"]),
+            ("scheduler", vec!["apiserver"]),
+            ("lone", vec!["missing"]),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.into_iter().map(String::from).collect()))
+        .collect();
+        assert_eq!(
+            stop_tiers(&deps),
+            vec![vec!["scheduler".to_string()], vec!["apiserver".into()], vec!["etcd".into(), "lone".into()]]
+        );
+
+        let cycle: HashMap<String, Vec<String>> =
+            [("a", vec!["b"]), ("b", vec!["a"])]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.into_iter().map(String::from).collect()))
+                .collect();
+        let tiers = stop_tiers(&cycle);
+        assert_eq!(tiers.iter().map(|t| t.len()).sum::<usize>(), 2, "each process once: {tiers:?}");
+    }
+}
