@@ -280,6 +280,7 @@ impl Supervisor {
         for cfg in configs {
             self.wait_for_dependencies(&cfg.depends_on).await;
             self.wait_for_files(&cfg.name, &cfg.wait_for_files).await;
+            self.wait_for_node_vars(&cfg.name).await;
             if !self.present_goldens(cfg).await {
                 info!(process = %cfg.name, "shutting down — not starting");
                 return Ok(());
@@ -356,6 +357,45 @@ impl Supervisor {
                 tokio::time::sleep(Duration::from_secs(interval)).await;
             }
         });
+    }
+
+    /// Hold a start until the node has a value for every `${NODE_*}` the
+    /// process uses (stormd#3), re-resolving every second. Gives up when
+    /// shutdown begins (the spawn is then refused anyway).
+    ///
+    /// **A node with no address failed three layers down.** With its cables
+    /// out at boot, `${NODE_IP}` stayed literal, stormcert-init exited 2
+    /// parsing `--ip 10.96.0.1,${NODE_IP},127.0.0.1`, and the container was
+    /// failed and retried every 300 s with nothing naming the cause. A
+    /// process that cannot run until the node has an address is blocked, not
+    /// failed: it waits, says why once, and starts when DHCP comes good.
+    async fn wait_for_node_vars(&self, name: &str) {
+        let Some(proc_arc) = self.processes.read().await.get(name).cloned() else {
+            return;
+        };
+        let started = tokio::time::Instant::now();
+        let mut told = false;
+        loop {
+            let cfg = proc_arc.lock().await.config.clone();
+            match node_vars_missing(&cfg, &crate::nodevars::vars()) {
+                None => {
+                    if told {
+                        info!(process = %name, waited_secs = started.elapsed().as_secs(), "node values present — starting");
+                    }
+                    return;
+                }
+                Some(why) => {
+                    if self.is_shutting_down() {
+                        return;
+                    }
+                    if !told {
+                        error!(process = %name, "{why} — waiting, not starting it");
+                        told = true;
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
     }
 
     /// Hold a process's first start until every one of `files` exists
@@ -447,6 +487,15 @@ impl Supervisor {
         // would outlive the `stop_all` that was meant to end it.
         if self.is_shutting_down() {
             anyhow::bail!("stormd is shutting down — not starting '{}'", name);
+        }
+
+        // Never with a `${NODE_IP}` left in it (stormd#3): say what is missing
+        // here, not three layers down as the process's own parse error.
+        {
+            let cfg = proc_arc.lock().await.config.clone();
+            if let Some(why) = node_vars_missing(&cfg, &crate::nodevars::vars()) {
+                anyhow::bail!("{why}");
+            }
         }
 
         let (config, run, liveness_tasks) = {
@@ -812,6 +861,7 @@ impl Supervisor {
                 .emit_simple(EventKind::ProcessRestarting, Some(name.to_string()))
                 .await;
             tokio::time::sleep(cooloff(restart_delay, restarts_in_window)).await;
+            self.wait_for_node_vars(name).await;
             if self.stand_down(&proc_arc, name).await {
                 return;
             }
@@ -876,6 +926,7 @@ impl Supervisor {
                         )
                         .await;
                     tokio::time::sleep(wait).await;
+                    self.wait_for_node_vars(name).await;
                     if self.stand_down(&proc_arc, name).await {
                         return;
                     }
@@ -1482,6 +1533,31 @@ fn dependency_satisfied(
 /// `env` always wins: it is set over whatever stormd inherited. `env_default`
 /// fills only the gaps: an entry whose key stormd inherited (even an empty
 /// value) is left alone, so the node's own override (stormpump's
+/// Why `cfg` cannot be spawned with `vars`: a `${NODE_*}` left in an
+/// expanded argument or in an environment value it would get. `None` when
+/// nothing is missing.
+fn node_vars_missing(cfg: &ProcessConfig, vars: &HashMap<String, String>) -> Option<String> {
+    let mut missing: Vec<&'static str> = Vec::new();
+    let args = cfg.args.iter().map(|a| crate::nodevars::expand(a, vars));
+    let env = process_env(&cfg.env, &cfg.env_default, |k| std::env::var_os(k).is_some(), vars)
+        .into_iter()
+        .map(|(_, v)| v);
+    for s in args.chain(env) {
+        for n in crate::nodevars::unexpanded(&s) {
+            if !missing.contains(&n) {
+                missing.push(n);
+            }
+        }
+    }
+    let first = missing.first()?;
+    let names = missing.iter().map(|n| format!("${{{n}}}")).collect::<Vec<_>>().join(", ");
+    Some(format!(
+        "process '{}' needs {names}, and {}",
+        cfg.name,
+        crate::nodevars::why_missing(first)
+    ))
+}
+
 /// `env.d/<spec>`, which is stormd's inherited environment) beats the golden's
 /// default. A key in both `env` and `env_default` takes `env`'s value. Both
 /// are expanded like `args`.

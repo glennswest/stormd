@@ -60,6 +60,28 @@ pub fn vars() -> HashMap<String, String> {
     v
 }
 
+/// The names stormd fills in. Any other `${…}` is left for whoever reads it
+/// (a shell script's own `${HOME}`, say).
+pub const NAMES: [&str; 2] = ["NODE_IP", "NODE_NAME"];
+
+/// stormd's names still written as `${NAME}` in an expanded string — the
+/// ones this node had no value for.
+pub fn unexpanded(s: &str) -> Vec<&'static str> {
+    NAMES
+        .into_iter()
+        .filter(|n| s.contains(&format!("${{{n}}}")))
+        .collect()
+}
+
+/// Why this node has no value for a name, for the one line that says so.
+pub fn why_missing(name: &str) -> &'static str {
+    match name {
+        "NODE_IP" => "this node has no address on any interface (no route off the node)",
+        "NODE_NAME" => "/proc/sys/kernel/hostname is empty or unreadable",
+        _ => "stormd has no value for it",
+    }
+}
+
 /// Replace `${NAME}` with what the node says it is.
 ///
 /// A name with no value is left exactly as written rather than blanked. An
@@ -109,6 +131,14 @@ mod tests {
         let mut v = HashMap::new();
         v.insert("NODE_IP".to_string(), "192.168.8.104".to_string());
         v
+    }
+
+    #[test]
+    fn unexpanded_names_only_stormds_own() {
+        assert_eq!(unexpanded("--ip 10.96.0.1,${NODE_IP},127.0.0.1"), vec!["NODE_IP"]);
+        assert_eq!(unexpanded("${NODE_NAME}.${NODE_IP}"), vec!["NODE_IP", "NODE_NAME"]);
+        assert!(unexpanded("echo ${HOME} $NODE_IP ${NODE_IPX}").is_empty());
+        assert!(unexpanded(&expand("https://${NODE_IP}:6443", &vars())).is_empty());
     }
 
     #[test]
