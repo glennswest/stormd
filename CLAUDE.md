@@ -354,17 +354,21 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #11 — refuse init under an unknown argv[0] (2026-10-06), in progress.**
+**Issue #11 — refuse init under an unknown argv[0] (2026-10-06), PARKED behind
+#45 (P0, 2026-10-07).** Code, medium test and docs pushed (see checkboxes);
+remaining: read the sc-build result (build, `cargo test -p stormd`, live `ps`/
+`ls` symlinks, medium suite incl. `unknown-argv0-refused`), then close #11.
 Decisions (from the code and stormcos, not asked): init only when argv[0]'s
 basename is `stormd`, `stormd-*` or `stormd.*` (a renamed copy), or empty;
 an applet runs the applet; anything else → `stormd: <name>: not a stormd
 applet (see stormd --list-commands)`, exit 127, before logging, config or
 any spawn. No standalone `ps`: stormcos links exactly `--list-commands` and
 fails a golden with `/bin/ps` (stormcos#66), so adding one would break it.
-- [ ] pure `classify_argv0` in shell/mod.rs + main.rs dispatch; unit tests
-- [ ] short-suite check: a symlink named `ps` → exit 127, nothing spawned
-- [ ] README (Running, stormdbase note), presentation, changelog; sc-build +
-      live check
+- [x] pure `classify_argv0` in shell/mod.rs + main.rs dispatch; unit tests
+- [x] medium-suite check `unknown-argv0-refused`: argv[0] `ps` → exit 127,
+      the one-shot never ran
+- [x] README (Running, stormdbase note, medium row), presentation, changelog
+- [ ] sc-build + live check verified; close #11
 
 **Issue #37 — `[process] env_default` (2026-10-06) ✅ done (c34b849).** For
 stormcos#282 / stormpump#88 env.d overrides: `env` overrides the inherited
