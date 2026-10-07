@@ -189,6 +189,7 @@ impl Supervisor {
 
         for cfg in configs {
             self.wait_for_dependencies(&cfg.depends_on).await;
+            self.wait_for_files(&cfg.name, &cfg.wait_for_files).await;
 
             if cfg.startup_delay_secs > 0 {
                 self.sleep_unless_shutdown(Duration::from_secs(cfg.startup_delay_secs)).await;
@@ -261,6 +262,42 @@ impl Supervisor {
                 tokio::time::sleep(Duration::from_secs(interval)).await;
             }
         });
+    }
+
+    /// Hold a process's first start until every one of `files` exists
+    /// (stormd#38), polled like `depends_on`. Gives up when shutdown begins.
+    ///
+    /// **fastetcd crash-looped on every boot waiting for its cert.** The
+    /// pair is minted by another container a few seconds after fastetcd is
+    /// started; until then it exited 1, and the restart cool-off it grew
+    /// meant its first good start came ~4 s after the cert existed — a delay
+    /// the apiserver, which needs fastetcd, inherited on every install and
+    /// reboot. Waiting here is no restart: nothing is counted, no cool-off.
+    async fn wait_for_files(&self, name: &str, files: &[String]) {
+        if files.is_empty() {
+            return;
+        }
+        let vars = crate::nodevars::vars();
+        let files: Vec<String> = files.iter().map(|f| crate::nodevars::expand(f, &vars)).collect();
+        let started = tokio::time::Instant::now();
+        let mut told = false;
+        loop {
+            let missing = missing_files(&files);
+            if missing.is_empty() {
+                if told {
+                    info!(process = %name, waited_ms = started.elapsed().as_millis() as u64, "files present — starting");
+                }
+                return;
+            }
+            if self.is_shutting_down() {
+                return;
+            }
+            if !told {
+                info!(process = %name, missing = ?missing, "waiting for files before starting");
+                told = true;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
     }
 
     async fn wait_for_dependencies(&self, deps: &[String]) {
@@ -1059,6 +1096,15 @@ impl Supervisor {
         let pid = proc.pid.ok_or_else(|| anyhow::anyhow!("process has no pid"))?;
         send_signal(pid, signal)
     }
+}
+
+/// Those of `files` that do not exist (a broken symlink counts as missing).
+fn missing_files(files: &[String]) -> Vec<&str> {
+    files
+        .iter()
+        .filter(|f| !std::path::Path::new(f.as_str()).exists())
+        .map(|f| f.as_str())
+        .collect()
 }
 
 /// Beyond a stop timeout: SIGKILL landing and the monitor recording it.

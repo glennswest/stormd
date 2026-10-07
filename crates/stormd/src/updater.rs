@@ -337,6 +337,7 @@ impl Updater {
                 on_no_restart: crate::config::NoRestartAction::Hold,
                 depends_on: Vec::new(),
                 stop_timeout_secs: 10,
+                wait_for_files: Vec::new(),
                 startup_delay_secs: 0,
                 ready_probe: None,
                 liveness: None,

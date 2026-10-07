@@ -144,6 +144,11 @@ pub struct ProcessConfig {
     pub on_no_restart: NoRestartAction,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Files that must all exist before the process is first started — a
+    /// cert pair another container mints, say (stormd#38). Absolute paths;
+    /// `${NODE_IP}`/`${NODE_NAME}` are expanded.
+    #[serde(default)]
+    pub wait_for_files: Vec<String>,
     /// How long a stop (API, shell, restart, updater pivot, shutdown) waits
     /// after SIGTERM before SIGKILL. 0 is SIGKILL at once.
     #[serde(default = "default_stop_timeout_secs")]
@@ -515,6 +520,11 @@ impl Config {
         for dep in self.process.iter().flat_map(|p| &p.depends_on) {
             if !names.contains(dep) {
                 anyhow::bail!("unknown dependency: {}", dep);
+            }
+        }
+        for p in &self.process {
+            if let Some(f) = p.wait_for_files.iter().find(|f| !f.starts_with('/')) {
+                anyhow::bail!("process '{}': wait_for_files entry '{}' is not an absolute path", p.name, f);
             }
         }
         if self.events.enabled {
