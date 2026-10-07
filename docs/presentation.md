@@ -171,8 +171,8 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 
 ## How it ships and is operated
 
-- **Not a golden of its own.** stormcentral lists it as `kind = "special"`.
-  It is `/stormd` in every **stormdbase** golden:
+- **An input golden.** stormcentral lists it as `kind = "input"`, and the
+  platform hands its binary to every **stormdbase** golden as `/stormd`:
   - stormcos `build-goldens.sh` stages `/stormd`, the applet links (relative
     targets) and `/var/log/stormd`;
   - it adds the component's binary and `/etc/stormd/config.toml`, with log
