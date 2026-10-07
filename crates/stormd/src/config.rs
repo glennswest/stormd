@@ -564,5 +564,19 @@ mod tests {
         c.validate().expect("config/example.toml must validate");
         assert!(c.process.iter().any(|p| p.ready_probe.is_some()));
         assert!(c.process.iter().any(|p| p.ui.is_some()));
+        assert!(c.process.iter().any(|p| !p.wait_for_files.is_empty()));
+    }
+
+    #[test]
+    fn wait_for_files_must_be_absolute() {
+        let parse = |files: &str| -> anyhow::Result<()> {
+            let c: Config = toml::from_str(&format!(
+                "[[process]]\nname = \"p\"\ncommand = \"/bin/true\"\nwait_for_files = {files}\n"
+            ))?;
+            c.validate()
+        };
+        assert!(parse(r#"["/etc/stormcert/fastetcd.crt", "/etc/${NODE_NAME}.key"]"#).is_ok());
+        let e = parse(r#"["/etc/ok", "stormcert/fastetcd.crt"]"#).unwrap_err().to_string();
+        assert!(e.contains("not an absolute path"), "{e}");
     }
 }

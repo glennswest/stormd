@@ -358,6 +358,7 @@ spawned.
 | `no_restart_exit_codes` | `[]` | exit codes that mean "a restart will not fix this" |
 | `on_no_restart` | `"hold"` | `hold` \| `fail` |
 | `depends_on` | `[]` | names of processes to wait for |
+| `wait_for_files` | `[]` | absolute paths that must all exist before the first start; `${NODE_IP}`/`${NODE_NAME}` expanded |
 | `stop_timeout_secs` | `10` | on a stop: SIGTERM, wait this long, then SIGKILL; `0` = SIGKILL at once |
 | `startup_delay_secs` | `0` | sleep before the first spawn |
 | `ready_probe` | — | inline table, below |
@@ -490,8 +491,13 @@ used.** Rotation is `[stormlog.file]`.
 
 Processes without `image` are started at boot **in config order**; each first
 waits for its `depends_on` (polled every 250 ms, so up to a quarter second per
-dependency — #25), then `startup_delay_secs`,
-then is spawned. A dependency is satisfied when it is running and its
+dependency — #25), then its `wait_for_files`, then `startup_delay_secs`,
+then is spawned. `wait_for_files` holds the first start until every listed
+file exists (polled every 250 ms; a dangling symlink counts as missing), with
+one log line naming what is missing and one when it appears — a cert pair
+another container mints, for example (#38). Waiting is not a restart: nothing
+is counted toward `max_restarts` and there is no cool-off. Shutdown ends the
+wait. A restart or an API start does not wait again. A dependency is satisfied when it is running and its
 `ready_probe` (if any) has passed. A one-shot (`on_exit = "stop"`) — a
 migration, a cert-minting task — satisfies when it has **finished**: stopped
 after exiting 0. Without a `ready_probe`, running is not enough, because a

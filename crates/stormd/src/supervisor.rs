@@ -1934,3 +1934,95 @@ mod stop_tests {
         assert_eq!(tiers.iter().map(|t| t.len()).sum::<usize>(), 2, "each process once: {tiers:?}");
     }
 }
+
+#[cfg(test)]
+mod wait_for_files_tests {
+    use super::{missing_files, ProcessState, Supervisor};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn supervisor(label: &str) -> (Arc<Supervisor>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("stormd-files-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        (Arc::new(Supervisor::new(log, bus)), dir)
+    }
+
+    #[test]
+    fn missing_lists_only_what_is_not_there() {
+        let dir = std::env::temp_dir().join(format!("stormd-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let here = dir.join("here");
+        std::fs::write(&here, b"x").unwrap();
+        let dangling = dir.join("dangling");
+        let _ = std::os::unix::fs::symlink(dir.join("nowhere"), &dangling);
+        let files: Vec<String> = [&here, &dir.join("absent"), &dangling]
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        let missing: Vec<String> = missing_files(&files).into_iter().map(String::from).collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(missing, vec![files[1].clone(), files[2].clone()]);
+    }
+
+    /// stormd#38: the process is not spawned until its files exist, and is
+    /// then started once — no crash, no restart, no cool-off.
+    #[tokio::test]
+    async fn first_start_waits_for_the_files() {
+        let (sup, dir) = supervisor("wait");
+        let crt = dir.join("fastetcd.crt");
+        let key = dir.join("fastetcd.key");
+        let p: crate::config::ProcessConfig = toml::from_str(&format!(
+            "name = \"etcd\"\ncommand = \"/bin/sh\"\nargs = [\"-c\", \"test -e {c} && test -e {k} && exec sleep 30; exit 1\"]\n\
+             wait_for_files = [\"{c}\", \"{k}\"]\n",
+            c = crt.display(),
+            k = key.display()
+        ))
+        .unwrap();
+        let s = sup.clone();
+        let start = tokio::spawn(async move { s.start_all(&[p]).await });
+
+        std::fs::write(&crt, b"crt").unwrap();
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let held = sup.get_status("etcd").await.unwrap();
+        assert_eq!(held.state, ProcessState::Pending, "started with the key still missing");
+        assert!(!start.is_finished());
+
+        std::fs::write(&key, b"key").unwrap();
+        tokio::time::timeout(Duration::from_secs(2), start).await.expect("start order still waiting").unwrap().unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let s = sup.get_status("etcd").await.unwrap();
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!((s.state, s.restarts, s.crashes), (ProcessState::Running, 0, 0));
+    }
+
+    /// Shutdown ends the wait, like a `depends_on` wait (stormd#17).
+    #[tokio::test]
+    async fn shutdown_ends_the_wait() {
+        let (sup, dir) = supervisor("shutdown");
+        let p: crate::config::ProcessConfig = toml::from_str(&format!(
+            "name = \"p\"\ncommand = \"/bin/true\"\nwait_for_files = [\"{}\"]\n",
+            dir.join("never").display()
+        ))
+        .unwrap();
+        let s = sup.clone();
+        let start = tokio::spawn(async move { s.start_all(&[p]).await });
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        sup.stop_all().await;
+        let r = tokio::time::timeout(Duration::from_secs(2), start).await;
+        let st = sup.get_status("p").await.unwrap().state;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(r.is_ok(), "start order still waiting after stop_all");
+        assert_eq!(st, ProcessState::Pending, "started while shutting down");
+    }
+}
