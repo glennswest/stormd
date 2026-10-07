@@ -380,7 +380,7 @@ The issue's proposal, no owner decision needed. Decisions from the code:
       script (db/app/stubborn with TERM traps: API stop of a TERM-ignorer
       ≈ its 2 s timeout; restart waits for the 1 s TERM handler; SIGTERM to
       stormd → db sees app gone first; no leftovers), then the medium suite.
-      The script is kept below so a resumed session can rerun it.
+      The script is `test/live-stop.sh` (run after `cargo build`).
 
 **Issue #45 (P0) — a liveness task outlives its run (2026-10-07) ✅ done.**
 Cause: the task stops only when it reads `state != Running`, so one asleep in
