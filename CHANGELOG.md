@@ -4,6 +4,11 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-07
+- **fix(stormlog):** a log file that cannot be opened no longer logs one
+  ERROR per line (#1). A missing directory is created again and the open
+  retried. A persistent failure is said once, retried at most every second,
+  and repeated at most once a minute with the count of lines not written.
+  On recovery the file gets one marker line for the gap.
 - **fix:** the API is bound before anything is started (#23). A taken port
   used to exit 1 after the start order, cron and the updater had begun,
   leaving their processes running unsupervised (a second fastetcd or

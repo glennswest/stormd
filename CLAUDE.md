@@ -354,6 +354,17 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #1 — log file open failures: recreate the dir, back off (2026-10-07),
+in progress.** As the issue asks: on ENOENT `create_dir_all(log_dir)` and
+retry once; a persistent open/write failure logs one ERROR, retries at most
+every 1 s (lines in between are not written to the file — the group and
+streams still get them), reminds at most once a minute with the count, and
+on recovery logs INFO and writes one marker line into the file saying how
+many lines it is missing.
+- [x] file.rs failure state + write_at(now); unit tests
+      (`file::failure_tests`); README, changelog
+- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`, stormcentral#541)
+
 **Issue #23 — bind the API before anything is spawned (2026-10-07), in
 progress.** The issue's first resolution: the bind moves up next to the TLS
 load, before cron, the updater and the start order, so a taken port stops

@@ -582,10 +582,15 @@ Every line of every process, and every event, goes three places:
    renamed `{process}.{run_id}.{failed|exited}.log` and the next run starts a
    fresh one; the oldest runs past `max_runs` are deleted. Before the rename
    stormd waits (up to 5 s) for the output pipes to drain, so the line that
-   explains a crash is in the file. The file is opened for every line; if the
-   open fails (the directory removed, a mount gone, the disk full) each line
-   logs its own `failed to open log file` ERROR on stormd's stderr, with no
-   back-off and no attempt to recreate the directory (#1).
+   explains a crash is in the file. The file is opened for every line. If
+   the directory has gone (removed, a mount that came late) it is created
+   again and the open retried. If the file still cannot be opened or
+   written (disk full, permissions, a mount gone), stormd says so once,
+   tries again at most every second, and repeats the ERROR at most once a
+   minute with a count. The lines in between still reach the group and the
+   streams; only the file misses them. When the file works again, stormd
+   logs that, and the file gets one line saying how many lines it is
+   missing (#1).
 2. **The fleet's multicast group** — RFC 5424 syslog over UDP, framed by
    [stormcast](https://github.com/glennswest/stormcast) (shared with
    stormpump). Send only; collecting and searching a fleet's logs is
