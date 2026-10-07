@@ -354,6 +354,20 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #3 — never spawn with an unexpanded ${NODE_IP} (2026-10-07), in progress.**
+Decisions (from the issue and code, not asked): only stormd's own names
+(`NODE_IP`, `NODE_NAME`) count — `${HOME}` in an `sh -c` script is the
+script's. A process whose expanded args or applied env still hold one is not
+spawned: one ERROR naming the process, the name and why (no address / no
+route; empty hostname). In the start order and before a restart it **waits**
+(re-resolving every 1 s, shutdown-aware) instead of failing, as the issue
+suggests: a node without an address is blocked, not failed, and DHCP may
+still come. An API start is refused with that message. The issue's stormpump
+log-volume EINVAL is stormpump's (filed there if not already).
+- [ ] nodevars::unexpanded + reason; supervisor check in spawn_process and
+      wait in start_all + both restart paths; unit tests
+- [ ] README, changelog; stormpump issue check; sc-build (blocked, #541)
+
 **Issue #36 — a process names goldens; stormd attaches them read-only and
 presents them (2026-10-07), in progress.** Owner chose minismbd#11 option A.
 Facts (stormblock, stormpump code): engine `POST /api/v1/volumes/{id}/attach`
