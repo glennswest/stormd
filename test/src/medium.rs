@@ -296,6 +296,12 @@ fn metrics(env: &Env) -> Outcome {
                     Outcome::Fail(format!("missing {missing:?}"))
                 } else if !b.lines().any(|l| l.starts_with("stormd_process_state") && l.contains("worker")) {
                     Outcome::Fail("no stormd_process_state series for worker".into())
+                } else if let Some(m) = ["stormd_process_resident_memory_bytes", "stormd_process_cpu_seconds_total", "stormd_process_open_fds"]
+                    .into_iter()
+                    .find(|m| !b.lines().any(|l| l.starts_with(&format!("{m}{{")) && l.contains("process=\"worker\"")))
+                {
+                    // stormd#33: the supervised process's own numbers.
+                    Outcome::Fail(format!("no {m} series for worker"))
                 } else {
                     Outcome::Pass(format!("{} series lines, worker's state among them", b.lines().filter(|l| !l.starts_with('#')).count()))
                 }

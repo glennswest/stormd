@@ -284,6 +284,31 @@ async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         );
     }
 
+    // The supervised processes' own resource use (stormd#33). The unlabelled
+    // `process_*` names above are stormd's; these carry `process`.
+    let usage: Vec<(String, crate::stats::ProcUsage)> = statuses
+        .iter()
+        .filter_map(|p| Some((p.name.clone(), crate::stats::proc_usage(p.pid?)?)))
+        .collect();
+    type Usage = crate::stats::ProcUsage;
+    let usage_metrics: [(&str, &str, &str, fn(&Usage) -> String); 4] = [
+        ("stormd_process_resident_memory_bytes", "gauge", "Resident memory of the supervised process.",
+            |u| u.rss_bytes.to_string()),
+        ("stormd_process_virtual_memory_bytes", "gauge", "Virtual memory of the supervised process.",
+            |u| u.vm_bytes.to_string()),
+        ("stormd_process_cpu_seconds_total", "counter", "User and system CPU time of the supervised process.",
+            |u| format!("{:.2}", u.cpu_seconds)),
+        ("stormd_process_open_fds", "gauge", "Open file descriptors of the supervised process.",
+            |u| u.open_fds.to_string()),
+    ];
+    for (metric, kind, help, value) in usage_metrics {
+        let _ = writeln!(o, "# HELP {metric} {help}");
+        let _ = writeln!(o, "# TYPE {metric} {kind}");
+        for (name, u) in &usage {
+            let _ = writeln!(o, "{metric}{{container=\"{c}\",process=\"{name}\"}} {}", value(u));
+        }
+    }
+
     let _ = writeln!(o, "# HELP stormd_process_liveness_failures_total Liveness probe failures.");
     let _ = writeln!(o, "# TYPE stormd_process_liveness_failures_total counter");
     for p in &statuses {

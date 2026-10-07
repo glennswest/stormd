@@ -4,6 +4,11 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-07
+- **feat:** `/metrics` reports each running supervised process's own RSS,
+  virtual memory, CPU seconds and open fds (`stormd_process_resident_memory_bytes`,
+  `_virtual_memory_bytes`, `_cpu_seconds_total`, `_open_fds`, labelled
+  `{container,process}`) (#33). Before, only stormd's own memory was there,
+  so a leak in the supervised binary was invisible.
 - **fix:** a process is never spawned with `${NODE_IP}`/`${NODE_NAME}` left
   unexpanded in its arguments or applied environment (#3). It waits, with
   one ERROR naming the process, the name and the reason (no address / no

@@ -354,6 +354,18 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #33 — per-process RSS, CPU, open fds in /metrics (2026-10-07), in
+progress.** As proposed: for each running process, `/proc/<pid>/status`
+(VmRSS, VmSize), `/proc/<pid>/stat` (utime+stime / CLK_TCK), count of
+`/proc/<pid>/fd`, as `stormd_process_resident_memory_bytes`,
+`stormd_process_virtual_memory_bytes`, `stormd_process_cpu_seconds_total`,
+`stormd_process_open_fds` with `{container,process}`. The direct child only
+(its own children are not summed) — documented. Unit tests: parsers, and a
+spawned child whose fd count moves.
+- [x] stats.rs proc_usage + parsers; metrics; unit tests (`proc_usage_tests`),
+      medium `metrics` checks the worker's series; README, changelog
+- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`, stormcentral#541)
+
 **Issue #3 — never spawn with an unexpanded ${NODE_IP} (2026-10-07), in progress.**
 Decisions (from the issue and code, not asked): only stormd's own names
 (`NODE_IP`, `NODE_NAME`) count — `${HOME}` in an `sh -c` script is the

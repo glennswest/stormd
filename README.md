@@ -147,7 +147,7 @@ dies in the pod.
 | suite | budget | covers |
 |---|---|---|
 | `short` | < 2 min | API up; a dependent waits for a tcp ready probe and for a one-shot to finish; a crash is restarted; stdout and stderr reach the logs API; SIGTERM exits 0 with no process left behind; the node's own stormds (ports 9081–9085) answer `/api/v1/health` — a skip where none do |
-| `medium` | < 30 min | a failed one-shot holds its dependents, and SIGTERM still stops stormd; `no_restart_exit_codes` hold and fail; `on_failure = "fail"`; `max_restarts`; `on_exit = "restart"`; liveness restarts; API stop/start/restart and shutdown with an exit code; bearer-token auth; `/metrics`; the component feed; cron; a config that does not parse exits 1; run as `ps` (not an applet), exits 127 and spawns nothing; `wait_for_files` holds the start until the file exists |
+| `medium` | < 30 min | a failed one-shot holds its dependents, and SIGTERM still stops stormd; `no_restart_exit_codes` hold and fail; `on_failure = "fail"`; `max_restarts`; `on_exit = "restart"`; liveness restarts; API stop/start/restart and shutdown with an exit code; bearer-token auth; `/metrics` (with the worker's own RSS, CPU and fds); the component feed; cron; a config that does not parse exits 1; run as `ps` (not an applet), exits 127 and spawns nothing; `wait_for_files` holds the start until the file exists |
 | `long` | the night window | waves of processes sized from the pod's own CPU, memory and pid limits (mostly long-running, some crash-once, one-shots with dependents), started, settled and stopped with SIGTERM; one resident stormd has its processes restarted through the API every wave. Per wave: settle time, stop time, leftover processes, the resident's RSS and fds. A wave twice as slow as the first of its size, a leftover, or growing residue fails |
 
 Build it on the build box (stormd needs `stormpull` over `ssh://`, so the
@@ -707,6 +707,10 @@ Label `container` is `[general] name`; `process` is the supervised process.
 | `stormd_process_state{state}` | gauge | 1 for the current state of `running`, `stopped`, `failed`, `starting`, `restarting` |
 | `stormd_process_restarts_total` | counter | |
 | `stormd_process_crashes_total` | counter | non-zero exits |
+| `stormd_process_resident_memory_bytes` | gauge | the running process's RSS (`/proc/<pid>/status` VmRSS) |
+| `stormd_process_virtual_memory_bytes` | gauge | its VmSize |
+| `stormd_process_cpu_seconds_total` | counter | its user + system CPU (`/proc/<pid>/stat`), per run: it starts over when the process restarts |
+| `stormd_process_open_fds` | gauge | entries in `/proc/<pid>/fd` |
 | `stormd_process_liveness_failures_total` | counter | **current consecutive failures** — reset to 0 by a passing probe, so not monotonic despite the type |
 | `stormd_process_uptime_seconds` | gauge | absent when not running |
 

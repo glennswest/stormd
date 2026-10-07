@@ -154,6 +154,55 @@ fn read_memory_info() -> Option<MemoryInfo> {
     }
 }
 
+/// One supervised process's resource use, from `/proc/<pid>` (stormd#33).
+/// The process itself only: what it forks is not added in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProcUsage {
+    pub rss_bytes: u64,
+    pub vm_bytes: u64,
+    pub cpu_seconds: f64,
+    pub open_fds: u64,
+}
+
+/// Read a process's usage; `None` when it has gone or `/proc` is unreadable.
+pub fn proc_usage(pid: u32) -> Option<ProcUsage> {
+    let dir = std::path::PathBuf::from(format!("/proc/{pid}"));
+    let (rss_bytes, vm_bytes) = parse_status_memory(&std::fs::read_to_string(dir.join("status")).ok()?);
+    let cpu_seconds = parse_stat_cpu_ticks(&std::fs::read_to_string(dir.join("stat")).ok()?)? as f64 / clock_ticks() as f64;
+    let open_fds = std::fs::read_dir(dir.join("fd")).ok()?.count() as u64;
+    Some(ProcUsage { rss_bytes, vm_bytes, cpu_seconds, open_fds })
+}
+
+/// `VmRSS` and `VmSize` from `/proc/<pid>/status`, in bytes. A kernel thread
+/// or a zombie has neither: 0.
+fn parse_status_memory(status: &str) -> (u64, u64) {
+    let (mut rss, mut vm) = (0, 0);
+    for line in status.lines() {
+        if let Some(v) = line.strip_prefix("VmRSS:") {
+            rss = parse_kb(v) * 1024;
+        } else if let Some(v) = line.strip_prefix("VmSize:") {
+            vm = parse_kb(v) * 1024;
+        }
+    }
+    (rss, vm)
+}
+
+/// utime + stime (fields 14 and 15) from `/proc/<pid>/stat`, in clock
+/// ticks. The command name (field 2) is in parentheses and may itself hold
+/// spaces and parentheses, so fields are counted from the last `)`.
+fn parse_stat_cpu_ticks(stat: &str) -> Option<u64> {
+    let after = &stat[stat.rfind(')')? + 1..];
+    let f: Vec<&str> = after.split_whitespace().collect();
+    // f[0] is field 3 (state), so field 14 is f[11].
+    Some(f.get(11)?.parse::<u64>().ok()? + f.get(12)?.parse::<u64>().ok()?)
+}
+
+fn clock_ticks() -> u64 {
+    // SAFETY: sysconf reads a constant.
+    let t = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if t > 0 { t as u64 } else { 100 }
+}
+
 fn read_mount_info() -> Vec<MountInfo> {
     #[cfg(target_os = "linux")]
     {
@@ -257,4 +306,47 @@ fn parse_kb(s: &str) -> u64 {
         .trim()
         .parse::<u64>()
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod proc_usage_tests {
+    use super::{parse_stat_cpu_ticks, parse_status_memory, proc_usage};
+
+    #[test]
+    fn status_memory_in_bytes() {
+        let s = "Name:\tstormlb\nVmPeak:\t  9000 kB\nVmSize:\t   8192 kB\nVmRSS:\t   2048 kB\n";
+        assert_eq!(parse_status_memory(s), (2048 * 1024, 8192 * 1024));
+        assert_eq!(parse_status_memory("Name:\tkthreadd\n"), (0, 0));
+    }
+
+    #[test]
+    fn stat_cpu_counts_from_the_last_paren() {
+        // A command name with a space and a ')' in it.
+        let s = "1234 (we ird) x) S 1 1234 1234 0 -1 4194560 100 0 0 0 250 75 0 0 20 0 1 0 999 8388608 512";
+        assert_eq!(parse_stat_cpu_ticks(s), Some(325));
+        assert_eq!(parse_stat_cpu_ticks("garbage"), None);
+    }
+
+    /// stormd#33: a child's own numbers, and its fd count moves when it opens files.
+    #[test]
+    fn a_child_is_measured_and_its_fds_move() {
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 0.6; exec 7</dev/null 8</dev/null 9</dev/null; sleep 5"])
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let before = proc_usage(pid).expect("child readable");
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        let after = proc_usage(pid).expect("child readable");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(before.rss_bytes > 0 && before.vm_bytes >= before.rss_bytes, "{before:?}");
+        assert!(after.open_fds >= before.open_fds + 3, "fds did not move: {before:?} -> {after:?}");
+        assert!(before.cpu_seconds >= 0.0);
+        let own = proc_usage(std::process::id()).unwrap();
+        assert_ne!(own.rss_bytes, after.rss_bytes, "measured the test process, not the child");
+        assert!(proc_usage(u32::MAX - 1).is_none());
+    }
 }
