@@ -3,7 +3,7 @@
 # `cargo build`): SIGTERM then SIGKILL after stop_timeout_secs, restart waits
 # for the old run, shutdown stops dependents first. Prints what it saw.
 set -u
-B=$PWD/target/debug/stormd; W=$(mktemp -d); cd $W
+B=${CARGO_TARGET_DIR:-$PWD/target}/debug/stormd; W=$(mktemp -d); cd $W
 cat > c.toml <<C
 [general]
 log_dir = "$W/log"
