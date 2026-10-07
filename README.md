@@ -532,7 +532,11 @@ A failed container makes stormd shut down (checked every second) and exit 1.
 **Liveness:** after `initial_delay_secs`, every `interval_secs`. When
 `failure_threshold` consecutive probes fail stormd emits
 `liveness_check_failed`, sends SIGUSR1, waits 5 s, and sends SIGKILL if the
-process is still there; the exit then goes through the table above.
+process is still there; the exit then goes through the table above. Each
+run has its own probe task and its own count: the task ends when that run
+ends, and a restarted process starts at zero failures and waits its own
+`initial_delay_secs` (before #45 a task from an earlier run could probe a
+fresh restart at once with the old count, killing every restart).
 
 **`${NODE_IP}` and `${NODE_NAME}`** in `args`, `env` and `env_default` values (not `command`)
 are replaced at every spawn. `NODE_IP` is the source address the routing table

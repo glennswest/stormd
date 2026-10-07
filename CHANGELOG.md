@@ -3,6 +3,16 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-10-07
+- **fix:** a liveness task ends with its run, and `liveness_failures` resets
+  at every spawn (#45, P0). A task asleep in `initial_delay_secs` across a
+  crash and restart woke on the new run and probed it at once with the old
+  count, and each restart added one more: once a slow start tripped the
+  threshold, every later run was SIGUSR1'd seconds after it started
+  (fastetcd and the apiserver crash-looping on the Dell). Now one task per
+  run, aborted when the run ends; every check, count and signal applies only
+  to that run, and the signal goes to that run's pid.
+
 ### 2026-10-06
 - **chore:** test-fixture credentials marked `not a secret` (inline, or `.github/secret_scanning.yml` for files that cannot hold a comment) — owner
 - **fix:** stormd under a name that is neither `stormd` (or a renamed copy,
