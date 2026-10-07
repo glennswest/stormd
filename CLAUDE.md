@@ -354,7 +354,7 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #45 (P0) — a liveness task outlives its run (2026-10-07), in progress.**
+**Issue #45 (P0) — a liveness task outlives its run (2026-10-07) ✅ done.**
 Cause: the task stops only when it reads `state != Running`, so one asleep in
 `initial_delay_secs` (or mid-probe) across a crash + restart wakes on the new
 run and probes it at once; `liveness_failures` is never reset at spawn, so
@@ -367,12 +367,11 @@ now"; removing liveness kills altogether waits on the owner's yes/no on #45):
 - [x] live-task count per process (drop guard) for the test
 - [x] test `liveness_tests::a_liveness_task_ends_with_its_run`; README,
       changelog (commits ec…/6b51d5b)
-- [ ] sc-build: NOT YET RUN. Three tries on 2026-10-07 were each cancelled
-      while queued for the one build VM (other projects' queued jobs were
-      cancelled the same way). The plan for the build: `cargo build && cargo
-      test -p stormd`, then the new test against the pre-fix supervisor
-      (HEAD~2 of 6b51d5b) to show it catches the bug
-- [ ] then: comment on #45; removal of liveness kills waits on the owner
+- [x] sc-build on 5fa18be (build VM, SC_BUILD_P0): `cargo build && cargo test
+      -p stormd` passes, 40 tests incl. the new one. Running the new test
+      against the pre-fix code was not possible: the build VM's checkout has
+      no earlier history (the attempt filed #47, closed as not a failure)
+- [x] closed #45; the removal question split out as #48 (needs-owner)
 - Found on the way: #46 (a restarted process with a ready_probe is never
   ready again)
 
