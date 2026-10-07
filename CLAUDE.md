@@ -354,7 +354,22 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #11 — refuse init under an unknown argv[0] (2026-10-06), PARKED behind
+**Issue #45 (P0) — a liveness task outlives its run (2026-10-07), in progress.**
+Cause: the task stops only when it reads `state != Running`, so one asleep in
+`initial_delay_secs` (or mid-probe) across a crash + restart wakes on the new
+run and probes it at once; `liveness_failures` is never reset at spawn, so
+the next run starts at the old count. Fix (master's "stop the stale-task bug
+now"; removing liveness kills altogether waits on the owner's yes/no on #45):
+- [ ] `run` generation on each spawn; reset `liveness_failures` at spawn
+- [ ] liveness task spawned per run, aborted by the run's monitor task when
+      the child exits or is killed; every check and the SIGUSR1/SIGKILL act
+      only if the run is still the task's (signal the run's own pid)
+- [ ] live-task count per process (drop guard) for the test
+- [ ] test: run 1 crashes inside its initial delay, run 2 is not probed
+      before its own delay; then the probe passes, run 2 left running; one
+      task after a second restart. README, changelog; sc-build
+
+ (2026-10-06), PARKED behind
 #45 (P0, 2026-10-07).** Code, medium test and docs pushed (see checkboxes);
 remaining: read the sc-build result (build, `cargo test -p stormd`, live `ps`/
 `ls` symlinks, medium suite incl. `unknown-argv0-refused`), then close #11.
