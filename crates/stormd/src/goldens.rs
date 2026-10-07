@@ -270,10 +270,10 @@ impl Goldens {
         let Some(p) = self.presented.lock().await.remove(&(process.to_string(), name.to_string())) else {
             return Ok(());
         };
-        let path = Path::new(&p.path);
+        let path = PathBuf::from(&p.path);
         let undone = match p.content {
-            GoldenContent::Filesystem => self.host.unmount(path),
-            GoldenContent::Image => self.host.remove(path),
+            GoldenContent::Filesystem => self.host.unmount(&path),
+            GoldenContent::Image => self.host.remove(&path),
         };
         if let Err(e) = undone {
             // Still mounted: the engine would refuse the detach (409) anyway.
