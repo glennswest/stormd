@@ -33,7 +33,7 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
   for another at runtime (#36).
 - **Logs** — stdout/stderr per process to a rotated file on the log volume,
   each run's file kept (and pruned) when it exits, every line on the fleet's
-  multicast syslog group (unlimited — #12) (the [stormcast](https://github.com/glennswest/stormcast)
+  multicast syslog group (repeats collapsed, rate-limited per process) (the [stormcast](https://github.com/glennswest/stormcast)
   wire), a VT100 screen per process, and live streams to follow.
 - **Events** — lifecycle events written to the log always, and optionally
   POSTed to a webhook.
@@ -589,10 +589,15 @@ Every line of every process, and every event, goes three places:
 2. **The fleet's multicast group** — RFC 5424 syslog over UDP, framed by
    [stormcast](https://github.com/glennswest/stormcast) (shared with
    stormpump). Send only; collecting and searching a fleet's logs is
-   mcastsyslog's job. **Every line is sent**: stormd does not use stormcast's
-   limiter, so a process looping on one line, or printing thousands a second,
-   puts each one on the group — no repeat collapse, no rate limit (#12;
-   stormpump limits on the host, containers do not). The stormcast commit
+   mcastsyslog's job. Lines pass stormcast's limiter, one per process, as
+   in stormpump on the host (#12). Repeats collapse into `last message
+   repeated N time(s)`. Past a burst of 2000, more than 200 lines a second
+   are dropped, and a count follows (`N message(s) dropped — over 200
+   lines/s`). Both notices go out as Notice lines from the same process. A
+   run of repeats still held when the process's output ends is sent then.
+   stormd's own `*** PROCESS CRASHED ***` line is never rate-dropped. Only
+   the group is limited: the file and the live streams keep every line. The
+   stormcast commit
    pinned in `Cargo.lock` (0.1.0, `9244121`) truncates a long line with
    `String::truncate` and **panics** when byte 8192 falls inside a multibyte
    character; the fix is in stormcast and arrives with `cargo update -p

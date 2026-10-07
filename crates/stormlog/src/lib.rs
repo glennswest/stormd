@@ -207,6 +207,11 @@ impl StormLog {
                         }
                     }
                 }
+                // Its output has ended: a run of repeats still held by the
+                // group's limiter goes out now, not with the next run.
+                if let Some(m) = &this.mcast {
+                    m.flush(&name);
+                }
                 // Emit end marker
                 let end = LogEntry::new(&name, LogStream::Stdout, "--- process exited ---")
                     .with_run_id(&rid);

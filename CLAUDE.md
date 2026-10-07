@@ -354,6 +354,20 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #12 — stormcast's limiter on the group (2026-10-07), in progress.**
+Pinned stormcast 9244121 already has `Limiter`/`Verdict`/`RATE_PER_SEC`
+(200)/`BURST` (2000) — no `cargo update`. One `Limiter` per process name in
+the mcast adapter (not `Limiters`: that has no per-source flush at this
+rev); notices go out first as Notice lines from the same process, the line
+only on `Emit`; flush when the process's output ends. Only the group is
+limited — file, terminal and streams keep every line. Decision (not asked):
+Emergency entries (stormd's own `*** PROCESS CRASHED ***`) skip the rate
+limit, so a flood cannot hide the crash.
+- [x] mcast adapter + flush at end of output; unit tests (`mcast::gate_tests`);
+      README, changelog
+- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`, stormcentral#541);
+      then tell stormcast its README can drop "stormd does not limit yet"
+
 **Issue #33 — per-process RSS, CPU, open fds in /metrics (2026-10-07), in
 progress.** As proposed: for each running process, `/proc/<pid>/status`
 (VmRSS, VmSize), `/proc/<pid>/stat` (utime+stime / CLK_TCK), count of

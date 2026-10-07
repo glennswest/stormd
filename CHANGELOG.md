@@ -4,6 +4,12 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-07
+- **fix(stormlog):** lines reach the fleet's multicast group through
+  stormcast's limiter, one per process, as stormpump does on the host (#12).
+  Repeats collapse to `last message repeated N time(s)`, and over 200 lines/s
+  (after a 2000 burst) lines are dropped with a count. The run is flushed
+  when a process's output ends, and stormd's crash marker is never dropped.
+  The file and live streams keep every line.
 - **feat:** `/metrics` reports each running supervised process's own RSS,
   virtual memory, CPU seconds and open fds (`stormd_process_resident_memory_bytes`,
   `_virtual_memory_bytes`, `_cpu_seconds_total`, `_open_fds`, labelled
