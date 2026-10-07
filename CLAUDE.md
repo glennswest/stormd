@@ -354,6 +354,17 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #24 — test image per the updated standard (2026-10-07), in progress.**
+Standard (stormcentral docs/test-standard.md, runner `BUILD_PUSH`): one image,
+`test/Containerfile` with the repo root as context, no container runtime
+(#121), `/test <suite>`, `test/build.sh` runs first with CARGO_TARGET_DIR set.
+- [ ] build.sh → binaries in `test/out/` (gitignored), no podman; Containerfile
+      FROM scratch COPY test/out/…; no SUITE arg; argv[1] suite (helper kept);
+      Job `command: ["/test", "${SUITE}"]`; README; changelog
+- [ ] verify under sc-build: build.sh, then the runner's own Containerfile
+      interpreter (from stormcentral testruns.rs) up to the push; run
+      `test/out/stormd-test short`
+
 **Issue #31 — applets exit non-zero on failure (2026-10-07) ✅ done.**
 `ShellOutput.status` (0/1/2), `error`/`usage`/`failed_if` helpers; every
 usage return → 2, error returns and loop-collected errors → 1, grep no match
