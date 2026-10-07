@@ -354,6 +354,19 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #8 — updater starts an image process from its existing rootfs
+(2026-10-07), in progress.** Each successful pull+pivot writes
+`<rootfs_dir>/<name>.image.json` (image, digest, cmd, env, working_dir).
+At start, a rootfs with that record → register + build the config from it
++ start, current_digest = the record's (so a newer registry digest is
+pulled on the first poll — before, the registry's digest was recorded and an
+image published while stormd was down never arrived). A rootfs without a
+record (older stormd) → pull again. `image` with `[updater] enabled = false`
+→ one ERROR per process at start (not a validation refusal: a container that
+booted before must still boot).
+- [ ] record write/read, config builder shared with pivot, start branch;
+      ERROR for disabled updater; unit tests; README, changelog; sc-build
+
 **Issue #1 — log file open failures: recreate the dir, back off (2026-10-07),
 in progress.** As the issue asks: on ENOENT `create_dir_all(log_dir)` and
 retry once; a persistent open/write failure logs one ERROR, retries at most
