@@ -28,7 +28,10 @@ command = "/bin/sh"
 args = ["-c", "trap '' TERM; while :; do sleep 0.1; done"]
 stop_timeout_secs = 2
 C
-timeout -k 5 60 $B --config c.toml > out.log 2>&1 & SD=$!
+# Not under `timeout`: it signals its whole process group, so the children
+# would get SIGTERM straight from it and the stop order could not be seen.
+$B --config c.toml > out.log 2>&1 & SD=$!
+( sleep 90; kill -9 $SD 2>/dev/null ) & GUARD=$!
 for i in $(seq 50); do curl -sf localhost:19809/api/v1/health >/dev/null && break; sleep 0.2; done; sleep 1
 echo "== API stop of stubborn (ignores TERM, stop_timeout_secs=2)"
 t=$(date +%s.%N); curl -s -XPOST localhost:19809/api/v1/processes/stubborn/stop; echo
@@ -42,5 +45,6 @@ sleep 1
 echo "== SIGTERM to stormd"
 t=$(date +%s.%N); kill -TERM $SD; wait $SD; rc=$?
 echo "stormd rc=$rc after $(echo "$(date +%s.%N) - $t" | bc) s; verdict (db saw app alive?): $(cat verdict); app: $(cat app 2>/dev/null)"
+kill $GUARD 2>/dev/null
 echo "leftover sh: $(pgrep -f "$W" | wc -l)"
 grep -E "stopping process|stopped by request|SIGKILL|SIGTERM" out.log | sed 's/^/  /'
