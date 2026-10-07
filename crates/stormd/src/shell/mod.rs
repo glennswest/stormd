@@ -438,8 +438,12 @@ pub fn classify_argv0(argv0: &str) -> Invocation {
 pub async fn execute_standalone(cmd: &str, args: &[String]) -> i32 {
     use std::io::{IsTerminal, Read};
 
-    // Read piped stdin if not a terminal
-    let piped_input = if !std::io::stdin().is_terminal() {
+    // Read piped stdin if not a terminal — and only for an applet that
+    // would read it: one that takes input and was given no file to read.
+    // stormd gives the processes it starts a stdin pipe that never closes, so
+    // reading it for `/bin/test -e …` as a one-shot (stormd#31) or `cat FILE`
+    // waited forever.
+    let piped_input = if !std::io::stdin().is_terminal() && wants_stdin(cmd, args) {
         let mut input = String::new();
         if std::io::stdin().read_to_string(&mut input).is_ok() && !input.is_empty() {
             Some(input)
@@ -539,6 +543,36 @@ pub async fn execute_standalone(cmd: &str, args: &[String]) -> i32 {
     // It used to be 0 for everything but `false`, so no one-shot or exec
     // probe built on an applet could ever fail.
     output.status
+}
+
+/// Whether an applet reads stdin: it takes input, and its arguments name no
+/// file for it to read instead (as the coreutils it stands in for).
+fn wants_stdin(cmd: &str, args: &[String]) -> bool {
+    // Operands: arguments that are not flags, skipping the value of an option
+    // that takes one.
+    let operands = |valued: &[&str]| {
+        let mut n = 0;
+        let mut skip = false;
+        for a in args {
+            if skip {
+                skip = false;
+            } else if valued.contains(&a.as_str()) {
+                skip = true;
+            } else if !a.starts_with('-') || a == "-" {
+                n += 1;
+            }
+        }
+        n
+    };
+    match cmd {
+        "tee" | "tr" => true,
+        "cat" | "wc" | "sha256sum" | "md5sum" | "sort" | "uniq" | "rev" | "xxd" | "base64" => operands(&[]) == 0,
+        "head" | "tail" => operands(&["-n", "-c"]) == 0,
+        "cut" => operands(&["-d", "-f", "-c"]) == 0,
+        // The first operand is the pattern or the expression.
+        "grep" | "sed" => operands(&["-e"]) <= 1,
+        _ => false,
+    }
 }
 
 /// Install symlinks for all standalone commands into the given directory.
@@ -716,5 +750,31 @@ mod argv0_tests {
         for (a, n) in [("/bin/ps", "ps"), ("top", "top"), ("/usr/bin/stormdrive", "stormdrive"), ("init", "init")] {
             assert_eq!(classify_argv0(a), Invocation::Unknown(n.into()), "{a:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod stdin_tests {
+    use super::wants_stdin;
+
+    fn w(cmd: &str, args: &[&str]) -> bool {
+        wants_stdin(cmd, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
+    /// stormd#31: an applet run by stormd (stdin a pipe that never closes)
+    /// must not wait on stdin unless it would read it.
+    #[test]
+    fn only_applets_without_a_file_read_stdin() {
+        assert!(!w("test", &["-e", "/x"]));
+        assert!(!w("stat", &["/x"]));
+        assert!(!w("ls", &[]));
+        assert!(!w("cat", &["/x"]));
+        assert!(w("cat", &[]));
+        assert!(w("head", &["-n", "5"]));
+        assert!(!w("head", &["-n", "5", "/x"]));
+        assert!(w("grep", &["-i", "pat"]));
+        assert!(!w("grep", &["pat", "/x"]));
+        assert!(w("cut", &["-d", ":", "-f", "1"]));
+        assert!(w("tee", &["/x"]));
     }
 }

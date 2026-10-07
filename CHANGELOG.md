@@ -8,6 +8,10 @@
   failure (`stat`/`cat`/`ls` of a missing file, `grep` with no match, `ping`
   with no answer, …), 2 on bad usage. Before, everything but `false` exited
   0, so no one-shot or exec probe could wait for a file.
+- **fix:** a standalone applet reads stdin only if it takes input and was
+  given no file (as coreutils). Before, every applet read all of stdin
+  first, so under stormd, whose child stdin is a pipe that never closes,
+  `/bin/test -e …` as a one-shot or `cat FILE` hung forever (#31).
 - **feat:** a `test` / `[` applet (`-e -f -d -s -r -w -x`, `-n`, `-z`, `=`,
   `!=`, `!`) for exactly that (#31, stormcos#81). Goldens link it through
   `--list-commands`.
