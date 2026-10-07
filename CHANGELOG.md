@@ -4,6 +4,13 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-07
+- **fix(updater):** an image process whose rootfs already exists is started
+  when stormd starts (#8). Each pull and pivot records the image, digest,
+  command, env and working directory in `<rootfs_dir>/<name>.image.json`,
+  and a restart starts from that record. The record's digest (not the
+  registry's) is the current one, so an image published while stormd was
+  down is pulled on the first poll. An `image` process with the updater
+  disabled gets an ERROR at start instead of silence.
 - **fix(stormlog):** a log file that cannot be opened no longer logs one
   ERROR per line (#1). A missing directory is created again and the open
   retried. A persistent failure is said once, retried at most every second,

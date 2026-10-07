@@ -254,6 +254,15 @@ async fn main() {
         tokio::spawn(async move { cron.run().await });
     }
 
+    // An `image` process belongs to the updater; with it off, nothing ever
+    // starts one. Said, not refused: a container that booted before must
+    // still boot (stormd#8).
+    if !config.updater.enabled {
+        for p in config.process.iter().filter(|p| p.image.is_some()) {
+            error!(process = %p.name, "has `image` but [updater] is disabled — it will never run");
+        }
+    }
+
     // Start OCI image updater if enabled
     let updater = if config.updater.enabled {
         let updater = Arc::new(Updater::new(

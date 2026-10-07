@@ -890,9 +890,14 @@ delete `.old` in the background. Then every `poll_interval_secs` it HEADs the
 manifest and repeats the pull and pivot when the digest changes.
 `POST /api/v1/updates/{name}/trigger` does it now.
 
-Two things the updater does not do today: it does not start an image process
-whose rootfs already exists when stormd starts (it only waits for the next
-digest change), and with the updater disabled an `image` process never runs.
+Each successful pull and pivot records how it started the process (image,
+digest, command, env, working directory) in `<rootfs_dir>/<name>.image.json`.
+When stormd starts and finds a rootfs with that record, it starts the process
+from it at once (#8). The record's digest counts as the current one, so if
+the registry has something newer the first poll pulls it. A rootfs without a
+record (left by an older stormd) is pulled again. With `[updater] enabled =
+false` an `image` process never runs, and stormd logs one ERROR per such
+process at start saying so.
 
 ## Goldens
 

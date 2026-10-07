@@ -364,8 +364,12 @@ image published while stormd was down never arrived). A rootfs without a
 record (older stormd) → pull again. `image` with `[updater] enabled = false`
 → one ERROR per process at start (not a validation refusal: a container that
 booted before must still boot).
-- [ ] record write/read, config builder shared with pivot, start branch;
-      ERROR for disabled updater; unit tests; README, changelog; sc-build
+- [x] record write/read, config builder shared with pivot, start branch;
+      ERROR for disabled updater; unit tests (`updater::record_tests`);
+      README, changelog
+- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`, stormcentral#541).
+      The start-from-record path needs a registry for an end-to-end test;
+      unit tests cover the record and the config it builds
 
 **Issue #1 — log file open failures: recreate the dir, back off (2026-10-07),
 in progress.** As the issue asks: on ENOENT `create_dir_all(log_dir)` and

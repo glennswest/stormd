@@ -3,7 +3,7 @@ use crate::events::{EventBus, EventKind};
 use crate::supervisor::Supervisor;
 use chrono::{DateTime, Utc};
 use flate2::read::GzDecoder;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -32,6 +32,82 @@ pub enum UpdateStatus {
     Pulling,
     Pivoting,
     Failed,
+}
+
+/// What the last pull and pivot started, kept beside the rootfs as
+/// `<rootfs_dir>/<name>.image.json` (stormd#8).
+///
+/// **An image process whose rootfs existed was never started.** The command,
+/// environment and working directory a pivot derives from the image config
+/// lived only in memory, so after a stormd restart the updater found the
+/// rootfs, had nothing to start it with, and left the process down until the
+/// registry digest changed. It also recorded the *registry's* digest as the
+/// current one, so an image published while stormd was down never arrived.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct RootfsRecord {
+    image: String,
+    digest: Option<String>,
+    cmd: Vec<String>,
+    env: HashMap<String, String>,
+    working_dir: Option<PathBuf>,
+}
+
+impl RootfsRecord {
+    fn path(rootfs_dir: &Path, name: &str) -> PathBuf {
+        rootfs_dir.join(format!("{name}.image.json"))
+    }
+
+    fn read(rootfs_dir: &Path, name: &str) -> Option<RootfsRecord> {
+        let text = std::fs::read_to_string(Self::path(rootfs_dir, name)).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    /// Written to a temporary name and renamed, so a crash cannot leave half
+    /// a record.
+    fn write(&self, rootfs_dir: &Path, name: &str) -> std::io::Result<()> {
+        let path = Self::path(rootfs_dir, name);
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?)?;
+        std::fs::rename(tmp, path)
+    }
+}
+
+/// The process config for an image process run from `rootfs`: the config
+/// file's entry for the non-image fields, the image's entrypoint and
+/// working directory resolved inside the rootfs (it is not chrooted), and the
+/// image's env under the config's.
+fn image_process_config(
+    original: Option<&ProcessConfig>,
+    name: &str,
+    rootfs: &Path,
+    cmd: &[String],
+    env: &HashMap<String, String>,
+    working_dir: Option<&Path>,
+) -> anyhow::Result<ProcessConfig> {
+    let (command, args) = cmd
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("image for '{name}' has no entrypoint or cmd"))?;
+    let mut cfg = match original {
+        Some(o) => o.clone(),
+        // Shouldn't happen: every tracked process comes from the config.
+        None => toml::from_str::<ProcessConfig>(&format!("name = {name:?}\ncommand = \"\"\n"))?,
+    };
+    cfg.command = match command.strip_prefix('/') {
+        Some(rel) => rootfs.join(rel).to_string_lossy().to_string(),
+        None => command.clone(),
+    };
+    cfg.args = args.to_vec();
+    cfg.working_dir = Some(
+        working_dir
+            .map(|wd| rootfs.join(wd.strip_prefix("/").unwrap_or(wd)))
+            .unwrap_or_else(|| rootfs.to_path_buf()),
+    );
+    let mut merged = env.clone();
+    for (k, v) in &cfg.env {
+        merged.insert(k.clone(), v.clone());
+    }
+    cfg.env = merged;
+    Ok(cfg)
 }
 
 pub struct Updater {
@@ -301,73 +377,15 @@ impl Updater {
         }
         std::fs::rename(&new_rootfs, &current_rootfs)?;
 
-        // Build the updated process config
-        let (command, args) = if cmd.len() > 1 {
-            (cmd[0].clone(), cmd[1..].to_vec())
-        } else {
-            (cmd[0].clone(), Vec::new())
-        };
-
-        // Determine the actual working_dir — use image WORKDIR prefixed with rootfs,
-        // or default to the rootfs root
-        let actual_working_dir = working_dir
-            .map(|wd| current_rootfs.join(wd.strip_prefix("/").unwrap_or(&wd)))
-            .unwrap_or_else(|| current_rootfs.clone());
-
-        // Find the original process config to preserve non-image fields
         let original = self.process_configs.iter().find(|p| p.name == process_name);
-        let mut updated_config = if let Some(orig) = original {
-            orig.clone()
-        } else {
-            // Shouldn't happen, but build a minimal config
-            ProcessConfig {
-                name: process_name.to_string(),
-                command: String::new(),
-                image: None,
-                args: Vec::new(),
-                env: HashMap::new(),
-                env_default: HashMap::new(),
-                working_dir: None,
-                on_failure: crate::config::FailureAction::Restart,
-                on_exit: crate::config::ExitAction::Restart,
-                restart_delay_secs: 1,
-                max_restarts: 10,
-                restart_window_secs: 3600,
-                no_restart_exit_codes: Vec::new(),
-                on_no_restart: crate::config::NoRestartAction::Hold,
-                depends_on: Vec::new(),
-                stop_timeout_secs: 10,
-                wait_for_files: Vec::new(),
-                golden: Vec::new(),
-                startup_delay_secs: 0,
-                ready_probe: None,
-                liveness: None,
-                capture_stdout: true,
-                capture_stderr: true,
-                ui: None,
-            }
-        };
-
-        // The command path needs to be relative to rootfs if it's an absolute path
-        let resolved_command = if command.starts_with('/') {
-            current_rootfs
-                .join(command.strip_prefix('/').unwrap())
-                .to_string_lossy()
-                .to_string()
-        } else {
-            command
-        };
-
-        updated_config.command = resolved_command;
-        updated_config.args = args;
-        updated_config.working_dir = Some(actual_working_dir);
-
-        // Merge image env with any explicit env from config (config takes priority)
-        let mut merged_env = env;
-        for (k, v) in &updated_config.env {
-            merged_env.insert(k.clone(), v.clone());
-        }
-        updated_config.env = merged_env;
+        let updated_config = image_process_config(
+            original,
+            process_name,
+            &current_rootfs,
+            &cmd,
+            &env,
+            working_dir.as_deref(),
+        )?;
 
         self.supervisor
             .update_process_config(process_name, updated_config)
@@ -385,6 +403,15 @@ impl Updater {
         }
 
         Ok(())
+    }
+
+    /// Start an image process from its existing rootfs, as the last pivot
+    /// left it.
+    async fn start_recorded(&self, name: &str, rootfs: &Path, rec: &RootfsRecord) -> anyhow::Result<()> {
+        let original = self.process_configs.iter().find(|p| p.name == name);
+        let cfg = image_process_config(original, name, rootfs, &rec.cmd, &rec.env, rec.working_dir.as_deref())?;
+        self.supervisor.update_process_config(name, cfg).await?;
+        self.supervisor.start_process(name).await
     }
 
     /// Force immediate update check + pull + pivot for a single process.
@@ -460,6 +487,7 @@ impl Updater {
             )
             .await;
 
+        let record_parts = (cmd.clone(), env.clone(), working_dir.clone());
         if let Err(e) = self.pivot(process_name, new_rootfs, cmd, env, working_dir).await {
             error!(process = %process_name, error = %e, "pivot failed");
             let mut state = self.state.write().await;
@@ -483,6 +511,18 @@ impl Updater {
         } else {
             None
         };
+
+        let (cmd, env, working_dir) = record_parts;
+        let record = RootfsRecord {
+            image: image_ref_str.to_string(),
+            digest: new_digest.clone(),
+            cmd,
+            env,
+            working_dir,
+        };
+        if let Err(e) = record.write(&self.config.rootfs_dir, process_name) {
+            warn!(process = %process_name, error = %e, "could not record the rootfs — a stormd restart will pull it again");
+        }
 
         {
             let mut state = self.state.write().await;
@@ -553,38 +593,46 @@ impl Updater {
             "updater started"
         );
 
-        // Initial pull for processes that don't have a rootfs yet
+        // Start each process: from its rootfs and what the last pivot
+        // recorded, or by pulling when there is no rootfs (or no record of
+        // how to start it).
         for (name, image) in &tracked {
+            // Register the process in supervisor if not already there
+            if self.supervisor.get_status(name).await.is_err() {
+                if let Some(cfg) = self.process_configs.iter().find(|p| p.name == *name) {
+                    self.supervisor.register_process(cfg.clone()).await;
+                }
+            }
             let rootfs = self.config.rootfs_dir.join(name);
-            if !rootfs.exists() {
-                info!(process = %name, image = %image, "initial pull — no rootfs exists");
-
-                // Register the process in supervisor if not already there
-                let existing = self.supervisor.get_status(name).await;
-                if existing.is_err() {
-                    let orig = self.process_configs.iter().find(|p| p.name == *name);
-                    if let Some(cfg) = orig {
-                        self.supervisor.register_process(cfg.clone()).await;
+            let record = if rootfs.exists() { RootfsRecord::read(&self.config.rootfs_dir, name) } else { None };
+            match record {
+                Some(rec) => {
+                    info!(process = %name, digest = ?rec.digest, "starting from the existing rootfs");
+                    if let Err(e) = self.start_recorded(name, &rootfs, &rec).await {
+                        error!(process = %name, error = %e, "could not start from the existing rootfs — pulling again");
+                        if let Err(e) = self.do_update(name, image).await {
+                            error!(process = %name, error = %e, "pull failed");
+                        }
+                        continue;
+                    }
+                    let mut state = self.state.write().await;
+                    if let Some(s) = state.get_mut(name) {
+                        // The rootfs's own digest: the first poll pulls a
+                        // newer one if the registry has it.
+                        s.current_digest = rec.digest.clone();
+                        s.rootfs_path = Some(rootfs);
+                        s.last_check = Some(Utc::now());
                     }
                 }
-
-                if let Err(e) = self.do_update(name, image).await {
-                    error!(process = %name, error = %e, "initial pull failed");
-                }
-            } else {
-                info!(process = %name, "rootfs exists, skipping initial pull");
-                // Get current digest for comparison
-                let image_ref = ImageReference::parse(image).ok();
-                let digest = if let Some(ref img) = image_ref {
-                    self.check_digest(img).await
-                } else {
-                    None
-                };
-                let mut state = self.state.write().await;
-                if let Some(s) = state.get_mut(name) {
-                    s.current_digest = digest;
-                    s.rootfs_path = Some(rootfs);
-                    s.last_check = Some(Utc::now());
+                None => {
+                    if rootfs.exists() {
+                        info!(process = %name, image = %image, "rootfs has no record of how to start it — pulling again");
+                    } else {
+                        info!(process = %name, image = %image, "initial pull — no rootfs exists");
+                    }
+                    if let Err(e) = self.do_update(name, image).await {
+                        error!(process = %name, error = %e, "initial pull failed");
+                    }
                 }
             }
         }
@@ -660,5 +708,56 @@ impl Updater {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod record_tests {
+    use super::{image_process_config, RootfsRecord};
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_record_round_trips_and_a_missing_one_is_none() {
+        let dir = std::env::temp_dir().join(format!("stormd-record-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rec = RootfsRecord {
+            image: "registry.g8.lo/app:latest".into(),
+            digest: Some("sha256:abc".into()),
+            cmd: vec!["/usr/bin/app".into(), "--serve".into()],
+            env: HashMap::from([("A".to_string(), "1".to_string())]),
+            working_dir: Some(PathBuf::from("/srv")),
+        };
+        rec.write(&dir, "app").unwrap();
+        let back = RootfsRecord::read(&dir, "app");
+        let none = RootfsRecord::read(&dir, "other");
+        std::fs::write(dir.join("bad.image.json"), b"{not json").unwrap();
+        let bad = RootfsRecord::read(&dir, "bad");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(back, Some(rec));
+        assert_eq!((none, bad), (None, None));
+    }
+
+    /// The same config a pivot builds: entrypoint and workdir inside the
+    /// rootfs, config env over image env, the config's other fields kept.
+    #[test]
+    fn the_config_runs_inside_the_rootfs() {
+        let orig: crate::config::ProcessConfig = toml::from_str(
+            "name = \"app\"\ncommand = \"\"\nimage = \"r/app:1\"\nenv = { A = \"config\" }\nrestart_delay_secs = 7\n",
+        )
+        .unwrap();
+        let env = HashMap::from([("A".to_string(), "image".to_string()), ("B".to_string(), "image".to_string())]);
+        let root = Path::new("/data/rootfs/app");
+        let cmd = ["/usr/bin/app".to_string(), "--serve".to_string()];
+        let c = image_process_config(Some(&orig), "app", root, &cmd, &env, Some(Path::new("/srv"))).unwrap();
+        assert_eq!(c.command, "/data/rootfs/app/usr/bin/app");
+        assert_eq!(c.args, vec!["--serve"]);
+        assert_eq!(c.working_dir, Some(PathBuf::from("/data/rootfs/app/srv")));
+        assert_eq!((c.env["A"].as_str(), c.env["B"].as_str()), ("config", "image"));
+        assert_eq!(c.restart_delay_secs, 7);
+
+        let c = image_process_config(None, "app", root, &["app".to_string()], &HashMap::new(), None).unwrap();
+        assert_eq!((c.command.as_str(), c.working_dir), ("app", Some(root.to_path_buf())));
+        assert!(image_process_config(None, "app", root, &[], &HashMap::new(), None).is_err(), "no entrypoint");
     }
 }
