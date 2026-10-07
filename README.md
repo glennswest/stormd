@@ -921,7 +921,7 @@ presents what the config says.
 engine's token (a `mount sbrun /run/stormblock ro` stanza, as sbregistry
 has), reach to the engine on `:9090`, and stormd running as root with
 `CAP_SYS_ADMIN`/`CAP_MKNOD`: stormdbase containers have both today, since
-stormpump drops no capabilities (stormpump#<n>). Only the local ublk transport
+stormpump drops no capabilities, and boot.d services keep them under the decided default (stormpump#47). Only the local ublk transport
 is used; an NVMe-TCP answer is an error. Processes owned by the image updater
 are not given goldens.
 

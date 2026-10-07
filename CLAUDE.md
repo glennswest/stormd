@@ -382,11 +382,17 @@ namespace, a tmpfs `/dev` without the ublk node — so stormd mknods it from
 - Engine client + host ops (mknod/mount/umount/chown) behind a trait; unit
   tests against an in-process engine stand-in and a recording fake. The
   real mount path needs root + a node engine: not testable in sc-build.
-- [ ] config + validation; goldens.rs (client, host ops, present/release)
-- [ ] supervisor hook (first start, shutdown), swap; API routes
-- [ ] unit tests; README section, example.toml, changelog
-- [ ] issues: stormpump (document that stormdbase containers keep
-      CAP_SYS_ADMIN/MKNOD, which this needs); sc-build (blocked, #541)
+- [x] config + validation; goldens.rs (client, host ops, present/release)
+- [x] supervisor hook (first start, shutdown), swap; API routes
+- [x] unit tests (goldens::tests against an engine stand-in + recording
+      host, config::tests::goldens_are_validated); README § Goldens,
+      example.toml, changelog
+- [x] capabilities: noted on stormpump#47 (boot.d services keep theirs)
+- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`,
+      stormcentral#541). Not testable in sc-build at all: the real
+      mknod/mount/ublk path needs root and a node engine. Real check = a
+      stormcos service with a golden (minismbd), after a release carries it
+- [ ] then: tell minismbd#7 / stormipmi#20 the config shape and paths
 
 **Issue #43 — record a stormd input golden at head (2026-10-07): waiting on
 the owner.** stormcentral now lists stormd as an `input` golden
