@@ -330,3 +330,263 @@ impl Goldens {
         v
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Goldens, Host};
+    use crate::config::{GoldenMount, GoldensConfig};
+    use axum::extract::{Path as AxPath, RawQuery, State};
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::{get, post};
+    use axum::{Json, Router};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    /// A stand-in for the stormblock engine: two goldens, ublk attaches, and
+    /// a log of what it was asked.
+    #[derive(Default)]
+    struct Engine {
+        log: Mutex<Vec<String>>,
+        /// Refuse this many attaches with a 409 first.
+        refuse: AtomicU32,
+    }
+
+    async fn serve(engine: Arc<Engine>) -> String {
+        async fn list(State(e): State<Arc<Engine>>, q: RawQuery, h: HeaderMap) -> Json<serde_json::Value> {
+            e.log.lock().unwrap().push(format!("GET volumes?{} auth={:?}", q.0.unwrap_or_default(), h.get("authorization")));
+            Json(serde_json::json!({ "items": [
+                { "id": "v-a", "name": "golden-a" },
+                { "id": "v-b", "name": "golden-b" },
+            ], "count": 2, "generation": 1 }))
+        }
+        async fn attach(
+            State(e): State<Arc<Engine>>,
+            AxPath(id): AxPath<String>,
+            Json(body): Json<serde_json::Value>,
+        ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+            e.log.lock().unwrap().push(format!("POST {id} {body}"));
+            if e.refuse.load(Ordering::SeqCst) > 0 {
+                e.refuse.fetch_sub(1, Ordering::SeqCst);
+                return Err((StatusCode::CONFLICT, "busy".into()));
+            }
+            let dev = if id == "v-a" { "/dev/ublkb1" } else { "/dev/ublkb2" };
+            Ok(Json(serde_json::json!({ "transport": "ublk", "device_hint": dev })))
+        }
+        async fn detach(State(e): State<Arc<Engine>>, AxPath(id): AxPath<String>, q: RawQuery) -> StatusCode {
+            e.log.lock().unwrap().push(format!("DELETE {id}?{}", q.0.unwrap_or_default()));
+            StatusCode::OK
+        }
+        let app = Router::new()
+            .route("/api/v1/volumes", get(list))
+            .route("/api/v1/volumes/{id}/attach", post(attach).delete(detach))
+            .with_state(engine);
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        url
+    }
+
+    /// Records what would be done to the filesystem.
+    #[derive(Default)]
+    struct FakeHost {
+        ops: Mutex<Vec<String>>,
+        fail_mount: std::sync::atomic::AtomicBool,
+    }
+
+    impl Host for FakeHost {
+        fn devno(&self, device: &Path) -> std::io::Result<u64> {
+            self.ops.lock().unwrap().push(format!("devno {}", device.display()));
+            Ok(259 * 256 + 1)
+        }
+        fn make_node(&self, path: &Path, devno: u64, mode: u32, owner: Option<(u32, u32)>) -> std::io::Result<()> {
+            self.ops.lock().unwrap().push(format!("mknod {} {devno} {mode:o} {owner:?}", path.display()));
+            Ok(())
+        }
+        fn mkdir_p(&self, path: &Path) -> std::io::Result<()> {
+            self.ops.lock().unwrap().push(format!("mkdir {}", path.display()));
+            Ok(())
+        }
+        fn mount_ro(&self, device: &Path, path: &Path, fstype: &str) -> std::io::Result<()> {
+            if self.fail_mount.load(Ordering::SeqCst) {
+                return Err(std::io::Error::other("mount refused"));
+            }
+            self.ops.lock().unwrap().push(format!("mount ro {} {} {fstype}", device.display(), path.display()));
+            Ok(())
+        }
+        fn unmount(&self, path: &Path) -> std::io::Result<()> {
+            self.ops.lock().unwrap().push(format!("umount {}", path.display()));
+            Ok(())
+        }
+        fn remove(&self, path: &Path) -> std::io::Result<()> {
+            self.ops.lock().unwrap().push(format!("rm {}", path.display()));
+            Ok(())
+        }
+    }
+
+    fn golden(toml_text: &str) -> GoldenMount {
+        toml::from_str(toml_text).unwrap()
+    }
+
+    async fn setup(token: Option<&str>) -> (Arc<Engine>, Arc<FakeHost>, Goldens, PathBuf) {
+        let engine = Arc::new(Engine::default());
+        let url = serve(engine.clone()).await;
+        let dir = std::env::temp_dir().join(format!("stormd-goldens-{}-{}", std::process::id(), rand_suffix()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let token_file = dir.join("token");
+        if let Some(t) = token {
+            std::fs::write(&token_file, format!("{t}\n")).unwrap();
+        }
+        let host = Arc::new(FakeHost::default());
+        let cfg = GoldensConfig { engine_url: url, token_file, dir: PathBuf::from("/goldens") };
+        let g = Goldens::new(cfg, "minismbd".into(), host.clone());
+        (engine, host, g, dir)
+    }
+
+    fn rand_suffix() -> u32 {
+        static N: AtomicU32 = AtomicU32::new(0);
+        N.fetch_add(1, Ordering::SeqCst)
+    }
+
+    fn log(e: &Engine) -> Vec<String> {
+        e.log.lock().unwrap().clone()
+    }
+
+    fn ops(h: &FakeHost) -> Vec<String> {
+        h.ops.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn a_filesystem_golden_is_attached_ro_and_mounted_read_only() {
+        let (engine, host, g, dir) = setup(Some("sekret")).await;
+        let fs = golden("name = \"nic-drivers\"\ngolden = \"golden-a\"\ncontent = \"filesystem\"\n");
+        let p = g.present("minismbd", &fs).await.unwrap();
+        assert_eq!((p.volume_id.as_str(), p.device.as_str(), p.path.as_str()), ("v-a", "/dev/ublkb1", "/goldens/nic-drivers"));
+
+        let l = log(&engine);
+        assert!(l[0].starts_with("GET volumes?kind=golden") && l[0].contains("Bearer sekret"), "{l:?}");
+        let attach: serde_json::Value = serde_json::from_str(l[1].strip_prefix("POST v-a ").unwrap()).unwrap();
+        assert_eq!(attach, serde_json::json!({ "mode": "ro", "transport": "ublk", "holder": "stormd/minismbd/minismbd/nic-drivers" }));
+        assert_eq!(
+            ops(&host),
+            vec![
+                "devno /dev/ublkb1".to_string(),
+                format!("mknod /dev/ublkb1 {} 400 None", 259 * 256 + 1),
+                "mkdir /goldens/nic-drivers".into(),
+                "mount ro /dev/ublkb1 /goldens/nic-drivers ext4".into(),
+            ]
+        );
+        assert_eq!(g.list().await.len(), 1);
+
+        g.release("minismbd", "nic-drivers").await.unwrap();
+        assert_eq!(ops(&host).last().unwrap(), "umount /goldens/nic-drivers");
+        assert_eq!(log(&engine).last().unwrap(), "DELETE v-a?holder=stormd%2Fminismbd%2Fminismbd%2Fnic-drivers");
+        assert!(g.list().await.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn an_image_golden_is_a_device_node_the_service_can_read() {
+        let (engine, host, g, dir) = setup(None).await;
+        let img = golden(
+            "name = \"boot\"\nvolume_id = \"v-b\"\ncontent = \"image\"\npath = \"/srv/boot.img\"\n\
+             owner = \"65532:65532\"\nmode = 0o440\nsize_bytes = 123456\n",
+        );
+        let p = g.present("minismbd", &img).await.unwrap();
+        assert_eq!(p.size_bytes, Some(123456));
+        let l = log(&engine);
+        assert_eq!(l.len(), 1, "a volume_id needs no lookup: {l:?}");
+        assert!(!l[0].contains("authorization"));
+        assert_eq!(
+            ops(&host),
+            vec!["devno /dev/ublkb2".to_string(), format!("mknod /srv/boot.img {} 440 Some((65532, 65532))", 259 * 256 + 1)]
+        );
+        g.release("minismbd", "boot").await.unwrap();
+        assert_eq!(ops(&host).last().unwrap(), "rm /srv/boot.img");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_failed_mount_releases_the_attach_and_an_unknown_name_is_an_error() {
+        let (engine, host, g, dir) = setup(None).await;
+        host.fail_mount.store(true, Ordering::SeqCst);
+        let fs = golden("name = \"d\"\ngolden = \"golden-a\"\ncontent = \"filesystem\"\n");
+        assert!(g.present("p", &fs).await.is_err());
+        assert!(log(&engine).last().unwrap().starts_with("DELETE v-a"), "{:?}", log(&engine));
+        assert!(g.list().await.is_empty());
+
+        let missing = golden("name = \"x\"\ngolden = \"golden-zzz\"\ncontent = \"image\"\n");
+        let e = g.present("p", &missing).await.unwrap_err().to_string();
+        assert!(e.contains("no golden named golden-zzz"), "{e}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn present_all_retries_until_the_engine_attaches_and_gives_up_on_shutdown() {
+        let (engine, _host, g, dir) = setup(None).await;
+        engine.refuse.store(1, Ordering::SeqCst);
+        let fs = golden("name = \"d\"\ngolden = \"golden-a\"\ncontent = \"filesystem\"\n");
+        let t = std::time::Instant::now();
+        assert!(g.present_all("p", std::slice::from_ref(&fs), || false).await);
+        assert!(t.elapsed() >= std::time::Duration::from_secs(2), "no retry delay");
+        assert_eq!(g.list().await.len(), 1);
+
+        engine.refuse.store(100, Ordering::SeqCst);
+        let other = golden("name = \"e\"\ngolden = \"golden-b\"\ncontent = \"image\"\n");
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let gave_up = tokio::join!(g.present_all("p", std::slice::from_ref(&other), || stop.load(Ordering::SeqCst)), async {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            stop.store(true, Ordering::SeqCst);
+        })
+        .0;
+        assert!(!gave_up, "present_all should give up once told to stop");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A swap stops the process, releases the old golden, presents the new
+    /// one and starts the process again.
+    #[tokio::test]
+    async fn a_swap_restarts_the_process_on_the_new_golden() {
+        use crate::supervisor::{ProcessState, Supervisor};
+        let (engine, host, g, dir) = setup(None).await;
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let slog = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        let sup = Arc::new(Supervisor::new(slog, bus));
+        let g = Arc::new(g);
+        sup.set_goldens(g.clone());
+        let proc: crate::config::ProcessConfig = toml::from_str(
+            "name = \"smb\"\ncommand = \"/bin/sleep\"\nargs = [\"30\"]\n\
+             [[golden]]\nname = \"boot\"\ngolden = \"golden-a\"\ncontent = \"filesystem\"\n",
+        )
+        .unwrap();
+        sup.start_all(&[proc]).await.unwrap();
+        let before = sup.get_status("smb").await.unwrap();
+        assert_eq!(before.state, ProcessState::Running);
+        assert_eq!(g.list().await[0].volume_id, "v-a", "presented before the first start");
+
+        let p = sup.swap_golden("smb", "boot", Some("golden-b".into()), None).await.unwrap();
+        let after = sup.get_status("smb").await.unwrap();
+        let l = log(&engine);
+        let o = ops(&host);
+        sup.stop_all().await;
+        g.release_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!((p.volume_id.as_str(), p.device.as_str()), ("v-b", "/dev/ublkb2"));
+        assert_eq!(after.state, ProcessState::Running);
+        assert_ne!(after.pid, before.pid, "the process was not restarted");
+        let del = l.iter().position(|x| x.starts_with("DELETE v-a")).expect("old golden not detached");
+        let att = l.iter().position(|x| x.starts_with("POST v-b")).expect("new golden not attached");
+        assert!(del < att, "attached the new one before releasing the old: {l:?}");
+        let um = o.iter().position(|x| x == "umount /goldens/boot").unwrap();
+        let mo = o.iter().rposition(|x| x == "mount ro /dev/ublkb2 /goldens/boot ext4").unwrap();
+        assert!(um < mo, "{o:?}");
+    }
+}
