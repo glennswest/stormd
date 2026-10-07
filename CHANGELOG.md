@@ -4,6 +4,13 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-07
+- **fix:** stop, restart, the updater's pivot and shutdown send SIGTERM,
+  wait up to the process's new `stop_timeout_secs` (default 10; 0 = SIGKILL
+  at once), then SIGKILL, instead of SIGKILL outright, and record the exit
+  code (#9). Shutdown stops processes in reverse dependency order, a tier at
+  a time, waiting for each. Restart and the updater wait for the old run to
+  be gone instead of a fixed 500 ms / 5 s. The shutdown watchdog allows the
+  processes' stop budget plus 20 s, never less than 30 s.
 - **fix:** a liveness task ends with its run, and `liveness_failures` resets
   at every spawn (#45, P0). A task asleep in `initial_delay_secs` across a
   crash and restart woke on the new run and probed it at once with the old

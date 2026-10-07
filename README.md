@@ -257,11 +257,13 @@ failure — the same whether it is PID 1 or an ordinary process under a
 supervisor or a test harness. From that moment nothing new starts: the start
 order stops where it is (including a process still waiting on a `depends_on`
 that will never be satisfied), restarts stand down, and API starts are
-refused. It stops every process (see below — SIGKILL) and waits up to 10 s
-for them to go, flushes logs, runs the backup if the container failed and
+refused. It stops every process in reverse dependency order (see below —
+SIGTERM, `stop_timeout_secs`, then SIGKILL), waiting for each tier to go before
+the next, flushes logs, runs the backup if the container failed and
 `[backup] on_failure` is set, and exits with the API-requested code, else 1 if
-the container failed, else 0. If shutdown has not finished 30 s after it
-began, stormd exits 1 regardless. A test that starts stormd should still use
+the container failed, else 0. If shutdown has not finished by then, stormd
+exits 1 regardless: the deadline is every tier's longest `stop_timeout_secs`
+plus 2 s, summed, plus 20 s, and never less than 30 s. A test that starts stormd should still use
 `timeout -k 5 N`, so a regression here cannot hang a build. An exit handled
 after shutdown began is recorded as a stop, not a crash; under something that
 signals the whole process group (`timeout`, a terminal's Ctrl-C) a child can
@@ -356,6 +358,7 @@ spawned.
 | `no_restart_exit_codes` | `[]` | exit codes that mean "a restart will not fix this" |
 | `on_no_restart` | `"hold"` | `hold` \| `fail` |
 | `depends_on` | `[]` | names of processes to wait for |
+| `stop_timeout_secs` | `10` | on a stop: SIGTERM, wait this long, then SIGKILL; `0` = SIGKILL at once |
 | `startup_delay_secs` | `0` | sleep before the first spawn |
 | `ready_probe` | — | inline table, below |
 | `[process.liveness]` | — | below |
@@ -502,10 +505,15 @@ A later process in the list waits behind an earlier one that is still waiting.
 stdin, stdout and stderr are pipes: output goes to the log, stdin is reachable
 through the debug API.
 
-**Stopping is SIGKILL.** A stop or restart (API, shell, stormsh, UI) and
-shutdown all kill the process outright — there is no SIGTERM and no grace
-period today, so a process gets no chance to flush or deregister. A process
-that must shut down cleanly has to be told another way first.
+**Stopping is SIGTERM, then SIGKILL.** A stop or restart (API, shell, stormsh,
+UI), the updater's pivot and shutdown all send the process SIGTERM, wait up to
+its `stop_timeout_secs` (default 10) for it to exit, then SIGKILL it (#9). `0`
+is SIGKILL at once. Only the process itself is signalled, not its children.
+The exit code is recorded when it exits with one. A requested stop is never
+restarted. A restart and the updater wait for the old run to be gone before
+starting the new one. At shutdown, processes stop in reverse dependency order:
+a process is stopped, and waited for, before anything it `depends_on` (the
+apiserver before fastetcd).
 
 | Exit | Policy | Result |
 |---|---|---|

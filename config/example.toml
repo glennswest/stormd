@@ -100,6 +100,7 @@ restart_window_secs = 3600
 no_restart_exit_codes = [78]
 on_no_restart = "hold"          # hold (default) | fail
 depends_on = ["db"]             # waits until db is running and its ready_probe passed
+stop_timeout_secs = 15          # on a stop: SIGTERM, up to 15 s, then SIGKILL (default 10)
 # startup_delay_secs = 0
 # working_dir = "/app"
 

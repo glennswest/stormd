@@ -105,8 +105,9 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 - **`env_default`** — set only when stormd did not inherit the key, so a
   node's env.d overrides the golden's default; `env` wins over both.
 - **Shutdown** (SIGTERM, SIGINT, API, container failure) stops the start
-  order, stands restarts down, kills every process and waits up to 10 s, and
-  exits within 30 s whatever stalls. Each exit is handled on its own task.
+  order, stands restarts down, and stops every process, dependents first:
+  SIGTERM, `stop_timeout_secs` (default 10), then SIGKILL (#9). Bounded
+  whatever stalls. Each exit is handled on its own task.
 
 ---
 
@@ -205,8 +206,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
   - **#32** — done in stormd (TLS, client certificates, token file,
     `/metrics` behind auth); it protects a node once stormcos wires the
     stormcert pair, node CA and token into each container's config.
-  - **#9** — stop, restart and shutdown are **SIGKILL**, with no SIGTERM or
-    grace period.
   - **#12** — container logs reach the multicast group **without stormcast's
     limiter**; a looping process floods it. And `group = "off"` still sends
     (#27).
@@ -236,8 +235,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 From the open issues. **None of this works today:**
 
 - Applets that exit non-zero on error (#31).
-- Graceful stop: SIGTERM, a per-process timeout, then SIGKILL, with shutdown
-  going in reverse dependency order (#9).
 - Rate limiting and repeat-collapsing, per process, on the multicast group
   (#12); `group = "off"` meaning no emitter (#27); stormcast bumped past the
   multibyte truncation panic (#28).
