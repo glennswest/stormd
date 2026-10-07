@@ -360,14 +360,21 @@ Cause: the task stops only when it reads `state != Running`, so one asleep in
 run and probes it at once; `liveness_failures` is never reset at spawn, so
 the next run starts at the old count. Fix (master's "stop the stale-task bug
 now"; removing liveness kills altogether waits on the owner's yes/no on #45):
-- [ ] `run` generation on each spawn; reset `liveness_failures` at spawn
-- [ ] liveness task spawned per run, aborted by the run's monitor task when
+- [x] `run` generation on each spawn; reset `liveness_failures` at spawn
+- [x] liveness task spawned per run, aborted by the run's monitor task when
       the child exits or is killed; every check and the SIGUSR1/SIGKILL act
       only if the run is still the task's (signal the run's own pid)
-- [ ] live-task count per process (drop guard) for the test
-- [ ] test: run 1 crashes inside its initial delay, run 2 is not probed
-      before its own delay; then the probe passes, run 2 left running; one
-      task after a second restart. README, changelog; sc-build
+- [x] live-task count per process (drop guard) for the test
+- [x] test `liveness_tests::a_liveness_task_ends_with_its_run`; README,
+      changelog (commits ec…/6b51d5b)
+- [ ] sc-build: NOT YET RUN. Three tries on 2026-10-07 were each cancelled
+      while queued for the one build VM (other projects' queued jobs were
+      cancelled the same way). The plan for the build: `cargo build && cargo
+      test -p stormd`, then the new test against the pre-fix supervisor
+      (HEAD~2 of 6b51d5b) to show it catches the bug
+- [ ] then: comment on #45; removal of liveness kills waits on the owner
+- Found on the way: #46 (a restarted process with a ready_probe is never
+  ready again)
 
  (2026-10-06), PARKED behind
 #45 (P0, 2026-10-07).** Code, medium test and docs pushed (see checkboxes);
