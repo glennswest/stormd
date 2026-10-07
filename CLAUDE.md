@@ -354,6 +354,18 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #38 — `[process] wait_for_files` (2026-10-07), in progress.** As the
+issue specifies: spawn only once every listed file exists, polled every
+250 ms, one log line naming what is missing (and one when they appear), no
+restart or cool-off counted. Decisions from the code: in the start order,
+after `depends_on` and before `startup_delay_secs`, like `depends_on` (a later
+process waits behind it); ends when shutdown begins; restarts and API starts
+do not wait (the files existed when it first started); paths must be
+absolute (validated), `${NODE_IP}`/`${NODE_NAME}` expanded.
+- [ ] config + validation + supervisor wait; unit tests (pure missing-files
+      helper; start order holds until the file appears, no restart counted)
+- [ ] medium suite check; README, example.toml, changelog; sc-build
+
 **Issue #9 — stop is SIGTERM, then SIGKILL after a grace (2026-10-07), in progress.**
 The issue's proposal, no owner decision needed. Decisions from the code:
 - `[process] stop_timeout_secs` (default 10; 0 = SIGKILL at once). The run's
