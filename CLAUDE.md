@@ -417,7 +417,8 @@ fails a golden with `/bin/ps` (stormcos#66), so adding one would break it.
 - [x] medium-suite check `unknown-argv0-refused`: argv[0] `ps` → exit 127,
       the one-shot never ran
 - [x] README (Running, stormdbase note, medium row), presentation, changelog
-- [ ] sc-build + live check verified; close #11
+- [ ] sc-build + live check verified; close #11 — blocked 2026-10-07:
+      `409 build VMs are off` (stormcentral#541); proposed after it
 
 **Issue #37 — `[process] env_default` (2026-10-06) ✅ done (c34b849).** For
 stormcos#282 / stormpump#88 env.d overrides: `env` overrides the inherited
