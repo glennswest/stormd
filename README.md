@@ -147,7 +147,7 @@ dies in the pod.
 | suite | budget | covers |
 |---|---|---|
 | `short` | < 2 min | API up; a dependent waits for a tcp ready probe and for a one-shot to finish; a crash is restarted; stdout and stderr reach the logs API; SIGTERM exits 0 with no process left behind; the node's own stormds (ports 9081–9085) answer `/api/v1/health` — a skip where none do |
-| `medium` | < 30 min | a failed one-shot holds its dependents, and SIGTERM still stops stormd; `no_restart_exit_codes` hold and fail; `on_failure = "fail"`; `max_restarts`; `on_exit = "restart"`; liveness restarts; API stop/start/restart and shutdown with an exit code; bearer-token auth; `/metrics` (with the worker's own RSS, CPU and fds); the component feed; cron; a config that does not parse exits 1; run as `ps` (not an applet), exits 127 and spawns nothing; `wait_for_files` holds the start until the file exists |
+| `medium` | < 30 min | a failed one-shot holds its dependents, and SIGTERM still stops stormd; `no_restart_exit_codes` hold and fail; `on_failure = "fail"`; `max_restarts`; `on_exit = "restart"`; liveness restarts; API stop/start/restart and shutdown with an exit code; bearer-token auth; `/metrics` (with the worker's own RSS, CPU and fds); the component feed; cron; a config that does not parse exits 1; run as `ps` (not an applet), exits 127 and spawns nothing; `wait_for_files` holds the start until the file exists; a taken API port exits 1 with nothing started |
 | `long` | the night window | waves of processes sized from the pod's own CPU, memory and pid limits (mostly long-running, some crash-once, one-shots with dependents), started, settled and stopped with SIGTERM; one resident stormd has its processes restarted through the API every wave. Per wave: settle time, stop time, leftover processes, the resident's RSS and fds. A wave twice as slow as the first of its size, a leftover, or growing residue fails |
 
 Build it on the build box (stormd needs `stormpull` over `ssh://`, so the
@@ -249,12 +249,12 @@ anything (#11).
 
 Startup, in order: install applet symlinks into `/bin`, `/usr/bin`, `/sbin`,
 `/usr/sbin` (skipping names that exist; errors ignored) → load and validate the
-config (exit 1 on error) → resolve the cloud ID → start logging → start cron
-and the updater → start processes → start the SSH server (in the background;
-a failed bind is logged and stormd carries on) → bind the API → reap zombies
-and set sysctls (Linux). If the API cannot bind, stormd exits 1 at
-once — **without stopping the processes the start order already spawned**,
-which keep running unsupervised (#23).
+config (exit 1 on error) → resolve the cloud ID → start logging → load the
+API's TLS pair and bind the API (exit 1 on either, **before anything is
+started**, #23) → start cron and the updater → start processes → start the
+SSH server (in the background; a failed bind is logged and stormd carries
+on) → serve the API → reap zombies and set sysctls (Linux). A port already
+taken (another stormd, a stale process) therefore leaves nothing running.
 
 It shuts down on SIGTERM, SIGINT, `POST /api/v1/shutdown`, or container
 failure — the same whether it is PID 1 or an ordinary process under a

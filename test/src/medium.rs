@@ -27,6 +27,7 @@ pub fn run(env: &Env, r: &mut Report) {
     r.run("bad-config-refused", || bad_config(env));
     r.run("unknown-argv0-refused", || unknown_argv0(env));
     r.run("wait-for-files", || wait_for_files(env));
+    r.run("api-port-taken", || api_port_taken(env));
     r.run("node-stormd", || crate::short::node_stormd(env));
 }
 
@@ -351,6 +352,35 @@ fn cron(env: &Env) -> Outcome {
             Err(e) => Outcome::Fail(e),
         }
     })
+}
+
+/// The API port already taken: stormd exits 1 before starting anything, not
+/// after (stormd#23 left the start order's processes running, orphaned).
+fn api_port_taken(env: &Env) -> Outcome {
+    let holder = match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(l) => l,
+        Err(e) => return Outcome::Infra(e.to_string()),
+    };
+    let port = holder.local_addr().map(|a| a.port()).unwrap_or(0);
+    let body = proc("oneshot", "\"touch-after\", \"0\", \"{dir}/ran\"", "on_exit = \"stop\"")
+        + &proc("resident", "\"sleep\"", "");
+    let opts = Opts { port: Some(port), ..Opts::default() };
+    let mut sd = match Stormd::start(env, "porttaken", &body, opts) {
+        Ok(s) => s,
+        Err(e) => return Outcome::Infra(e),
+    };
+    let exit = sd.wait_exit(S(10));
+    std::thread::sleep(S(1));
+    let ran = sd.dir.join("ran").exists();
+    let left = sd.leftover();
+    drop(holder);
+    match exit {
+        Some((s, _)) if s.code() == Some(1) && !ran && left.is_empty() => {
+            Outcome::Pass("port taken: exit 1, the one-shot never ran, nothing left running".into())
+        }
+        Some((s, _)) => Outcome::Fail(format!("exited {s} (want 1); one-shot ran: {ran}; left running: {left:?}")),
+        None => Outcome::Fail("still running with its API port taken".into()),
+    }
 }
 
 /// `wait_for_files`: held pending until the file exists, then started once,

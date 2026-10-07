@@ -31,6 +31,8 @@ pub struct Opts {
     pub token: Option<String>,
     /// Run stormd under this `argv[0]` instead of its own path (stormd#11).
     pub arg0: Option<String>,
+    /// Bind the API here instead of a free port (stormd#23: a taken one).
+    pub port: Option<u16>,
 }
 
 impl Stormd {
@@ -40,7 +42,10 @@ impl Stormd {
     pub fn start(env: &Env, label: &str, body: &str, opts: Opts) -> Result<Stormd, String> {
         let dir = env.instance_dir(label).map_err(|e| format!("cannot create {label} dir: {e}"))?;
         std::fs::create_dir_all(dir.join("pids")).map_err(|e| e.to_string())?;
-        let port = free_port()?;
+        let port = match opts.port {
+            Some(p) => p,
+            None => free_port()?,
+        };
         let me = env.me.display().to_string();
         let auth = opts.token.as_ref().map(|t| format!("auth_token = \"{t}\"\n")).unwrap_or_default();
         let config = format!(

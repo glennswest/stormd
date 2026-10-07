@@ -354,6 +354,15 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #23 — bind the API before anything is spawned (2026-10-07), in
+progress.** The issue's first resolution: the bind moves up next to the TLS
+load, before cron, the updater and the start order, so a taken port stops
+stormd with nothing running. Medium test: a port already held → exit 1, the
+one-shot never ran.
+- [x] main.rs; medium `api-port-taken`; README startup order, presentation,
+      changelog
+- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`, stormcentral#541)
+
 **Issue #12 — stormcast's limiter on the group (2026-10-07), in progress.**
 Pinned stormcast 9244121 already has `Limiter`/`Verdict`/`RATE_PER_SEC`
 (200)/`BURST` (2000) — no `cargo update`. One `Limiter` per process name in

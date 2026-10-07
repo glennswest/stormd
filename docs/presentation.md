@@ -179,8 +179,8 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
     limits sized to the 64 MiB log volume;
   - it seals a deterministic tar.
 - **Start.** The container's argv is `/stormd`. It loads the config
-  (exit 1 if invalid), starts the processes, and binds the API (a failed
-  bind exits without stopping them — #23).
+  (exit 1 if invalid), binds the API (a taken port exits 1 before anything
+  starts — #23), and starts the processes.
 - **Update.** stormcos builds goldens with stormd at main and rebuilds the
   goldens that carry it when it composes a release; stormd never requests
   one. The authority is stormcos `docs/goldens.md`.
@@ -219,7 +219,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
     the node (decision pending in stormimds#9).
   - **#8** — the updater does not start an image process whose rootfs
     already exists.
-  - **#23** — a failed API bind leaves what stormd spawned running.
   - **#24** — the test container does not yet build the way stormcentral's
     runner expects.
   - **#3** — refuse to spawn with an unexpanded `${NODE_IP}`.
@@ -243,8 +242,6 @@ From the open issues. **None of this works today:**
 - The last stderr lines of a failed process echoed to stormd's own output
   (#29).
 - Refusing an unexpanded `${NODE_IP}` (#3).
-- Binding the API before starting processes, or stopping them if it fails
-  (#23).
 - Waking dependents on a state change instead of a 250 ms poll (#25), and
   not logging a crash for a child that died of the shutdown signal (#26).
 - The test container built as one image from the repo root (#24).

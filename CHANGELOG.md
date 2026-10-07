@@ -4,6 +4,11 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-07
+- **fix:** the API is bound before anything is started (#23). A taken port
+  used to exit 1 after the start order, cron and the updater had begun,
+  leaving their processes running unsupervised (a second fastetcd or
+  apiserver). Now it exits 1 with nothing started. Medium suite:
+  `api-port-taken`.
 - **fix(stormlog):** lines reach the fleet's multicast group through
   stormcast's limiter, one per process, as stormpump does on the host (#12).
   Repeats collapse to `last message repeated N time(s)`, and over 200 lines/s

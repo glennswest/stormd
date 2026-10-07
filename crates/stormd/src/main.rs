@@ -169,6 +169,21 @@ async fn main() {
         }
     };
 
+    // Bind the API before anything is spawned (stormd#23). The bind needs
+    // nothing the processes provide, and it used to come after the start
+    // order: a port already taken (another stormd, a stale process) was a
+    // bare exit that left every process started meanwhile running,
+    // unsupervised — a second fastetcd or apiserver. Requests wait in the
+    // backlog until the server is up.
+    let bind_addr = config.api.bind.clone();
+    let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            error!(error = %e, addr = %bind_addr, "failed to bind API server — nothing started");
+            std::process::exit(1);
+        }
+    };
+
     // Resolve cloud_id (config → env → persisted file → generate)
     let cloud_id = config::resolve_cloud_id(&config.general);
 
@@ -376,16 +391,6 @@ async fn main() {
     });
 
     let router = api::build_router(app_state);
-    let bind_addr = config.api.bind.clone();
-
-    let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            error!(error = %e, addr = %bind_addr, "failed to bind API server");
-            std::process::exit(1);
-        }
-    };
-
     info!(addr = %bind_addr, tls = api_tls.is_some(), "REST API listening");
     let api_server = async move {
         match api_tls {
