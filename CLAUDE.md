@@ -362,9 +362,12 @@ after `depends_on` and before `startup_delay_secs`, like `depends_on` (a later
 process waits behind it); ends when shutdown begins; restarts and API starts
 do not wait (the files existed when it first started); paths must be
 absolute (validated), `${NODE_IP}`/`${NODE_NAME}` expanded.
-- [ ] config + validation + supervisor wait; unit tests (pure missing-files
-      helper; start order holds until the file appears, no restart counted)
-- [ ] medium suite check; README, example.toml, changelog; sc-build
+- [x] config + validation + supervisor wait; unit tests
+      (`wait_for_files_tests`, `config::tests::wait_for_files_must_be_absolute`)
+- [x] medium `wait-for-files`; README, example.toml, presentation, changelog
+- [ ] sc-build — blocked 2026-10-07: `409 build VMs are off`
+      (stormcentral#541). Planned: `cargo build --workspace && cargo test -p
+      stormd`, medium suite; then close #38 and tell stormcos#300 the key
 
 **Issue #9 — stop is SIGTERM, then SIGKILL after a grace (2026-10-07), in progress.**
 The issue's proposal, no owner decision needed. Decisions from the code:
