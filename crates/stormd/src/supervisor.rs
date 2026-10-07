@@ -3,7 +3,7 @@ use crate::events::{EventBus, EventKind};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use stormlog::StormLog;
@@ -53,6 +53,11 @@ struct ManagedProcess {
     kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
     stdin_tx: Option<tokio::sync::mpsc::Sender<String>>,
     liveness_failures: u32,
+    /// Which run this is: bumped at every spawn. A liveness task belongs to
+    /// one run and acts only while it is still the current one (stormd#45).
+    run: u64,
+    /// Liveness tasks alive for this process — one at most, by construction.
+    liveness_tasks: Arc<AtomicUsize>,
     /// Has this process's `ready_probe` passed since it last started?
     ///
     /// Separate from `Running`, because they answer different questions. A
@@ -175,6 +180,8 @@ impl Supervisor {
                 kill_tx: None,
                 stdin_tx: None,
                 liveness_failures: 0,
+                run: 0,
+                liveness_tasks: Arc::new(AtomicUsize::new(0)),
                 ready: cfg.ready_probe.is_none(),
             }));
             self.processes.write().await.insert(cfg.name.clone(), proc);
@@ -311,12 +318,16 @@ impl Supervisor {
             anyhow::bail!("stormd is shutting down — not starting '{}'", name);
         }
 
-        let config = {
+        let (config, run, liveness_tasks) = {
             let mut proc = proc_arc.lock().await;
             proc.state = ProcessState::Starting;
             // A restarted process is not ready until it says so again.
             proc.ready = proc.config.ready_probe.is_none();
-            proc.config.clone()
+            // A new run, judged afresh: the last run's liveness failures are
+            // not this one's (stormd#45).
+            proc.run += 1;
+            proc.liveness_failures = 0;
+            (proc.config.clone(), proc.run, proc.liveness_tasks.clone())
         };
 
         // Fill in what only this node knows — its address above all. See
@@ -397,10 +408,33 @@ impl Supervisor {
             proc.kill_tx = Some(kill_tx);
         }
 
+        // Liveness, one task for this run, ended by the monitor below when
+        // the run ends (stormd#45).
+        //
+        // **A liveness task used to outlive its run.** It stopped only when it
+        // read `state != Running` — so one asleep in `initial_delay_secs`, or
+        // mid-probe, while its process crashed and was restarted, woke on the
+        // *new* run and probed it at once, before that run's own delay. Each
+        // such restart left one more, the failure count was never reset, and
+        // once a slow start had tripped the threshold every later run was
+        // killed seconds after it started: the control plane crash-looped.
+        let liveness_task = config.liveness.clone().map(|liveness| {
+            let supervisor = Arc::clone(self);
+            let name = config.name.clone();
+            let proc_arc = proc_arc.clone();
+            let guard = TaskCount::enter(liveness_tasks);
+            tokio::spawn(async move {
+                let _guard = guard;
+                supervisor.watch_liveness(&name, &proc_arc, run, pid, &liveness).await;
+            })
+        });
+
         let exit_tx = self.exit_tx.clone();
         let name_owned = config.name.clone();
         let proc_arc_clone = proc_arc.clone();
         tokio::spawn(async move {
+            // However the run ends, its liveness task ends with it.
+            let _liveness = AbortOnDrop(liveness_task);
             tokio::select! {
                 status = child.wait() => {
                     let exit_code = status.ok().and_then(|s| s.code());
@@ -417,67 +451,82 @@ impl Supervisor {
             }
         });
 
-        // Spawn liveness monitor if configured
-        if let Some(liveness) = &config.liveness {
-            let supervisor = Arc::clone(self);
-            let name = config.name.clone();
-            let liveness = liveness.clone();
-            let proc_arc_liveness = proc_arc.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(liveness.initial_delay_secs)).await;
-                loop {
-                    tokio::time::sleep(Duration::from_secs(liveness.interval_secs)).await;
-
-                    // Check if process is still running
-                    let state = {
-                        let proc = proc_arc_liveness.lock().await;
-                        proc.state.clone()
-                    };
-                    if state != ProcessState::Running {
-                        break;
-                    }
-
-                    let ok = execute_probe(&liveness).await;
-                    if ok {
-                        // Reset failure counter
-                        let mut proc = proc_arc_liveness.lock().await;
-                        proc.liveness_failures = 0;
-                    } else {
-                        let failures = {
-                            let mut proc = proc_arc_liveness.lock().await;
-                            proc.liveness_failures += 1;
-                            proc.liveness_failures
-                        };
-                        warn!(process=%name, failures, "liveness check failed");
-
-                        if failures >= liveness.failure_threshold {
-                            error!(process=%name, "liveness threshold exceeded — sending SIGUSR1");
-                            let _ = supervisor.signal_process(&name, "SIGUSR1").await;
-                            supervisor.event_bus.emit_simple(
-                                EventKind::LivenessCheckFailed,
-                                Some(name.clone()),
-                            ).await;
-
-                            // Wait 5 seconds for graceful death
-                            tokio::time::sleep(Duration::from_secs(5)).await;
-
-                            // Check if still running
-                            let still_running = {
-                                let proc = proc_arc_liveness.lock().await;
-                                proc.state == ProcessState::Running
-                            };
-                            if still_running {
-                                error!(process=%name, "still running after SIGUSR1 — SIGKILL");
-                                let _ = supervisor.signal_process(&name, "SIGKILL").await;
-                            }
-                            break;
-                        }
-                    }
-                }
-            });
-        }
-
         Ok(())
+    }
+
+    /// Probe one run's liveness until it fails `failure_threshold` times in
+    /// a row (SIGUSR1, then SIGKILL after 5 s) or the run is over. Acts on
+    /// `run` only: a check, a count or a signal for a run that is no longer
+    /// the current one is dropped, and the signal goes to the run's own pid.
+    async fn watch_liveness(
+        &self,
+        name: &str,
+        proc_arc: &Arc<Mutex<ManagedProcess>>,
+        run: u64,
+        pid: Option<u32>,
+        liveness: &LivenessProbe,
+    ) {
+        let current = |p: &ManagedProcess| p.run == run && p.state == ProcessState::Running;
+        tokio::time::sleep(Duration::from_secs(liveness.initial_delay_secs)).await;
+        loop {
+            tokio::time::sleep(Duration::from_secs(liveness.interval_secs)).await;
+            if !current(&*proc_arc.lock().await) {
+                return;
+            }
+
+            let ok = execute_probe(liveness).await;
+            let failures = {
+                let mut proc = proc_arc.lock().await;
+                if !current(&proc) {
+                    return;
+                }
+                if ok {
+                    proc.liveness_failures = 0;
+                    continue;
+                }
+                proc.liveness_failures += 1;
+                proc.liveness_failures
+            };
+            warn!(process = %name, failures, "liveness check failed");
+            if failures < liveness.failure_threshold {
+                continue;
+            }
+
+            error!(process = %name, "liveness threshold exceeded — sending SIGUSR1");
+            if !self.signal_run(proc_arc, run, pid, "SIGUSR1").await {
+                return;
+            }
+            self.event_bus
+                .emit_simple(EventKind::LivenessCheckFailed, Some(name.to_string()))
+                .await;
+
+            // Wait 5 seconds for graceful death
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            if current(&*proc_arc.lock().await) {
+                error!(process = %name, "still running after SIGUSR1 — SIGKILL");
+                let _ = self.signal_run(proc_arc, run, pid, "SIGKILL").await;
+            }
+            return;
+        }
+    }
+
+    /// Signal `pid` if it is still `run`'s process. False when the run has
+    /// ended (and nothing was sent).
+    async fn signal_run(
+        &self,
+        proc_arc: &Arc<Mutex<ManagedProcess>>,
+        run: u64,
+        pid: Option<u32>,
+        signal: &str,
+    ) -> bool {
+        let proc = proc_arc.lock().await;
+        let Some(pid) = pid.filter(|_| proc.run == run && proc.pid == pid) else {
+            return false;
+        };
+        if let Err(e) = send_signal(pid, signal) {
+            warn!(process = %proc.config.name, pid, signal, error = %e, "signal failed");
+        }
+        true
     }
 
     async fn handle_exit(self: &Arc<Self>, name: &str, exit_code: Option<i32>) {
@@ -913,6 +962,8 @@ impl Supervisor {
             kill_tx: None,
             stdin_tx: None,
             liveness_failures: 0,
+            run: 0,
+            liveness_tasks: Arc::new(AtomicUsize::new(0)),
             ready: config.ready_probe.is_none(),
         }));
         self.processes.write().await.insert(config.name.clone(), proc);
@@ -935,25 +986,55 @@ impl Supervisor {
 
         let proc = proc_arc.lock().await;
         let pid = proc.pid.ok_or_else(|| anyhow::anyhow!("process has no pid"))?;
+        send_signal(pid, signal)
+    }
+}
 
-        #[cfg(target_os = "linux")]
-        {
-            use nix::sys::signal::Signal;
-            let sig = match signal {
-                "SIGUSR1" | "USR1" => Signal::SIGUSR1,
-                "SIGKILL" | "KILL" => Signal::SIGKILL,
-                "SIGTERM" | "TERM" => Signal::SIGTERM,
-                _ => anyhow::bail!("unsupported signal: {}", signal),
-            };
-            nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), sig)?;
+fn send_signal(pid: u32, signal: &str) -> anyhow::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use nix::sys::signal::Signal;
+        let sig = match signal {
+            "SIGUSR1" | "USR1" => Signal::SIGUSR1,
+            "SIGKILL" | "KILL" => Signal::SIGKILL,
+            "SIGTERM" | "TERM" => Signal::SIGTERM,
+            _ => anyhow::bail!("unsupported signal: {}", signal),
+        };
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), sig)?;
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (pid, signal);
+    }
+
+    Ok(())
+}
+
+/// Counts a live task for as long as it is held (dropped on abort too).
+struct TaskCount(Arc<AtomicUsize>);
+
+impl TaskCount {
+    fn enter(count: Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        TaskCount(count)
+    }
+}
+
+impl Drop for TaskCount {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Aborts a task when dropped.
+struct AbortOnDrop(Option<tokio::task::JoinHandle<()>>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if let Some(h) = self.0.take() {
+            h.abort();
         }
-
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = (pid, signal);
-        }
-
-        Ok(())
     }
 }
 
@@ -1378,5 +1459,101 @@ mod exit_handler_tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert!(handled, "quick's exit was not handled within 2 s (slow is {:?})", slow.state);
         assert_eq!(slow.state, ProcessState::Restarting, "slow should still be in its cooloff");
+    }
+}
+
+#[cfg(test)]
+mod liveness_tests {
+    use super::{ProcessState, Supervisor};
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    async fn status(sup: &Supervisor, name: &str) -> (ProcessState, Option<u32>, u32, u32, usize) {
+        let s = sup.get_status(name).await.unwrap();
+        let tasks = {
+            let procs = sup.processes.read().await;
+            let p = procs.get(name).unwrap().lock().await;
+            p.liveness_tasks.load(Ordering::SeqCst)
+        };
+        (s.state, s.pid, s.restarts, s.liveness_failures, tasks)
+    }
+
+    /// stormd#45: run 1 crashes inside its `initial_delay_secs`, and its
+    /// liveness task must not wake on run 2 and probe it before run 2's own
+    /// delay. Once the probe passes, run 2 is left running; after a restart
+    /// there is still exactly one liveness task.
+    #[tokio::test]
+    async fn a_liveness_task_ends_with_its_run() {
+        let dir = std::env::temp_dir().join(format!("stormd-liveness-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        let sup = Arc::new(Supervisor::new(log, bus));
+        let h = sup.clone();
+        tokio::spawn(async move { h.run_exit_handler().await });
+
+        // A port nothing listens on yet: the probe fails until we listen.
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let once = dir.join("once");
+        // Run 1 exits 1 after 0.5 s; later runs stay up.
+        let proc: crate::config::ProcessConfig = toml::from_str(&format!(
+            "name = \"p\"\ncommand = \"/bin/sh\"\n\
+             args = [\"-c\", \"if [ -e {o} ]; then exec sleep 60; else touch {o}; sleep 0.5; exit 1; fi\"]\n\
+             restart_delay_secs = 1\n\
+             [liveness]\ntype = \"tcp\"\nport = {port}\ninitial_delay_secs = 3\ninterval_secs = 1\n\
+             failure_threshold = 1\ntimeout_secs = 1\n",
+            o = once.display()
+        ))
+        .unwrap();
+        let t0 = Instant::now();
+        sup.start_all(&[proc]).await.unwrap();
+
+        // Wait for run 2.
+        let mut run2 = None;
+        while t0.elapsed() < Duration::from_secs(5) {
+            let (state, pid, restarts, _, _) = status(&sup, "p").await;
+            if state == ProcessState::Running && restarts == 1 {
+                run2 = pid;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let run2_at = t0.elapsed();
+        let run2 = run2.expect("no second run within 5 s");
+
+        // Run 1's task would wake at 3 + 1 = 4 s; run 2's own first probe is
+        // 4 s after run 2 started. Look just before run 2's first probe.
+        tokio::time::sleep((run2_at + Duration::from_millis(3500)).saturating_sub(t0.elapsed())).await;
+        let (state, pid, restarts, failures, tasks) = status(&sup, "p").await;
+        assert!(t0.elapsed() > Duration::from_millis(4300), "test timing: looked too early");
+        assert_eq!((state.clone(), pid, restarts), (ProcessState::Running, Some(run2), 1),
+            "run 2 was probed (and killed) before its own initial delay");
+        assert_eq!(failures, 0, "run 2 inherited run 1's liveness failures");
+        assert_eq!(tasks, 1, "liveness tasks alive for run 2");
+
+        // The probe now passes: run 2 stays up past its delay and a few probes.
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+        tokio::spawn(async move { loop { let _ = listener.accept().await; } });
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        let (state, pid, restarts, failures, tasks) = status(&sup, "p").await;
+        assert_eq!((state, pid, restarts, failures, tasks), (ProcessState::Running, Some(run2), 1, 0, 1));
+
+        // A second restart still leaves exactly one task.
+        sup.restart_process("p").await.unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let (state, pid, _, _, tasks) = status(&sup, "p").await;
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(state, ProcessState::Running);
+        assert_ne!(pid, Some(run2), "restart_process did not start a new run");
+        assert_eq!(tasks, 1, "liveness tasks alive after a second restart");
     }
 }
