@@ -474,9 +474,17 @@ async fn main() {
     // exits: under a supervisor or a test harness a stormd that ignores
     // SIGTERM holds whatever is waiting on it (stormd#17: ten hours under
     // `timeout 10`). A plain thread, so a wedged runtime cannot stop it.
-    std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_secs(SHUTDOWN_DEADLINE_SECS));
-        eprintln!("stormd: shutdown did not finish in {SHUTDOWN_DEADLINE_SECS}s — exiting");
+    // It allows every process its whole stop timeout, tier after tier
+    // (stormd#9), plus a margin, and never less than the old 30 s.
+    // Asked with a timeout: the watchdog must start even if the supervisor
+    // is wedged.
+    let budget = tokio::time::timeout(std::time::Duration::from_secs(1), supervisor.shutdown_budget())
+        .await
+        .unwrap_or_default();
+    let deadline = (budget.as_secs() + SHUTDOWN_MARGIN_SECS).max(SHUTDOWN_DEADLINE_SECS);
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(deadline));
+        eprintln!("stormd: shutdown did not finish in {deadline}s — exiting");
         std::process::exit(1);
     });
 
@@ -520,9 +528,13 @@ async fn main() {
     std::process::exit(0);
 }
 
-/// How long shutdown may take, after SIGTERM, SIGINT, an API shutdown or a
-/// container failure, before stormd exits regardless.
+/// The least time shutdown is allowed, after SIGTERM, SIGINT, an API shutdown
+/// or a container failure, before stormd exits regardless.
 const SHUTDOWN_DEADLINE_SECS: u64 = 30;
+
+/// Added to the processes' own stop budget for the rest of shutdown (log
+/// flush, a failure backup).
+const SHUTDOWN_MARGIN_SECS: u64 = 20;
 
 /// PID 1 zombie reaper — required when running as init in a container.
 #[cfg(target_os = "linux")]

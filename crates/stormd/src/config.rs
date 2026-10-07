@@ -144,6 +144,10 @@ pub struct ProcessConfig {
     pub on_no_restart: NoRestartAction,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// How long a stop (API, shell, restart, updater pivot, shutdown) waits
+    /// after SIGTERM before SIGKILL. 0 is SIGKILL at once.
+    #[serde(default = "default_stop_timeout_secs")]
+    pub stop_timeout_secs: u64,
     #[serde(default = "default_startup_delay_secs")]
     pub startup_delay_secs: u64,
     #[serde(default)]
@@ -469,6 +473,7 @@ fn default_pid_file() -> PathBuf { PathBuf::from("/run/stormd.pid") }
 fn default_on_failure() -> FailureAction { FailureAction::Restart }
 fn default_on_exit() -> ExitAction { ExitAction::Restart }
 fn default_restart_delay_secs() -> u64 { 1 }
+fn default_stop_timeout_secs() -> u64 { 10 }
 fn default_max_restarts() -> u32 { 10 }
 fn default_restart_window_secs() -> u64 { 3600 }
 fn default_startup_delay_secs() -> u64 { 0 }

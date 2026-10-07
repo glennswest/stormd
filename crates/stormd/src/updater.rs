@@ -282,15 +282,8 @@ impl Updater {
         // Stop process — it may not be running yet on initial pull
         match self.supervisor.stop_process(process_name).await {
             Ok(()) => {
-                // Wait for process to actually stop
-                for _ in 0..20 {
-                    if let Ok(status) = self.supervisor.get_status(process_name).await {
-                        if status.pid.is_none() {
-                            break;
-                        }
-                    }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-                }
+                // Wait for it to be gone: SIGTERM, then its stop timeout.
+                self.supervisor.wait_stopped(process_name).await;
             }
             Err(_) => {
                 // Process wasn't running — that's fine for initial pull
@@ -343,6 +336,7 @@ impl Updater {
                 no_restart_exit_codes: Vec::new(),
                 on_no_restart: crate::config::NoRestartAction::Hold,
                 depends_on: Vec::new(),
+                stop_timeout_secs: 10,
                 startup_delay_secs: 0,
                 ready_probe: None,
                 liveness: None,

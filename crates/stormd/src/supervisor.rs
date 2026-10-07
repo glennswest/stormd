@@ -431,6 +431,7 @@ impl Supervisor {
 
         let exit_tx = self.exit_tx.clone();
         let name_owned = config.name.clone();
+        let stop_timeout = Duration::from_secs(config.stop_timeout_secs);
         let proc_arc_clone = proc_arc.clone();
         tokio::spawn(async move {
             // However the run ends, its liveness task ends with it.
@@ -441,12 +442,13 @@ impl Supervisor {
                     let _ = exit_tx.send(ExitEvent { name: name_owned, exit_code }).await;
                 }
                 _ = &mut kill_rx => {
-                    let _ = child.kill().await;
+                    let exit_code = stop_child(&mut child, pid, stop_timeout, &name_owned).await;
                     let mut proc = proc_arc_clone.lock().await;
                     proc.state = ProcessState::Stopped;
                     proc.stopped_at = Some(Utc::now());
                     proc.pid = None;
-                    info!(process = %name_owned, "process killed by request");
+                    proc.exit_code = exit_code;
+                    info!(process = %name_owned, exit_code = ?exit_code, "process stopped by request");
                 }
             }
         });
@@ -793,7 +795,9 @@ impl Supervisor {
                     drop(proc);
                     drop(procs);
                     self.stop_process(name).await?;
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    // The old run must be gone before the new one starts:
+                    // a slow exit after SIGTERM would hold its port.
+                    self.wait_stopped(name).await;
                 }
             }
         }
@@ -864,46 +868,113 @@ impl Supervisor {
     /// `shutting_down` first: the start order and any dependency wait give
     /// up, restarts stand down, and nothing new is spawned.
     ///
-    /// Then it waits, briefly, for the kills to land, so the children are
-    /// gone before stormd is. Safe to call twice; main does, once the start
-    /// order has ended, to catch a process forked while the first call ran.
+    /// Then it stops them in reverse dependency order, a tier at a time:
+    /// SIGTERM, each process's `stop_timeout_secs`, then SIGKILL, and waits
+    /// for the tier to be gone before the next, so the children are gone
+    /// before stormd is (stormd#9). Safe to call twice; main does, once the
+    /// start order has ended, to catch a process forked while the first call
+    /// ran.
     pub async fn stop_all(&self) {
         self.shutting_down.store(true, Ordering::SeqCst);
-        {
-            let procs = self.processes.read().await;
-            for (name, p) in procs.iter() {
-                let mut proc = p.lock().await;
-                // A process marked Running a moment before its kill handle is
-                // stored is left Running, for the second call to catch.
-                if proc.state == ProcessState::Running {
-                    if let Some(tx) = proc.kill_tx.take() {
-                        proc.state = ProcessState::Stopping;
-                        let _ = tx.send(());
-                        info!(process = %name, "stopping process");
-                    }
-                }
-            }
-        }
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            let mut stopping = Vec::new();
+        // Dependents first: the apiserver flushes to fastetcd on SIGTERM, so
+        // fastetcd stays up until the apiserver is gone (stormd#9).
+        for tier in self.stop_tiers().await {
+            let mut longest = 0;
             {
                 let procs = self.processes.read().await;
-                for (name, p) in procs.iter() {
-                    if p.lock().await.state == ProcessState::Stopping {
-                        stopping.push(name.clone());
+                for name in &tier {
+                    let Some(p) = procs.get(name) else { continue };
+                    let mut proc = p.lock().await;
+                    longest = longest.max(proc.config.stop_timeout_secs);
+                    // A process marked Running a moment before its kill handle
+                    // is stored is left Running, for the second call to catch.
+                    if proc.state == ProcessState::Running {
+                        if let Some(tx) = proc.kill_tx.take() {
+                            proc.state = ProcessState::Stopping;
+                            let _ = tx.send(());
+                            info!(process = %name, "stopping process");
+                        }
                     }
                 }
             }
-            if stopping.is_empty() {
-                return;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(longest + STOP_SLACK_SECS);
+            loop {
+                let mut stopping = Vec::new();
+                {
+                    let procs = self.processes.read().await;
+                    for name in &tier {
+                        if let Some(p) = procs.get(name) {
+                            if p.lock().await.state == ProcessState::Stopping {
+                                stopping.push(name.clone());
+                            }
+                        }
+                    }
+                }
+                if stopping.is_empty() {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    warn!(processes = ?stopping, "still stopping after SIGKILL — going on");
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            if tokio::time::Instant::now() >= deadline {
-                warn!(processes = ?stopping, "still stopping after 10s — exiting anyway");
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    /// Processes grouped for shutdown, dependents first: a process's depth
+    /// is one more than the deepest process it depends on, and the deepest
+    /// tier stops first. A cycle or a missing name cannot loop: depth is
+    /// capped at the number of processes.
+    async fn stop_tiers(&self) -> Vec<Vec<String>> {
+        let deps: HashMap<String, Vec<String>> = {
+            let procs = self.processes.read().await;
+            let mut deps = HashMap::new();
+            for (name, p) in procs.iter() {
+                deps.insert(name.clone(), p.lock().await.config.depends_on.clone());
+            }
+            deps
+        };
+        stop_tiers(&deps)
+    }
+
+    /// The longest shutdown can take with every process using its whole
+    /// stop timeout, tier after tier. Main's watchdog allows this plus a
+    /// margin before it exits regardless.
+    pub async fn shutdown_budget(&self) -> Duration {
+        let mut total = 0;
+        let tiers = self.stop_tiers().await;
+        let procs = self.processes.read().await;
+        for tier in tiers {
+            let mut longest = 0;
+            for name in &tier {
+                if let Some(p) = procs.get(name) {
+                    longest = longest.max(p.lock().await.config.stop_timeout_secs);
+                }
+            }
+            total += longest + STOP_SLACK_SECS;
+        }
+        Duration::from_secs(total)
+    }
+
+    /// Wait until a stop requested for `name` has landed: no longer
+    /// `Stopping`, no pid. Bounded by its stop timeout plus slack.
+    pub async fn wait_stopped(&self, name: &str) {
+        let Some(p) = self.processes.read().await.get(name).cloned() else {
+            return;
+        };
+        let timeout = p.lock().await.config.stop_timeout_secs + STOP_SLACK_SECS;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
+        while tokio::time::Instant::now() < deadline {
+            {
+                let proc = p.lock().await;
+                if proc.state != ProcessState::Stopping && proc.pid.is_none() {
+                    return;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        warn!(process = %name, "still not stopped after its stop timeout");
     }
 
     /// After a restart's cooloff: if stormd began shutting down meanwhile,
@@ -988,6 +1059,81 @@ impl Supervisor {
         let pid = proc.pid.ok_or_else(|| anyhow::anyhow!("process has no pid"))?;
         send_signal(pid, signal)
     }
+}
+
+/// Beyond a stop timeout: SIGKILL landing and the monitor recording it.
+const STOP_SLACK_SECS: u64 = 2;
+
+/// Stop a child: SIGTERM, up to `timeout` for it to exit, then SIGKILL.
+/// A zero timeout is SIGKILL at once. Returns the exit code, if it exited
+/// with one (not by signal).
+///
+/// **Every stop used to be SIGKILL** (stormd#9): a supervised process could
+/// not flush, close a WAL or deregister, whether stopped from the API, the
+/// shell, a restart, the updater's pivot or shutdown.
+async fn stop_child(
+    child: &mut tokio::process::Child,
+    pid: Option<u32>,
+    timeout: Duration,
+    name: &str,
+) -> Option<i32> {
+    if let (Some(pid), false) = (pid, timeout.is_zero()) {
+        if send_signal(pid, "SIGTERM").is_ok() {
+            match tokio::time::timeout(timeout, child.wait()).await {
+                Ok(status) => return status.ok().and_then(|s| s.code()),
+                Err(_) => warn!(
+                    process = %name,
+                    timeout_secs = timeout.as_secs(),
+                    "still running after SIGTERM — SIGKILL"
+                ),
+            }
+        }
+    }
+    let _ = child.kill().await;
+    None
+}
+
+/// Shutdown tiers from each process's `depends_on`, deepest first.
+fn stop_tiers(deps: &HashMap<String, Vec<String>>) -> Vec<Vec<String>> {
+    fn depth(
+        name: &str,
+        deps: &HashMap<String, Vec<String>>,
+        memo: &mut HashMap<String, usize>,
+        budget: usize,
+    ) -> usize {
+        if let Some(d) = memo.get(name) {
+            return *d;
+        }
+        if budget == 0 {
+            return 0;
+        }
+        let d = deps
+            .get(name)
+            .map(|ds| {
+                ds.iter()
+                    .filter(|d| deps.contains_key(*d))
+                    .map(|d| 1 + depth(d, deps, memo, budget - 1))
+                    .max()
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        memo.insert(name.to_string(), d);
+        d
+    }
+    let mut memo = HashMap::new();
+    let mut tiers: Vec<Vec<String>> = Vec::new();
+    let mut names: Vec<&String> = deps.keys().collect();
+    names.sort();
+    for name in names {
+        let d = depth(name, deps, &mut memo, deps.len());
+        if tiers.len() <= d {
+            tiers.resize(d + 1, Vec::new());
+        }
+        tiers[d].push(name.clone());
+    }
+    tiers.reverse();
+    tiers.retain(|t| !t.is_empty());
+    tiers
 }
 
 fn send_signal(pid: u32, signal: &str) -> anyhow::Result<()> {
