@@ -123,6 +123,8 @@ pub struct Supervisor {
     /// of the start order, not a restart, not an API start — and a dependency
     /// wait gives up. See `stop_all`.
     shutting_down: AtomicBool,
+    /// Presents the goldens processes name (stormd#36); set by main when any does.
+    goldens: std::sync::OnceLock<Arc<crate::goldens::Goldens>>,
 }
 
 impl Supervisor {
@@ -136,7 +138,95 @@ impl Supervisor {
             exit_tx,
             exit_rx: Mutex::new(Some(exit_rx)),
             shutting_down: AtomicBool::new(false),
+            goldens: std::sync::OnceLock::new(),
         }
+    }
+
+    pub fn set_goldens(&self, goldens: Arc<crate::goldens::Goldens>) {
+        let _ = self.goldens.set(goldens);
+    }
+
+    pub fn goldens(&self) -> Option<&Arc<crate::goldens::Goldens>> {
+        self.goldens.get()
+    }
+
+    /// Present a process's goldens before it starts; false when shutdown
+    /// began first.
+    async fn present_goldens(&self, cfg: &ProcessConfig) -> bool {
+        match (&self.goldens.get(), cfg.golden.is_empty()) {
+            (_, true) => true,
+            (None, false) => {
+                warn!(process = %cfg.name, "names goldens but no golden presenter is set — starting without them");
+                true
+            }
+            (Some(g), false) => g.present_all(&cfg.name, &cfg.golden, || self.is_shutting_down()).await,
+        }
+    }
+
+    /// Swap one of a process's goldens for another (a new release): stop the
+    /// process, release the old golden, present the new one, start the
+    /// process again. In memory only — a stormd restart goes back to the
+    /// config. If the new one cannot be presented, the old one is put back.
+    pub async fn swap_golden(
+        self: &Arc<Self>,
+        process: &str,
+        name: &str,
+        golden: Option<String>,
+        volume_id: Option<String>,
+    ) -> anyhow::Result<crate::goldens::Presented> {
+        let goldens = self.goldens.get().cloned().ok_or_else(|| anyhow::anyhow!("no goldens configured"))?;
+        if golden.is_some() == volume_id.is_some() {
+            anyhow::bail!("give exactly one of golden and volume_id");
+        }
+        let proc_arc = self
+            .processes
+            .read()
+            .await
+            .get(process)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("process not found: {}", process))?;
+        let old = {
+            let p = proc_arc.lock().await;
+            p.config
+                .golden
+                .iter()
+                .find(|g| g.name == name)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("process '{process}' names no golden '{name}'"))?
+        };
+        let new = crate::config::GoldenMount { golden, volume_id, ..old.clone() };
+
+        let was_running = proc_arc.lock().await.state == ProcessState::Running;
+        if was_running {
+            self.stop_process(process).await?;
+            self.wait_stopped(process).await;
+        }
+        if let Err(e) = goldens.release(process, name).await {
+            if was_running {
+                self.spawn_process(process).await?;
+            }
+            return Err(e);
+        }
+        let result = match goldens.present(process, &new).await {
+            Ok(p) => {
+                let mut pr = proc_arc.lock().await;
+                if let Some(g) = pr.config.golden.iter_mut().find(|g| g.name == name) {
+                    *g = new;
+                }
+                Ok(p)
+            }
+            Err(e) => {
+                warn!(process, golden = %name, error = %e, "new golden not presented — putting the old one back");
+                if let Err(e2) = goldens.present(process, &old).await {
+                    warn!(process, golden = %name, error = %e2, "old golden not presented either");
+                }
+                Err(e)
+            }
+        };
+        if was_running {
+            self.spawn_process(process).await?;
+        }
+        result
     }
 
     fn is_shutting_down(&self) -> bool {
@@ -190,6 +280,10 @@ impl Supervisor {
         for cfg in configs {
             self.wait_for_dependencies(&cfg.depends_on).await;
             self.wait_for_files(&cfg.name, &cfg.wait_for_files).await;
+            if !self.present_goldens(cfg).await {
+                info!(process = %cfg.name, "shutting down — not starting");
+                return Ok(());
+            }
 
             if cfg.startup_delay_secs > 0 {
                 self.sleep_unless_shutdown(Duration::from_secs(cfg.startup_delay_secs)).await;

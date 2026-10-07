@@ -28,6 +28,87 @@ pub struct Config {
     pub ssh: SshConfig,
     #[serde(default)]
     pub updater: UpdaterConfig,
+    #[serde(default)]
+    pub goldens: GoldensConfig,
+}
+
+/// Where stormd attaches the goldens processes name (`[[process.golden]]`,
+/// stormd#36): the node's stormblock engine.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GoldensConfig {
+    /// The engine's API. `${NODE_IP}`/`${NODE_NAME}` are expanded. A ublk
+    /// attach is local, so this must be the engine on this node.
+    #[serde(default = "default_goldens_engine_url")]
+    pub engine_url: String,
+    /// The engine's bearer token, re-read on every call. Absent: no header.
+    #[serde(default = "default_goldens_token_file")]
+    pub token_file: PathBuf,
+    /// Where a golden is presented when it names no `path`: `<dir>/<name>`.
+    #[serde(default = "default_goldens_dir")]
+    pub dir: PathBuf,
+}
+
+impl Default for GoldensConfig {
+    fn default() -> Self {
+        Self {
+            engine_url: default_goldens_engine_url(),
+            token_file: default_goldens_token_file(),
+            dir: default_goldens_dir(),
+        }
+    }
+}
+
+fn default_goldens_engine_url() -> String { "http://${NODE_IP}:9090".into() }
+fn default_goldens_token_file() -> PathBuf { PathBuf::from("/run/stormblock/engine/api_token") }
+fn default_goldens_dir() -> PathBuf { PathBuf::from("/goldens") }
+
+/// A golden a process is given, read-only (stormd#36).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct GoldenMount {
+    /// How the process refers to it; the default path is `<dir>/<name>`.
+    pub name: String,
+    /// The golden's name in stormblock, e.g. `golden-nic-drivers-56ea4782ef2a`.
+    #[serde(default)]
+    pub golden: Option<String>,
+    /// Or its volume id.
+    #[serde(default)]
+    pub volume_id: Option<String>,
+    pub content: GoldenContent,
+    /// Where it appears: a read-only mount (filesystem) or a device node (image).
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Filesystem goldens: the type to mount.
+    #[serde(default = "default_golden_fstype")]
+    pub fstype: String,
+    /// Image goldens: `uid:gid` of the device node, so an unprivileged
+    /// service can read it.
+    #[serde(default)]
+    pub owner: Option<String>,
+    /// Image goldens: the device node's mode.
+    #[serde(default = "default_golden_mode")]
+    pub mode: u32,
+    /// Image goldens: the image's own length (the volume is larger). Reported
+    /// with the golden; the service limits what it serves to it.
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GoldenContent {
+    Filesystem,
+    Image,
+}
+
+fn default_golden_fstype() -> String { "ext4".into() }
+fn default_golden_mode() -> u32 { 0o444 }
+
+impl GoldenMount {
+    /// `owner` as (uid, gid); `None` when unset or malformed.
+    pub fn owner_ids(&self) -> Option<(u32, u32)> {
+        let (u, g) = self.owner.as_deref()?.split_once(':')?;
+        Some((u.parse().ok()?, g.parse().ok()?))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -149,6 +230,10 @@ pub struct ProcessConfig {
     /// `${NODE_IP}`/`${NODE_NAME}` are expanded.
     #[serde(default)]
     pub wait_for_files: Vec<String>,
+    /// Goldens presented to this process, read-only, before it first starts
+    /// (stormd#36).
+    #[serde(default)]
+    pub golden: Vec<GoldenMount>,
     /// How long a stop (API, shell, restart, updater pivot, shutdown) waits
     /// after SIGTERM before SIGKILL. 0 is SIGKILL at once.
     #[serde(default = "default_stop_timeout_secs")]
@@ -525,6 +610,22 @@ impl Config {
         for p in &self.process {
             if let Some(f) = p.wait_for_files.iter().find(|f| !f.starts_with('/')) {
                 anyhow::bail!("process '{}': wait_for_files entry '{}' is not an absolute path", p.name, f);
+            }
+            let mut seen = std::collections::HashSet::new();
+            for g in &p.golden {
+                let at = format!("process '{}', golden '{}'", p.name, g.name);
+                if g.name.is_empty() || g.name.contains('/') || !seen.insert(&g.name) {
+                    anyhow::bail!("{at}: name must be non-empty, unique in the process, and have no '/'");
+                }
+                if g.golden.is_some() == g.volume_id.is_some() {
+                    anyhow::bail!("{at}: set exactly one of golden and volume_id");
+                }
+                if g.path.as_deref().is_some_and(|p| !p.starts_with('/')) {
+                    anyhow::bail!("{at}: path must be absolute");
+                }
+                if g.owner.is_some() && g.owner_ids().is_none() {
+                    anyhow::bail!("{at}: owner must be uid:gid (numbers)");
+                }
             }
         }
         if self.events.enabled {

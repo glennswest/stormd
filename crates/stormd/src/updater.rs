@@ -338,6 +338,7 @@ impl Updater {
                 depends_on: Vec::new(),
                 stop_timeout_secs: 10,
                 wait_for_files: Vec::new(),
+                golden: Vec::new(),
                 startup_delay_secs: 0,
                 ready_probe: None,
                 liveness: None,

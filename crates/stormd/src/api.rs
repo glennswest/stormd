@@ -73,6 +73,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/processes/{name}/start", post(start_process))
         .route("/api/v1/processes/{name}/stop", post(stop_process))
         .route("/api/v1/processes/{name}/restart", post(restart_process))
+        // Goldens presented to processes (stormd#36)
+        .route("/api/v1/goldens", get(list_goldens))
+        .route("/api/v1/processes/{name}/goldens/{golden}", axum::routing::put(swap_golden))
         // Logs
         .route("/api/v1/logs", get(query_logs))
         .route("/api/v1/logs/files", get(list_log_files))
@@ -348,6 +351,34 @@ async fn restart_process(
 ) -> Result<impl IntoResponse, AppError> {
     state.supervisor.restart_process(&name).await?;
     Ok(Json(serde_json::json!({ "status": "restarted", "process": name })))
+}
+
+// --- Goldens (stormd#36) ---
+
+async fn list_goldens(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let items = match state.supervisor.goldens() {
+        Some(g) => g.list().await,
+        None => Vec::new(),
+    };
+    Json(serde_json::json!({ "items": items }))
+}
+
+#[derive(Debug, Deserialize)]
+struct SwapGolden {
+    golden: Option<String>,
+    volume_id: Option<String>,
+}
+
+/// Swap a process's golden for another (a new release): the process is
+/// stopped, the old golden released, the new one presented, the process
+/// started again.
+async fn swap_golden(
+    State(state): State<Arc<AppState>>,
+    Path((name, golden)): Path<(String, String)>,
+    Json(req): Json<SwapGolden>,
+) -> Result<impl IntoResponse, AppError> {
+    let p = state.supervisor.swap_golden(&name, &golden, req.golden, req.volume_id).await?;
+    Ok(Json(p))
 }
 
 // --- Logs ---
