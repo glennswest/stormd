@@ -2196,3 +2196,59 @@ mod wait_for_files_tests {
         assert_eq!(st, ProcessState::Pending, "started while shutting down");
     }
 }
+
+#[cfg(test)]
+mod node_vars_tests {
+    use super::node_vars_missing;
+    use std::collections::HashMap;
+
+    fn cfg(t: &str) -> crate::config::ProcessConfig {
+        toml::from_str(&format!("name = \"stormcert-init\"\ncommand = \"/bin/x\"\n{t}")).unwrap()
+    }
+
+    fn with_ip() -> HashMap<String, String> {
+        HashMap::from([("NODE_IP".to_string(), "192.168.8.104".to_string()), ("NODE_NAME".into(), "n1".into())])
+    }
+
+    fn no_ip() -> HashMap<String, String> {
+        HashMap::from([("NODE_NAME".to_string(), "n1".to_string())])
+    }
+
+    /// stormd#3: the argument stormcert-init failed on, with no address.
+    #[test]
+    fn an_unexpanded_node_ip_in_args_is_named_with_the_reason() {
+        let c = cfg("args = [\"--ip\", \"10.96.0.1,${NODE_IP},127.0.0.1\"]\n");
+        let why = node_vars_missing(&c, &no_ip()).expect("should refuse");
+        assert_eq!(
+            why,
+            "process 'stormcert-init' needs ${NODE_IP}, and this node has no address on any interface (no route off the node)"
+        );
+        assert_eq!(node_vars_missing(&c, &with_ip()), None);
+    }
+
+    #[test]
+    fn env_and_env_default_values_count_but_only_when_applied() {
+        let c = cfg("env = { APISERVER_URL = \"https://${NODE_IP}:6443\" }\n");
+        assert!(node_vars_missing(&c, &no_ip()).is_some());
+
+        // An env_default stormd inherited is not applied, so not checked.
+        std::env::set_var("STORMD_TEST_3_INHERITED", "https://10.0.0.1:6443");
+        let c = cfg("env_default = { STORMD_TEST_3_INHERITED = \"https://${NODE_IP}:6443\" }\n");
+        assert_eq!(node_vars_missing(&c, &no_ip()), None);
+        let c = cfg("env_default = { STORMD_TEST_3_NOT_INHERITED = \"https://${NODE_IP}:6443\" }\n");
+        assert!(node_vars_missing(&c, &no_ip()).is_some());
+    }
+
+    #[test]
+    fn other_names_are_the_process_own() {
+        let c = cfg("args = [\"-c\", \"echo ${HOME} $NODE_IP ${NODE_IPV6}\"]\nenv = { X = \"${PATH}\" }\n");
+        assert_eq!(node_vars_missing(&c, &no_ip()), None);
+    }
+
+    #[test]
+    fn several_missing_names_are_all_named() {
+        let c = cfg("args = [\"${NODE_NAME}\", \"${NODE_IP}\"]\n");
+        let why = node_vars_missing(&c, &HashMap::new()).unwrap();
+        assert!(why.contains("needs ${NODE_NAME}, ${NODE_IP}"), "{why}");
+    }
+}
