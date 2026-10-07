@@ -35,13 +35,13 @@ pub async fn cmd_ls(args: &[&str]) -> ShellOutput {
                 return ShellOutput::text(format!("{}\r\n", path));
             }
         }
-        Err(e) => return ShellOutput::text(format!("ls: {}: {}\r\n", path, e)),
+        Err(e) => return ShellOutput::error(format!("ls: {}: {}\r\n", path, e)),
         _ => {}
     }
 
     let mut entries = match tokio::fs::read_dir(dir_path).await {
         Ok(e) => e,
-        Err(e) => return ShellOutput::text(format!("ls: {}: {}\r\n", path, e)),
+        Err(e) => return ShellOutput::error(format!("ls: {}: {}\r\n", path, e)),
     };
 
     let mut items = Vec::new();
@@ -227,23 +227,24 @@ pub async fn cmd_cat(args: &[&str], piped: Option<&str>) -> ShellOutput {
         if let Some(input) = piped {
             return ShellOutput::text(input.replace('\n', "\r\n"));
         }
-        return ShellOutput::text("usage: cat <file> [...]\r\n");
+        return ShellOutput::usage("usage: cat <file> [...]\r\n");
     }
 
     let mut out = String::new();
+    let mut failed = false;
     for path in args {
         if path.starts_with('-') {
             continue;
         }
         match tokio::fs::read_to_string(path).await {
             Ok(content) => out.push_str(&content.replace('\n', "\r\n")),
-            Err(e) => out.push_str(&format!("cat: {}: {}\r\n", path, e)),
+            Err(e) => { failed = true; out.push_str(&format!("cat: {}: {}\r\n", path, e)); }
         }
     }
     if !out.ends_with("\r\n") && !out.is_empty() {
         out.push_str("\r\n");
     }
-    ShellOutput::text(out)
+    ShellOutput::text(out).failed_if(failed)
 }
 
 pub async fn cmd_head(args: &[&str], piped: Option<&str>) -> ShellOutput {
@@ -269,12 +270,12 @@ pub async fn cmd_head(args: &[&str], piped: Option<&str>) -> ShellOutput {
     let content = if let Some(path) = file {
         match tokio::fs::read_to_string(path).await {
             Ok(c) => c,
-            Err(e) => return ShellOutput::text(format!("head: {}: {}\r\n", path, e)),
+            Err(e) => return ShellOutput::error(format!("head: {}: {}\r\n", path, e)),
         }
     } else if let Some(input) = piped {
         input.replace("\r\n", "\n")
     } else {
-        return ShellOutput::text("usage: head [-n N] <file>\r\n");
+        return ShellOutput::usage("usage: head [-n N] <file>\r\n");
     };
 
     let lines: Vec<&str> = content.lines().take(count).collect();
@@ -304,12 +305,12 @@ pub async fn cmd_tail(args: &[&str], piped: Option<&str>) -> ShellOutput {
     let content = if let Some(path) = file {
         match tokio::fs::read_to_string(path).await {
             Ok(c) => c,
-            Err(e) => return ShellOutput::text(format!("tail: {}: {}\r\n", path, e)),
+            Err(e) => return ShellOutput::error(format!("tail: {}: {}\r\n", path, e)),
         }
     } else if let Some(input) = piped {
         input.replace("\r\n", "\n")
     } else {
-        return ShellOutput::text("usage: tail [-n N] <file>\r\n");
+        return ShellOutput::usage("usage: tail [-n N] <file>\r\n");
     };
 
     let lines: Vec<&str> = content.lines().collect();
@@ -319,25 +320,25 @@ pub async fn cmd_tail(args: &[&str], piped: Option<&str>) -> ShellOutput {
 
 pub async fn cmd_cp(args: &[&str]) -> ShellOutput {
     if args.len() < 2 {
-        return ShellOutput::text("usage: cp <src> <dst>\r\n");
+        return ShellOutput::usage("usage: cp <src> <dst>\r\n");
     }
     let src = args[args.len() - 2];
     let dst = args[args.len() - 1];
     match tokio::fs::copy(src, dst).await {
         Ok(bytes) => ShellOutput::text(format!("copied {} bytes\r\n", bytes)),
-        Err(e) => ShellOutput::text(format!("cp: {}\r\n", e)),
+        Err(e) => ShellOutput::error(format!("cp: {}\r\n", e)),
     }
 }
 
 pub async fn cmd_mv(args: &[&str]) -> ShellOutput {
     if args.len() < 2 {
-        return ShellOutput::text("usage: mv <src> <dst>\r\n");
+        return ShellOutput::usage("usage: mv <src> <dst>\r\n");
     }
     let src = args[args.len() - 2];
     let dst = args[args.len() - 1];
     match tokio::fs::rename(src, dst).await {
         Ok(()) => ShellOutput::text(""),
-        Err(e) => ShellOutput::text(format!("mv: {}\r\n", e)),
+        Err(e) => ShellOutput::error(format!("mv: {}\r\n", e)),
     }
 }
 
@@ -360,15 +361,17 @@ pub async fn cmd_rm(args: &[&str]) -> ShellOutput {
     }
 
     if targets.is_empty() {
-        return ShellOutput::text("usage: rm [-rf] <path> [...]\r\n");
+        return ShellOutput::usage("usage: rm [-rf] <path> [...]\r\n");
     }
 
     let mut out = String::new();
+    let mut failed = false;
     for target in targets {
         let meta = match tokio::fs::metadata(target).await {
             Ok(m) => m,
             Err(e) => {
                 if !force {
+                    failed = true;
                     out.push_str(&format!("rm: {}: {}\r\n", target, e));
                 }
                 continue;
@@ -379,6 +382,7 @@ pub async fn cmd_rm(args: &[&str]) -> ShellOutput {
             if recursive {
                 tokio::fs::remove_dir_all(target).await
             } else {
+                failed = true;
                 out.push_str(&format!("rm: {}: is a directory\r\n", target));
                 continue;
             }
@@ -387,10 +391,11 @@ pub async fn cmd_rm(args: &[&str]) -> ShellOutput {
         };
 
         if let Err(e) = result {
+            failed = true;
             out.push_str(&format!("rm: {}: {}\r\n", target, e));
         }
     }
-    ShellOutput::text(out)
+    ShellOutput::text(out).failed_if(failed)
 }
 
 pub async fn cmd_mkdir(args: &[&str]) -> ShellOutput {
@@ -406,10 +411,11 @@ pub async fn cmd_mkdir(args: &[&str]) -> ShellOutput {
     }
 
     if dirs.is_empty() {
-        return ShellOutput::text("usage: mkdir [-p] <dir> [...]\r\n");
+        return ShellOutput::usage("usage: mkdir [-p] <dir> [...]\r\n");
     }
 
     let mut out = String::new();
+    let mut failed = false;
     for dir in dirs {
         let result = if parents {
             tokio::fs::create_dir_all(dir).await
@@ -417,18 +423,20 @@ pub async fn cmd_mkdir(args: &[&str]) -> ShellOutput {
             tokio::fs::create_dir(dir).await
         };
         if let Err(e) = result {
+            failed = true;
             out.push_str(&format!("mkdir: {}: {}\r\n", dir, e));
         }
     }
-    ShellOutput::text(out)
+    ShellOutput::text(out).failed_if(failed)
 }
 
 pub async fn cmd_touch(args: &[&str]) -> ShellOutput {
     if args.is_empty() {
-        return ShellOutput::text("usage: touch <file> [...]\r\n");
+        return ShellOutput::usage("usage: touch <file> [...]\r\n");
     }
 
     let mut out = String::new();
+    let mut failed = false;
     for path in args {
         if path.starts_with('-') {
             continue;
@@ -440,18 +448,20 @@ pub async fn cmd_touch(args: &[&str]) -> ShellOutput {
                 .open(path)
                 .await
             {
+                failed = true;
                 out.push_str(&format!("touch: {}: {}\r\n", path, e));
             }
         } else if let Err(e) = tokio::fs::write(path, b"").await {
+            failed = true;
             out.push_str(&format!("touch: {}: {}\r\n", path, e));
         }
     }
-    ShellOutput::text(out)
+    ShellOutput::text(out).failed_if(failed)
 }
 
 pub async fn cmd_chmod(args: &[&str]) -> ShellOutput {
     if args.len() < 2 {
-        return ShellOutput::text("usage: chmod <mode> <file> [...]\r\n");
+        return ShellOutput::usage("usage: chmod <mode> <file> [...]\r\n");
     }
 
     #[cfg(unix)]
@@ -460,23 +470,25 @@ pub async fn cmd_chmod(args: &[&str]) -> ShellOutput {
         let mode_str = args[0];
         let mode = match u32::from_str_radix(mode_str, 8) {
             Ok(m) => m,
-            Err(_) => return ShellOutput::text(format!("chmod: invalid mode '{}'\r\n", mode_str)),
+            Err(_) => return ShellOutput::error(format!("chmod: invalid mode '{}'\r\n", mode_str)),
         };
 
         let mut out = String::new();
+        let mut failed = false;
         for path in &args[1..] {
             let perms = std::fs::Permissions::from_mode(mode);
             if let Err(e) = std::fs::set_permissions(path, perms) {
+                failed = true;
                 out.push_str(&format!("chmod: {}: {}\r\n", path, e));
             }
         }
-        ShellOutput::text(out)
+        ShellOutput::text(out).failed_if(failed)
     }
 
     #[cfg(not(unix))]
     {
         let _ = args;
-        ShellOutput::text("chmod: not available on this platform\r\n")
+        ShellOutput::error("chmod: not available on this platform\r\n")
     }
 }
 
@@ -484,7 +496,7 @@ pub async fn cmd_chown(args: &[&str]) -> ShellOutput {
     #[cfg(target_os = "linux")]
     {
         if args.len() < 2 {
-            return ShellOutput::text("usage: chown <user[:group]> <file> [...]\r\n");
+            return ShellOutput::usage("usage: chown <user[:group]> <file> [...]\r\n");
         }
         let spec = args[0];
         let (uid_str, gid_str) = if let Some(pos) = spec.find(':') {
@@ -495,11 +507,12 @@ pub async fn cmd_chown(args: &[&str]) -> ShellOutput {
 
         let uid: u32 = match uid_str.parse() {
             Ok(u) => u,
-            Err(_) => return ShellOutput::text(format!("chown: invalid user '{}'\r\n", uid_str)),
+            Err(_) => return ShellOutput::error(format!("chown: invalid user '{}'\r\n", uid_str)),
         };
         let gid: Option<u32> = gid_str.and_then(|g| g.parse().ok());
 
         let mut out = String::new();
+        let mut failed = false;
         for path in &args[1..] {
             let result = nix::unistd::chown(
                 *path,
@@ -507,16 +520,17 @@ pub async fn cmd_chown(args: &[&str]) -> ShellOutput {
                 gid.map(nix::unistd::Gid::from_raw),
             );
             if let Err(e) = result {
+                failed = true;
                 out.push_str(&format!("chown: {}: {}\r\n", path, e));
             }
         }
-        ShellOutput::text(out)
+        ShellOutput::text(out).failed_if(failed)
     }
 
     #[cfg(not(target_os = "linux"))]
     {
         let _ = args;
-        ShellOutput::text("chown: not available on this platform\r\n")
+        ShellOutput::error("chown: not available on this platform\r\n")
     }
 }
 
@@ -656,7 +670,7 @@ pub async fn cmd_ln(args: &[&str]) -> ShellOutput {
     }
 
     if targets.len() < 2 {
-        return ShellOutput::text("usage: ln [-s] <target> <link>\r\n");
+        return ShellOutput::usage("usage: ln [-s] <target> <link>\r\n");
     }
 
     let target = targets[0];
@@ -671,23 +685,24 @@ pub async fn cmd_ln(args: &[&str]) -> ShellOutput {
         };
         match result {
             Ok(()) => ShellOutput::text(""),
-            Err(e) => ShellOutput::text(format!("ln: {}\r\n", e)),
+            Err(e) => ShellOutput::error(format!("ln: {}\r\n", e)),
         }
     }
 
     #[cfg(not(unix))]
     {
         let _ = (target, link, symbolic);
-        ShellOutput::text("ln: not available on this platform\r\n")
+        ShellOutput::error("ln: not available on this platform\r\n")
     }
 }
 
 pub async fn cmd_stat(args: &[&str]) -> ShellOutput {
     if args.is_empty() {
-        return ShellOutput::text("usage: stat <file> [...]\r\n");
+        return ShellOutput::usage("usage: stat <file> [...]\r\n");
     }
 
     let mut out = String::new();
+    let mut failed = false;
     for path in args {
         if path.starts_with('-') {
             continue;
@@ -736,16 +751,16 @@ pub async fn cmd_stat(args: &[&str]) -> ShellOutput {
                 }
                 out.push_str("\r\n");
             }
-            Err(e) => out.push_str(&format!("stat: {}: {}\r\n", path, e)),
+            Err(e) => { failed = true; out.push_str(&format!("stat: {}: {}\r\n", path, e)); }
         }
     }
-    ShellOutput::text(out)
+    ShellOutput::text(out).failed_if(failed)
 }
 
 pub fn cmd_pwd() -> ShellOutput {
     match std::env::current_dir() {
         Ok(p) => ShellOutput::text(format!("{}\r\n", p.display())),
-        Err(e) => ShellOutput::text(format!("pwd: {}\r\n", e)),
+        Err(e) => ShellOutput::error(format!("pwd: {}\r\n", e)),
     }
 }
 
@@ -788,14 +803,14 @@ pub async fn cmd_wc(args: &[&str], piped: Option<&str>) -> ShellOutput {
         for f in &files {
             match tokio::fs::read_to_string(f).await {
                 Ok(c) => all.push_str(&c),
-                Err(e) => return ShellOutput::text(format!("wc: {}: {}\r\n", f, e)),
+                Err(e) => return ShellOutput::error(format!("wc: {}: {}\r\n", f, e)),
             }
         }
         all
     } else if let Some(input) = piped {
         input.replace("\r\n", "\n")
     } else {
-        return ShellOutput::text("usage: wc [-lwc] <file>\r\n");
+        return ShellOutput::usage("usage: wc [-lwc] <file>\r\n");
     };
 
     let lines = content.lines().count();
@@ -901,21 +916,22 @@ async fn du_recursive(path: &Path, human: bool, out: &mut String, depth: usize) 
 
 pub async fn cmd_readlink(args: &[&str]) -> ShellOutput {
     if args.is_empty() {
-        return ShellOutput::text("usage: readlink <path>\r\n");
+        return ShellOutput::usage("usage: readlink <path>\r\n");
     }
     let path = args[0];
     match tokio::fs::read_link(path).await {
         Ok(target) => ShellOutput::text(format!("{}\r\n", target.display())),
-        Err(e) => ShellOutput::text(format!("readlink: {}: {}\r\n", path, e)),
+        Err(e) => ShellOutput::error(format!("readlink: {}: {}\r\n", path, e)),
     }
 }
 
 pub async fn cmd_file_type(args: &[&str]) -> ShellOutput {
     if args.is_empty() {
-        return ShellOutput::text("usage: file <path> [...]\r\n");
+        return ShellOutput::usage("usage: file <path> [...]\r\n");
     }
 
     let mut out = String::new();
+    let mut failed = false;
     for path in args {
         if path.starts_with('-') {
             continue;
@@ -923,6 +939,7 @@ pub async fn cmd_file_type(args: &[&str]) -> ShellOutput {
         let meta = match tokio::fs::symlink_metadata(path).await {
             Ok(m) => m,
             Err(e) => {
+                failed = true;
                 out.push_str(&format!("{}: cannot open ({})\r\n", path, e));
                 continue;
             }
@@ -952,10 +969,10 @@ pub async fn cmd_file_type(args: &[&str]) -> ShellOutput {
                 let desc = detect_file_type(&data);
                 out.push_str(&format!("{}: {}\r\n", path, desc));
             }
-            Err(e) => out.push_str(&format!("{}: cannot read ({})\r\n", path, e)),
+            Err(e) => { failed = true; out.push_str(&format!("{}: cannot read ({})\r\n", path, e)); }
         }
     }
-    ShellOutput::text(out)
+    ShellOutput::text(out).failed_if(failed)
 }
 
 fn detect_file_type(data: &[u8]) -> &'static str {
@@ -1014,7 +1031,7 @@ pub async fn cmd_sha256sum(args: &[&str], piped: Option<&str>) -> ShellOutput {
     use sha2::{Digest, Sha256};
 
     if args.is_empty() && piped.is_none() {
-        return ShellOutput::text("usage: sha256sum <file> [...]\r\n");
+        return ShellOutput::usage("usage: sha256sum <file> [...]\r\n");
     }
 
     if args.is_empty() {
@@ -1025,6 +1042,7 @@ pub async fn cmd_sha256sum(args: &[&str], piped: Option<&str>) -> ShellOutput {
     }
 
     let mut out = String::new();
+    let mut failed = false;
     for path in args {
         if path.starts_with('-') {
             continue;
@@ -1034,16 +1052,16 @@ pub async fn cmd_sha256sum(args: &[&str], piped: Option<&str>) -> ShellOutput {
                 let hash = Sha256::digest(&data);
                 out.push_str(&format!("{}  {}\r\n", hex::encode(hash), path));
             }
-            Err(e) => out.push_str(&format!("sha256sum: {}: {}\r\n", path, e)),
+            Err(e) => { failed = true; out.push_str(&format!("sha256sum: {}: {}\r\n", path, e)); }
         }
     }
-    ShellOutput::text(out)
+    ShellOutput::text(out).failed_if(failed)
 }
 
 pub async fn cmd_tee(args: &[&str], piped: Option<&str>) -> ShellOutput {
     let input = match piped {
         Some(s) => s,
-        None => return ShellOutput::text("usage: <cmd> | tee <file>\r\n"),
+        None => return ShellOutput::usage("usage: <cmd> | tee <file>\r\n"),
     };
 
     let mut append = false;
@@ -1074,10 +1092,111 @@ pub async fn cmd_tee(args: &[&str], piped: Option<&str>) -> ShellOutput {
         };
 
         if let Err(e) = result {
-            return ShellOutput::text(format!("tee: {}: {}\r\n", path, e));
+            return ShellOutput::error(format!("tee: {}: {}\r\n", path, e));
         }
     }
 
     // Pass through input to stdout
     ShellOutput::text(input.to_string())
+}
+
+/// `test` / `[`: the file and string checks a one-shot or an exec probe
+/// waits on (stormd#31): `-e -f -d -s -r -w -x PATH`, `-n STR`, `-z STR`,
+/// `A = B`, `A != B`, a leading `!`, and a bare `STR` (non-empty). Status 0
+/// true, 1 false, 2 for an expression it does not know. Prints nothing.
+pub fn cmd_test(args: &[&str]) -> ShellOutput {
+    let (negate, args) = match args.split_first() {
+        Some((&"!", rest)) => (true, rest),
+        _ => (false, args),
+    };
+    let result = match args {
+        [] => Some(false),
+        [s] => Some(!s.is_empty()),
+        [op, path] if op.len() == 2 && op.starts_with('-') && !["-n", "-z"].contains(op) => {
+            let meta = std::fs::metadata(path);
+            match *op {
+                "-e" => Some(meta.is_ok()),
+                "-f" => Some(meta.map(|m| m.is_file()).unwrap_or(false)),
+                "-d" => Some(meta.map(|m| m.is_dir()).unwrap_or(false)),
+                "-s" => Some(meta.map(|m| m.len() > 0).unwrap_or(false)),
+                "-r" | "-w" | "-x" => Some(access(path, op)),
+                _ => None,
+            }
+        }
+        ["-n", s] => Some(!s.is_empty()),
+        ["-z", s] => Some(s.is_empty()),
+        [a, "=", b] | [a, "==", b] => Some(a == b),
+        [a, "!=", b] => Some(a != b),
+        _ => None,
+    };
+    match result {
+        Some(r) => ShellOutput::text("").failed_if(r == negate),
+        None => ShellOutput::usage(format!("test: unknown expression: {}\r\n", args.join(" "))),
+    }
+}
+
+/// access(2) for `test -r/-w/-x`.
+fn access(path: &str, op: &str) -> bool {
+    #[cfg(unix)]
+    {
+        use nix::unistd::{access, AccessFlags};
+        let flag = match op {
+            "-r" => AccessFlags::R_OK,
+            "-w" => AccessFlags::W_OK,
+            _ => AccessFlags::X_OK,
+        };
+        access(path, flag).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = op;
+        Path::new(path).exists()
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn failing_applets_say_so() {
+        let dir = std::env::temp_dir().join(format!("stormd-status-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("here");
+        std::fs::write(&f, b"hello\n").unwrap();
+        let (here, missing, d) = (f.to_str().unwrap().to_string(), dir.join("missing").to_str().unwrap().to_string(), dir.to_str().unwrap().to_string());
+
+        assert_eq!(cmd_stat(&[&here]).await.status, 0);
+        assert_eq!(cmd_stat(&[&missing]).await.status, 1);
+        assert_eq!(cmd_stat(&[]).await.status, 2);
+        assert_eq!(cmd_cat(&[&here], None).await.status, 0);
+        let partial = cmd_cat(&[&here, &missing], None).await;
+        assert_eq!(partial.status, 1, "one missing file fails the whole cat");
+        assert!(partial.text.contains("hello"), "the file that exists is still printed");
+        assert_eq!(cmd_ls(&[&d]).await.status, 0);
+        assert_eq!(cmd_ls(&[&missing]).await.status, 1);
+        assert_eq!(cmd_head(&[&missing], None).await.status, 1);
+        assert_eq!(cmd_mkdir(&[&format!("{missing}/a/b")]).await.status, 1);
+        assert_eq!(cmd_rm(&[&missing]).await.status, 1);
+        assert_eq!(cmd_rm(&["-f", &missing]).await.status, 0, "rm -f of nothing succeeds");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_applet() {
+        let dir = std::env::temp_dir();
+        let d = dir.to_str().unwrap();
+        let missing = format!("{d}/stormd-no-such-file-31");
+        assert_eq!(cmd_test(&["-e", d]).status, 0);
+        assert_eq!(cmd_test(&["-d", d]).status, 0);
+        assert_eq!(cmd_test(&["-f", d]).status, 1);
+        assert_eq!(cmd_test(&["-e", &missing]).status, 1);
+        assert_eq!(cmd_test(&["!", "-e", &missing]).status, 0);
+        assert_eq!(cmd_test(&["-n", ""]).status, 1);
+        assert_eq!(cmd_test(&["-z", ""]).status, 0);
+        assert_eq!(cmd_test(&["a", "=", "a"]).status, 0);
+        assert_eq!(cmd_test(&["a", "!=", "a"]).status, 1);
+        assert_eq!(cmd_test(&[]).status, 1);
+        assert_eq!(cmd_test(&["-q", "x", "y"]).status, 2);
+    }
 }

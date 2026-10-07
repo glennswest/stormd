@@ -12,6 +12,9 @@ use std::sync::Arc;
 /// Shell command result — text to send back to the terminal.
 pub struct ShellOutput {
     pub text: String,
+    /// Exit status of a standalone applet: 0 success, 1 failure, 2 usage
+    /// (coreutils/busybox). The SSH shell ignores it (stormd#31).
+    pub status: i32,
     /// If true, the shell session should end.
     pub exit: bool,
     /// If set, attach to this process's terminal (interactive mode).
@@ -25,6 +28,7 @@ impl ShellOutput {
     fn text(s: impl Into<String>) -> Self {
         Self {
             text: s.into(),
+            status: 0,
             exit: false,
             attach: None,
             follow: false,
@@ -32,9 +36,28 @@ impl ShellOutput {
         }
     }
 
+    /// An applet that failed: status 1.
+    fn error(s: impl Into<String>) -> Self {
+        Self { status: 1, ..Self::text(s) }
+    }
+
+    /// Called wrong: status 2.
+    fn usage(s: impl Into<String>) -> Self {
+        Self { status: 2, ..Self::text(s) }
+    }
+
+    /// Status 1 if `failed`, as it is.
+    fn failed_if(mut self, failed: bool) -> Self {
+        if failed && self.status == 0 {
+            self.status = 1;
+        }
+        self
+    }
+
     fn exit() -> Self {
         Self {
             text: "logout\r\n".to_string(),
+            status: 0,
             exit: true,
             attach: None,
             follow: false,
@@ -105,7 +128,7 @@ pub async fn execute_command(
         };
         return match result {
             Ok(_) => ShellOutput::text(""),
-            Err(e) => ShellOutput::text(format!("redirect: {}\r\n", e)),
+            Err(e) => ShellOutput::error(format!("redirect: {}\r\n", e)),
         };
     }
 
@@ -148,30 +171,31 @@ pub(crate) async fn execute_single(
         "ps" | "top" => proc::cmd_ps(state).await,
         "start" => {
             if args.is_empty() {
-                ShellOutput::text("usage: start <process>\r\n")
+                ShellOutput::usage("usage: start <process>\r\n")
             } else {
                 proc::cmd_start(state, args[0]).await
             }
         }
         "stop" => {
             if args.is_empty() {
-                ShellOutput::text("usage: stop <process>\r\n")
+                ShellOutput::usage("usage: stop <process>\r\n")
             } else {
                 proc::cmd_stop(state, args[0]).await
             }
         }
         "restart" => {
             if args.is_empty() {
-                ShellOutput::text("usage: restart <process>\r\n")
+                ShellOutput::usage("usage: restart <process>\r\n")
             } else {
                 proc::cmd_restart(state, args[0]).await
             }
         }
         "attach" => {
             if args.is_empty() {
-                ShellOutput::text("usage: attach <process>\r\n")
+                ShellOutput::usage("usage: attach <process>\r\n")
             } else {
                 ShellOutput {
+                    status: 0,
                     text: format!("Attaching to {}... (Ctrl-C to detach)\r\n", args[0]),
                     exit: false,
                     attach: Some(args[0].to_string()),
@@ -195,7 +219,7 @@ pub(crate) async fn execute_single(
             } else if !args.is_empty() {
                 log::cmd_grep_logs(state, args[0]).await
             } else {
-                ShellOutput::text("usage: grep <pattern> [file]\r\n")
+                ShellOutput::usage("usage: grep <pattern> [file]\r\n")
             }
         }
 
@@ -371,6 +395,8 @@ pub const STANDALONE_COMMANDS: &[&str] = &[
     "sleep", "echo", "env", "whoami", "which", "type", "lsof", "true", "false", "clear",
     // Text processing
     "sort", "uniq", "cut", "tr", "sed", "rev", "base64", "xxd", "grep",
+    // Tests
+    "test", "[",
 ];
 
 /// What stormd was asked to be, from its `argv[0]`.
@@ -481,7 +507,12 @@ pub async fn execute_standalone(cmd: &str, args: &[String]) -> i32 {
         "type" => sys::cmd_type(&args_str),
         "lsof" => sys::cmd_lsof(),
         "true" => ShellOutput::text(""),
-        "false" => { print!(""); return 1; }
+        "false" => ShellOutput::error(""),
+        "test" => file::cmd_test(&args_str),
+        "[" => match args_str.split_last() {
+            Some((&"]", rest)) => file::cmd_test(rest),
+            _ => ShellOutput::usage("[: missing ']'\r\n"),
+        },
         "clear" => ShellOutput::text("\x1b[2J\x1b[H"),
 
         // Text processing
@@ -504,7 +535,10 @@ pub async fn execute_standalone(cmd: &str, args: &[String]) -> i32 {
     // Convert \r\n to \n for real terminal output
     let text = output.text.replace("\r\n", "\n");
     print!("{}", text);
-    0
+    // The applet's own status: 1 on failure, 2 on bad usage (stormd#31).
+    // It used to be 0 for everything but `false`, so no one-shot or exec
+    // probe built on an applet could ever fail.
+    output.status
 }
 
 /// Install symlinks for all standalone commands into the given directory.

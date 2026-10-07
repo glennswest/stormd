@@ -51,7 +51,7 @@ pub async fn cmd_grep(args: &[&str], piped: Option<&str>) -> ShellOutput {
 
     let pattern = match pattern {
         Some(p) => p,
-        None => return ShellOutput::text("usage: grep [-ivc] <pattern> [file...]\r\n"),
+        None => return ShellOutput::usage("usage: grep [-ivc] <pattern> [file...]\r\n"),
     };
 
     let content = if !files.is_empty() {
@@ -59,14 +59,14 @@ pub async fn cmd_grep(args: &[&str], piped: Option<&str>) -> ShellOutput {
         for f in &files {
             match tokio::fs::read_to_string(f).await {
                 Ok(c) => all.push_str(&c),
-                Err(e) => return ShellOutput::text(format!("grep: {}: {}\r\n", f, e)),
+                Err(e) => return ShellOutput::error(format!("grep: {}: {}\r\n", f, e)),
             }
         }
         all
     } else if let Some(input) = piped {
         input.replace("\r\n", "\n")
     } else {
-        return ShellOutput::text("usage: grep <pattern> <file>\r\n");
+        return ShellOutput::usage("usage: grep <pattern> <file>\r\n");
     };
 
     let pat_lower = pattern.to_lowercase();
@@ -89,12 +89,13 @@ pub async fn cmd_grep(args: &[&str], piped: Option<&str>) -> ShellOutput {
         }
     }
 
+    // No match is status 1, as grep has it — so `grep -q`-style checks work.
     if count_only {
-        return ShellOutput::text(format!("{}\r\n", matches.len()));
+        return ShellOutput::text(format!("{}\r\n", matches.len())).failed_if(matches.is_empty());
     }
 
     if matches.is_empty() {
-        return ShellOutput::text("");
+        return ShellOutput::error("");
     }
     ShellOutput::text(matches.join("\r\n") + "\r\n")
 }
@@ -216,7 +217,7 @@ pub async fn cmd_cut(args: &[&str], piped: Option<&str>) -> ShellOutput {
     }
 
     if fields.is_empty() {
-        return ShellOutput::text("usage: cut -d<delim> -f<fields> [file]\r\n");
+        return ShellOutput::usage("usage: cut -d<delim> -f<fields> [file]\r\n");
     }
 
     let input = match get_input(args, piped, 0).await {
@@ -255,12 +256,12 @@ fn parse_field_spec(spec: &str) -> Vec<usize> {
 
 pub async fn cmd_tr(args: &[&str], piped: Option<&str>) -> ShellOutput {
     if args.len() < 2 {
-        return ShellOutput::text("usage: tr <from> <to>\r\n");
+        return ShellOutput::usage("usage: tr <from> <to>\r\n");
     }
 
     let input = match piped {
         Some(s) => s.replace("\r\n", "\n"),
-        None => return ShellOutput::text("usage: <cmd> | tr <from> <to>\r\n"),
+        None => return ShellOutput::usage("usage: <cmd> | tr <from> <to>\r\n"),
     };
 
     let from_chars: Vec<char> = args[0].chars().collect();
@@ -286,24 +287,24 @@ pub async fn cmd_sed(args: &[&str], piped: Option<&str>) -> ShellOutput {
     // Support basic s/pattern/replacement/[g] only
     let expr = match args.first() {
         Some(e) => *e,
-        None => return ShellOutput::text("usage: sed 's/pattern/replacement/[g]'\r\n"),
+        None => return ShellOutput::usage("usage: sed 's/pattern/replacement/[g]'\r\n"),
     };
 
     let input = match get_input(args, piped, 1).await {
         Some(s) => s,
-        None => return ShellOutput::text("usage: sed 's/pat/rep/' [file]\r\n"),
+        None => return ShellOutput::usage("usage: sed 's/pat/rep/' [file]\r\n"),
     };
 
     // Parse s/pat/rep/flags
     if !expr.starts_with("s") || expr.len() < 4 {
-        return ShellOutput::text("sed: only s/pattern/replacement/[g] is supported\r\n");
+        return ShellOutput::error("sed: only s/pattern/replacement/[g] is supported\r\n");
     }
 
     let delim = expr.chars().nth(1).unwrap_or('/');
     let rest = &expr[2..];
     let parts: Vec<&str> = rest.splitn(3, delim).collect();
     if parts.len() < 2 {
-        return ShellOutput::text("sed: invalid expression\r\n");
+        return ShellOutput::error("sed: invalid expression\r\n");
     }
 
     let pattern = parts[0];
@@ -326,7 +327,7 @@ pub async fn cmd_sed(args: &[&str], piped: Option<&str>) -> ShellOutput {
 pub fn cmd_rev(piped: Option<&str>) -> ShellOutput {
     let input = match piped {
         Some(s) => s.replace("\r\n", "\n"),
-        None => return ShellOutput::text("usage: <cmd> | rev\r\n"),
+        None => return ShellOutput::usage("usage: <cmd> | rev\r\n"),
     };
 
     let mut out = String::new();
@@ -343,7 +344,7 @@ pub fn cmd_base64(args: &[&str], piped: Option<&str>) -> ShellOutput {
 
     let input = match piped {
         Some(s) => s.replace("\r\n", "\n"),
-        None => return ShellOutput::text("usage: <cmd> | base64 [-d]\r\n"),
+        None => return ShellOutput::usage("usage: <cmd> | base64 [-d]\r\n"),
     };
 
     if decode {
@@ -353,7 +354,7 @@ pub fn cmd_base64(args: &[&str], piped: Option<&str>) -> ShellOutput {
                 let text = String::from_utf8_lossy(&data);
                 ShellOutput::text(text.replace('\n', "\r\n"))
             }
-            Err(e) => ShellOutput::text(format!("base64: {}\r\n", e)),
+            Err(e) => ShellOutput::error(format!("base64: {}\r\n", e)),
         }
     } else {
         let encoded = base64_encode(input.trim_end().as_bytes());
@@ -414,7 +415,7 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, &'static str> {
 pub fn cmd_xxd(piped: Option<&str>) -> ShellOutput {
     let input = match piped {
         Some(s) => s,
-        None => return ShellOutput::text("usage: <cmd> | xxd\r\n"),
+        None => return ShellOutput::usage("usage: <cmd> | xxd\r\n"),
     };
 
     let bytes = input.as_bytes();
@@ -455,11 +456,11 @@ pub fn cmd_xargs<'a>(
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ShellOutput> + Send + 'a>> {
     let input = match piped {
         Some(s) => s.replace("\r\n", "\n"),
-        None => return Box::pin(async { ShellOutput::text("usage: <cmd> | xargs <command>\r\n") }),
+        None => return Box::pin(async { ShellOutput::usage("usage: <cmd> | xargs <command>\r\n") }),
     };
 
     if args.is_empty() {
-        return Box::pin(async { ShellOutput::text("usage: <cmd> | xargs <command>\r\n") });
+        return Box::pin(async { ShellOutput::usage("usage: <cmd> | xargs <command>\r\n") });
     }
 
     let cmd = args.join(" ");

@@ -50,7 +50,7 @@ pub async fn cmd_ifconfig(args: &[&str]) -> ShellOutput {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = filter_iface;
-        ShellOutput::text("ifconfig: not available (Linux only)\r\n")
+        ShellOutput::error("ifconfig: not available (Linux only)\r\n")
     }
 }
 
@@ -254,14 +254,14 @@ pub async fn cmd_ping(args: &[&str]) -> ShellOutput {
     }
 
     if host.is_empty() {
-        return ShellOutput::text("usage: ping [-c count] <host>\r\n");
+        return ShellOutput::usage("usage: ping [-c count] <host>\r\n");
     }
 
     // Resolve hostname
     let addrs: Vec<std::net::SocketAddr> =
         match tokio::net::lookup_host(format!("{}:80", host)).await {
             Ok(a) => a.collect(),
-            Err(e) => return ShellOutput::text(format!("ping: {}: {}\r\n", host, e)),
+            Err(e) => return ShellOutput::error(format!("ping: {}: {}\r\n", host, e)),
         };
 
     let addr = match addrs.first() {
@@ -380,7 +380,7 @@ pub async fn cmd_curl(args: &[&str]) -> ShellOutput {
     }
 
     if url.is_empty() {
-        return ShellOutput::text("usage: curl [-I] [-X METHOD] [-o file] <url>\r\n");
+        return ShellOutput::usage("usage: curl [-I] [-X METHOD] [-o file] <url>\r\n");
     }
 
     // Ensure URL has scheme
@@ -423,9 +423,9 @@ pub async fn cmd_curl(args: &[&str]) -> ShellOutput {
                             data.len(),
                             path
                         )),
-                        Err(e) => ShellOutput::text(format!("curl: write error: {}\r\n", e)),
+                        Err(e) => ShellOutput::error(format!("curl: write error: {}\r\n", e)),
                     },
-                    Err(e) => ShellOutput::text(format!("curl: {}\r\n", e)),
+                    Err(e) => ShellOutput::error(format!("curl: {}\r\n", e)),
                 }
             } else {
                 match resp.text().await {
@@ -436,11 +436,11 @@ pub async fn cmd_curl(args: &[&str]) -> ShellOutput {
                         }
                         ShellOutput::text(text)
                     }
-                    Err(e) => ShellOutput::text(format!("curl: {}\r\n", e)),
+                    Err(e) => ShellOutput::error(format!("curl: {}\r\n", e)),
                 }
             }
         }
-        Err(e) => ShellOutput::text(format!("curl: {}\r\n", e)),
+        Err(e) => ShellOutput::error(format!("curl: {}\r\n", e)),
     }
 }
 
@@ -483,7 +483,7 @@ pub async fn cmd_netstat(args: &[&str]) -> ShellOutput {
     }
 
     #[cfg(not(target_os = "linux"))]
-    ShellOutput::text("netstat: not available (Linux only)\r\n")
+    ShellOutput::error("netstat: not available (Linux only)\r\n")
 }
 
 pub async fn cmd_ss(args: &[&str]) -> ShellOutput {
@@ -587,7 +587,7 @@ fn tcp_state(hex: &str) -> &'static str {
 
 pub async fn cmd_nslookup(args: &[&str]) -> ShellOutput {
     if args.is_empty() {
-        return ShellOutput::text("usage: nslookup <hostname>\r\n");
+        return ShellOutput::usage("usage: nslookup <hostname>\r\n");
     }
     let host = args[0];
 
@@ -604,7 +604,7 @@ pub async fn cmd_nslookup(args: &[&str]) -> ShellOutput {
             }
             ShellOutput::text(out)
         }
-        Err(e) => ShellOutput::text(format!(
+        Err(e) => ShellOutput::error(format!(
             "** server can't find {}: {}\r\n",
             host, e
         )),
@@ -633,7 +633,7 @@ pub async fn cmd_route(args: &[&str]) -> ShellOutput {
     {
         let content = match std::fs::read_to_string("/proc/net/route") {
             Ok(c) => c,
-            Err(e) => return ShellOutput::text(format!("route: {}\r\n", e)),
+            Err(e) => return ShellOutput::error(format!("route: {}\r\n", e)),
         };
 
         let mut out = String::new();
@@ -678,7 +678,7 @@ pub async fn cmd_route(args: &[&str]) -> ShellOutput {
     }
 
     #[cfg(not(target_os = "linux"))]
-    ShellOutput::text("route: not available (Linux only)\r\n")
+    ShellOutput::error("route: not available (Linux only)\r\n")
 }
 
 #[cfg(target_os = "linux")]

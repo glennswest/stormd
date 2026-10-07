@@ -79,21 +79,21 @@ pub async fn cmd_ps(state: &Arc<AppState>) -> ShellOutput {
 pub async fn cmd_start(state: &Arc<AppState>, name: &str) -> ShellOutput {
     match state.supervisor.start_process(name).await {
         Ok(()) => ShellOutput::text(format!("Started {}\r\n", name)),
-        Err(e) => ShellOutput::text(format!("Error: {}\r\n", e)),
+        Err(e) => ShellOutput::error(format!("Error: {}\r\n", e)),
     }
 }
 
 pub async fn cmd_stop(state: &Arc<AppState>, name: &str) -> ShellOutput {
     match state.supervisor.stop_process(name).await {
         Ok(()) => ShellOutput::text(format!("Stopped {}\r\n", name)),
-        Err(e) => ShellOutput::text(format!("Error: {}\r\n", e)),
+        Err(e) => ShellOutput::error(format!("Error: {}\r\n", e)),
     }
 }
 
 pub async fn cmd_restart(state: &Arc<AppState>, name: &str) -> ShellOutput {
     match state.supervisor.restart_process(name).await {
         Ok(()) => ShellOutput::text(format!("Restarted {}\r\n", name)),
-        Err(e) => ShellOutput::text(format!("Error: {}\r\n", e)),
+        Err(e) => ShellOutput::error(format!("Error: {}\r\n", e)),
     }
 }
 

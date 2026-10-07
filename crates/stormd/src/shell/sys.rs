@@ -43,7 +43,7 @@ pub fn cmd_df(args: &[&str]) -> ShellOutput {
                 return ShellOutput::text(out);
             }
         }
-        return ShellOutput::text("df: no mount info available\r\n");
+        return ShellOutput::error("df: no mount info available\r\n");
     }
 
     let mut out = format!(
@@ -118,7 +118,7 @@ pub fn cmd_free(args: &[&str]) -> ShellOutput {
         }
     }
     let _ = human;
-    ShellOutput::text("free: memory info not available\r\n")
+    ShellOutput::error("free: memory info not available\r\n")
 }
 
 #[cfg(target_os = "linux")]
@@ -223,7 +223,7 @@ pub fn cmd_kill(args: &[&str]) -> ShellOutput {
     #[cfg(target_os = "linux")]
     {
         if args.is_empty() {
-            return ShellOutput::text("usage: kill [-signal] <pid>\r\n");
+            return ShellOutput::usage("usage: kill [-signal] <pid>\r\n");
         }
 
         let mut signal = nix::sys::signal::Signal::SIGTERM;
@@ -246,7 +246,7 @@ pub fn cmd_kill(args: &[&str]) -> ShellOutput {
                 }
             };
             if args.len() < 2 {
-                return ShellOutput::text("usage: kill [-signal] <pid>\r\n");
+                return ShellOutput::usage("usage: kill [-signal] <pid>\r\n");
             }
             pid_str = args[1];
         }
@@ -254,7 +254,7 @@ pub fn cmd_kill(args: &[&str]) -> ShellOutput {
         let pid: i32 = match pid_str.parse() {
             Ok(p) => p,
             Err(_) => {
-                return ShellOutput::text(format!(
+                return ShellOutput::usage(format!(
                     "kill: invalid pid '{}'\r\n",
                     pid_str
                 ))
@@ -263,14 +263,14 @@ pub fn cmd_kill(args: &[&str]) -> ShellOutput {
 
         match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), signal) {
             Ok(()) => ShellOutput::text(""),
-            Err(e) => ShellOutput::text(format!("kill: {}\r\n", e)),
+            Err(e) => ShellOutput::error(format!("kill: {}\r\n", e)),
         }
     }
 
     #[cfg(not(target_os = "linux"))]
     {
         let _ = args;
-        ShellOutput::text("kill: not available on this platform\r\n")
+        ShellOutput::error("kill: not available on this platform\r\n")
     }
 }
 
@@ -281,13 +281,13 @@ pub fn cmd_printenv(args: &[&str]) -> ShellOutput {
     let var = args[0];
     match std::env::var(var) {
         Ok(val) => ShellOutput::text(format!("{}\r\n", val)),
-        Err(_) => ShellOutput::text(""),
+        Err(_) => ShellOutput::error(""),
     }
 }
 
 pub fn cmd_export(args: &[&str]) -> ShellOutput {
     if args.is_empty() {
-        return ShellOutput::text("usage: export VAR=value\r\n");
+        return ShellOutput::usage("usage: export VAR=value\r\n");
     }
     let expr = args.join(" ");
     if let Some(eq) = expr.find('=') {
@@ -305,13 +305,13 @@ pub fn cmd_export(args: &[&str]) -> ShellOutput {
         }
         ShellOutput::text("")
     } else {
-        ShellOutput::text("usage: export VAR=value\r\n")
+        ShellOutput::usage("usage: export VAR=value\r\n")
     }
 }
 
 pub fn cmd_unset(args: &[&str]) -> ShellOutput {
     if args.is_empty() {
-        return ShellOutput::text("usage: unset VAR\r\n");
+        return ShellOutput::usage("usage: unset VAR\r\n");
     }
     #[allow(unused_unsafe)]
     unsafe {
@@ -322,7 +322,7 @@ pub fn cmd_unset(args: &[&str]) -> ShellOutput {
 
 pub async fn cmd_sleep(args: &[&str]) -> ShellOutput {
     if args.is_empty() {
-        return ShellOutput::text("usage: sleep <seconds>\r\n");
+        return ShellOutput::usage("usage: sleep <seconds>\r\n");
     }
     let secs: f64 = args[0].parse().unwrap_or(1.0);
     let ms = (secs * 1000.0) as u64;
@@ -366,25 +366,25 @@ pub fn cmd_echo(args: &[&str]) -> ShellOutput {
 
 pub fn cmd_which(args: &[&str]) -> ShellOutput {
     if args.is_empty() {
-        return ShellOutput::text("usage: which <command>\r\n");
+        return ShellOutput::usage("usage: which <command>\r\n");
     }
     let cmd = args[0];
     if super::is_builtin(cmd) {
         ShellOutput::text(format!("{}: shell built-in command\r\n", cmd))
     } else {
-        ShellOutput::text(format!("{}: not found\r\n", cmd))
+        ShellOutput::error(format!("{}: not found\r\n", cmd))
     }
 }
 
 pub fn cmd_type(args: &[&str]) -> ShellOutput {
     if args.is_empty() {
-        return ShellOutput::text("usage: type <command>\r\n");
+        return ShellOutput::usage("usage: type <command>\r\n");
     }
     let cmd = args[0];
     if super::is_builtin(cmd) {
         ShellOutput::text(format!("{} is a shell builtin\r\n", cmd))
     } else {
-        ShellOutput::text(format!("-bash: type: {}: not found\r\n", cmd))
+        ShellOutput::error(format!("-bash: type: {}: not found\r\n", cmd))
     }
 }
 
@@ -430,7 +430,7 @@ pub fn cmd_lsof() -> ShellOutput {
     }
 
     #[cfg(not(target_os = "linux"))]
-    ShellOutput::text("lsof: not available (Linux only)\r\n")
+    ShellOutput::error("lsof: not available (Linux only)\r\n")
 }
 
 pub async fn cmd_systemctl(state: &Arc<AppState>, args: &[&str]) -> ShellOutput {
@@ -468,7 +468,7 @@ pub async fn cmd_systemctl(state: &Arc<AppState>, args: &[&str]) -> ShellOutput 
                         }
                         ShellOutput::text(out)
                     }
-                    Err(e) => ShellOutput::text(format!(
+                    Err(e) => ShellOutput::error(format!(
                         "Unit {} not found: {}\r\n",
                         name, e
                     )),
@@ -479,15 +479,15 @@ pub async fn cmd_systemctl(state: &Arc<AppState>, args: &[&str]) -> ShellOutput 
         }
         "start" => match name {
             Some(n) => super::proc::cmd_start(state, n).await,
-            None => ShellOutput::text("usage: systemctl start <unit>\r\n"),
+            None => ShellOutput::usage("usage: systemctl start <unit>\r\n"),
         },
         "stop" => match name {
             Some(n) => super::proc::cmd_stop(state, n).await,
-            None => ShellOutput::text("usage: systemctl stop <unit>\r\n"),
+            None => ShellOutput::usage("usage: systemctl stop <unit>\r\n"),
         },
         "restart" => match name {
             Some(n) => super::proc::cmd_restart(state, n).await,
-            None => ShellOutput::text("usage: systemctl restart <unit>\r\n"),
+            None => ShellOutput::usage("usage: systemctl restart <unit>\r\n"),
         },
         "list-units" => super::proc::cmd_ps(state).await,
         "is-active" => match name {
@@ -499,9 +499,9 @@ pub async fn cmd_systemctl(state: &Arc<AppState>, args: &[&str]) -> ShellOutput 
                         if active { "active" } else { "inactive" }
                     ))
                 }
-                Err(_) => ShellOutput::text("inactive\r\n"),
+                Err(_) => ShellOutput::error("inactive\r\n"),
             },
-            None => ShellOutput::text("usage: systemctl is-active <unit>\r\n"),
+            None => ShellOutput::usage("usage: systemctl is-active <unit>\r\n"),
         },
         "is-failed" => match name {
             Some(n) => match state.supervisor.get_status(n).await {
@@ -512,9 +512,9 @@ pub async fn cmd_systemctl(state: &Arc<AppState>, args: &[&str]) -> ShellOutput 
                         if failed { "failed" } else { "active" }
                     ))
                 }
-                Err(_) => ShellOutput::text("unknown\r\n"),
+                Err(_) => ShellOutput::error("unknown\r\n"),
             },
-            None => ShellOutput::text("usage: systemctl is-failed <unit>\r\n"),
+            None => ShellOutput::usage("usage: systemctl is-failed <unit>\r\n"),
         },
         "enable" | "disable" => ShellOutput::text(
             "systemctl enable/disable: not supported in stormd (processes are config-driven)\r\n",

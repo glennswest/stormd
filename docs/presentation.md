@@ -146,7 +146,7 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
   plus SFTP. The password is the configured one or the cloud ID; public keys
   come from CloudID over IMDSv2 (keys arrive once stormimds serves
   `public-keys/`, stormimds#5).
-- **63 busybox-style applets** through `argv[0]` (`ls`, `curl`, `ping`, …),
+- **65 busybox-style applets** through `argv[0]` (`ls`, `curl`, `ping`, …),
   so a scratch container can be looked around in.
 - **Also:** cron (6 fields), log backup (tar.gz POSTed on failure), an OCI
   image updater, login (users, bearer token), `--healthcheck`, zombie
@@ -219,8 +219,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
     the node (decision pending in stormimds#9).
   - **#24** — the test container does not yet build the way stormcentral's
     runner expects.
-  - **#31** — every applet but `false` exits 0, even on error, so no
-    one-shot or exec probe can wait for a file.
   - **#7, #10** — config keys that do nothing, cron timeouts that don't kill,
     the liveness counter resetting.
 
@@ -230,7 +228,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 
 From the open issues. **None of this works today:**
 
-- Applets that exit non-zero on error (#31).
 - Rate limiting and repeat-collapsing, per process, on the multicast group
   (#12); `group = "off"` meaning no emitter (#27); stormcast bumped past the
   multibyte truncation panic (#28).

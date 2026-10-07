@@ -21,6 +21,7 @@ pub async fn cmd_logs(state: &Arc<AppState>, args: &[&str]) -> ShellOutput {
 
     if follow {
         return ShellOutput {
+            status: 0,
             text: format!(
                 "Following logs{}... (Ctrl-C to stop)\r\n",
                 process
@@ -68,7 +69,7 @@ pub async fn cmd_logs(state: &Arc<AppState>, args: &[&str]) -> ShellOutput {
                 ShellOutput::text(out)
             }
         }
-        Err(_) => ShellOutput::text("(no stored logs available)\r\n"),
+        Err(_) => ShellOutput::error("(no stored logs available)\r\n"),
     }
 }
 
@@ -93,7 +94,7 @@ pub async fn cmd_grep_logs(state: &Arc<AppState>, pattern: &str) -> ShellOutput 
             }
             ShellOutput::text(out)
         }
-        Err(_) => ShellOutput::text("(search unavailable)\r\n"),
+        Err(_) => ShellOutput::error("(search unavailable)\r\n"),
     }
 }
 
@@ -114,6 +115,7 @@ pub async fn cmd_dmesg(state: &Arc<AppState>, args: &[&str]) -> ShellOutput {
 
     if follow {
         return ShellOutput {
+            status: 0,
             text: "Following system logs... (Ctrl-C to stop)\r\n".to_string(),
             exit: false,
             attach: None,
@@ -153,6 +155,6 @@ pub async fn cmd_dmesg(state: &Arc<AppState>, args: &[&str]) -> ShellOutput {
             }
             ShellOutput::text(out)
         }
-        Err(_) => ShellOutput::text("(log system unavailable)\r\n"),
+        Err(_) => ShellOutput::error("(log system unavailable)\r\n"),
     }
 }

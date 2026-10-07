@@ -3,6 +3,15 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-10-07
+- **fix:** standalone applets exit non-zero when they fail (#31): 1 on
+  failure (`stat`/`cat`/`ls` of a missing file, `grep` with no match, `ping`
+  with no answer, …), 2 on bad usage. Before, everything but `false` exited
+  0, so no one-shot or exec probe could wait for a file.
+- **feat:** a `test` / `[` applet (`-e -f -d -s -r -w -x`, `-n`, `-z`, `=`,
+  `!=`, `!`) for exactly that (#31, stormcos#81). Goldens link it through
+  `--list-commands`.
+
 ## [v0.8.0] — 2026-10-07 (stormd 0.8.0 · stormlog 0.4.0 · stormsh 0.5.0)
 
 ### Breaking

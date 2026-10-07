@@ -44,7 +44,7 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
 - **SSH server** — a management shell (process control, logs, attach, 60-odd
   file/network/system commands, pipes and redirection) and an SFTP subsystem;
   public keys from the CloudID metadata service, over IMDSv2.
-- **Busybox-style multi-call binary** — 63 commands through `argv[0]` symlinks,
+- **Busybox-style multi-call binary** — 65 commands through `argv[0]` symlinks,
   so a scratch container has `ls`, `cat`, `curl`, `ping`, … .
 - **Cron** — 6-field (seconds-first) schedules.
 - **Log backup** — tar(.gz) the log directory and POST it somewhere when the
@@ -239,7 +239,7 @@ stormd --list-commands           # print the applet names, exit
 stormd --version
 ```
 
-Invoked through a symlink whose name is one of the 63 applets, stormd runs
+Invoked through a symlink whose name is one of the 65 applets, stormd runs
 that command and exits instead (see [Busybox commands](#busybox-commands)).
 stormd starts as init only when the basename of `argv[0]` is `stormd`, or a
 renamed copy (`stormd-*`, `stormd.*`). Under any other name — `/bin/ps`
@@ -379,8 +379,9 @@ spawned.
 (`interval_secs` is required). Polled in the background after each spawn,
 5 s timeout per attempt; HTTP passes on 2xx/3xx (certificates not verified),
 TCP connects to `127.0.0.1:port`, exec passes on exit 0. It gates dependents
-only. A stormd applet always exits 0 (see [Busybox commands](#busybox-commands)),
-so an exec probe built on one, such as `stat /file`, can never fail (#31).
+only. Applets exit non-zero when they fail (see [Busybox commands](#busybox-commands)),
+so `{ type = "exec", command = "/bin/test -e /etc/stormcert/x.crt" }` waits for
+a file (#31).
 
 **`[process.liveness]`**
 
@@ -848,7 +849,7 @@ Tab completion (commands, process names, paths), history, `|` pipes, and
 
 ## Busybox commands
 
-`argv[0]` dispatch, 63 commands:
+`argv[0]` dispatch, 65 commands:
 
 | | |
 |---|---|
@@ -856,16 +857,24 @@ Tab completion (commands, process names, paths), history, `|` pipes, and
 | Network | `ifconfig ip ping curl wget netstat ss nslookup dig hostname route` |
 | System | `mount df free uname date id kill printenv export unset sleep echo env whoami which type lsof true false clear` |
 | Text | `sort uniq cut tr sed rev base64 xxd grep` |
+| Tests | `test [` — `-e -f -d -s -r -w -x PATH`, `-n`/`-z STR`, `A = B`, `A != B`, leading `!` |
 
 `stormd --install DIR` links them all to the running binary; stormd also does
 this at every start for `/bin`, `/usr/bin`, `/sbin` and `/usr/sbin`. Piped
 stdin works (`ls /app | grep server`).
 
-**Exit status:** `false` exits 1 and an unknown name exits 127 (without
-starting init, #11). Every other
-applet exits **0, even when it fails**: `stat /missing` prints the error and
-exits 0, and so does `grep` with no match. So an applet cannot express "wait
-until this file exists" as a one-shot or an exec probe (#31).
+**Exit status** (#31), as in coreutils and busybox: 0 on success, 1 on
+failure, 2 on bad usage (a missing argument). Some examples:
+- `stat /missing`, `cat /missing` and `ls /missing` exit 1. So does a `cat`
+  of several files where any one is missing; the rest are still printed.
+- `grep` with no match exits 1, `-c` included. `test` exits 1 when false.
+- `rm -f` of something absent exits 0. `ping` exits 1 when nothing answered.
+- `false` exits 1. A name that is not an applet exits 127 without starting
+  init (#11).
+
+Error text is printed on stdout with the rest, as before. So a one-shot
+(`command = "/bin/test"`, `args = ["-e", "/path"]`, `on_failure =
+"restart"`) or an exec probe can wait for a file.
 
 ## Cloud ID
 
