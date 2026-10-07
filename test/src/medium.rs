@@ -26,6 +26,7 @@ pub fn run(env: &Env, r: &mut Report) {
     r.run("cron-job-runs", || cron(env));
     r.run("bad-config-refused", || bad_config(env));
     r.run("unknown-argv0-refused", || unknown_argv0(env));
+    r.run("wait-for-files", || wait_for_files(env));
     r.run("node-stormd", || crate::short::node_stormd(env));
 }
 
@@ -341,6 +342,28 @@ fn cron(env: &Env) -> Outcome {
         match sd.json("/api/v1/cron") {
             Ok(v) if v.to_string().contains("tick") => Outcome::Pass(format!("ran within {} ms; listed by /api/v1/cron", t.elapsed().as_millis())),
             Ok(v) => Outcome::Fail(format!("ran, but /api/v1/cron does not list it: {v:.200}")),
+            Err(e) => Outcome::Fail(e),
+        }
+    })
+}
+
+/// `wait_for_files`: held pending until the file exists, then started once,
+/// no restart counted (stormd#38).
+fn wait_for_files(env: &Env) -> Outcome {
+    let body = proc("p", "\"sleep\"", "wait_for_files = [\"{dir}/cert\"]");
+    with(env, "files", &body, Opts::default(), |sd| {
+        std::thread::sleep(S(1));
+        match sd.process("p") {
+            Ok(p) if p["state"] != "pending" => return Outcome::Fail(format!("started without its file: {}", p["state"])),
+            Err(e) => return Outcome::Fail(e),
+            _ => {}
+        }
+        if let Err(e) = std::fs::write(sd.dir.join("cert"), b"x") {
+            return Outcome::Infra(e.to_string());
+        }
+        match sd.wait_state("p", "running", S(5)) {
+            Ok(p) if p["restarts"] == 0 => Outcome::Pass("pending 1 s without the file, running once it appeared, 0 restarts".into()),
+            Ok(p) => Outcome::Fail(format!("running, but restarts = {}", p["restarts"])),
             Err(e) => Outcome::Fail(e),
         }
     })

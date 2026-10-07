@@ -104,6 +104,8 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
   spawn, so a control plane advertises an address other nodes can reach.
 - **`env_default`** — set only when stormd did not inherit the key, so a
   node's env.d overrides the golden's default; `env` wins over both.
+- **`wait_for_files`** — first start only once named files exist (a minted
+  cert pair), no restart or cool-off counted (#38).
 - **Shutdown** (SIGTERM, SIGINT, API, container failure) stops the start
   order, stands restarts down, and stops every process, dependents first:
   SIGTERM, `stop_timeout_secs` (default 10), then SIGKILL (#9). Bounded
