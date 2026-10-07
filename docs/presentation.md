@@ -217,8 +217,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
     own output, so a node console shows only "exited with error".
   - **#30** — on a node, CloudID's address is stormimds, which does not know
     the node (decision pending in stormimds#9).
-  - **#8** — the updater does not start an image process whose rootfs
-    already exists.
   - **#24** — the test container does not yet build the way stormcentral's
     runner expects.
   - **#31** — every applet but `false` exits 0, even on error, so no
@@ -241,7 +239,6 @@ From the open issues. **None of this works today:**
 - Waking dependents on a state change instead of a 250 ms poll (#25), and
   not logging a crash for a child that died of the shutdown signal (#26).
 - The test container built as one image from the repo root (#24).
-- Starting image processes from an existing rootfs after a restart (#8).
 - Warnings for unknown config keys, and dead keys removed or implemented (#7).
 - A real liveness counter and a cron timeout that kills (#10).
 
