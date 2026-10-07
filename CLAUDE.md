@@ -354,6 +354,14 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #43 — record a stormd input golden at head (2026-10-07): waiting on
+the owner.** stormcentral now lists stormd as an `input` golden
+(golden-stormd-fe3f126b72c8, 8edb89c), which conflicts with the 2026-09-26 rule
+"stormd never requests goldens". Asked on #43 (needs-owner) whether stormd
+sessions should run `component build stormd`. If yes: only after sc-build
+passes on head (head carries unbuilt #9/#11/#38), then update "How it ships"
+and the memory.
+
 **Issue #38 — `[process] wait_for_files` (2026-10-07), in progress.** As the
 issue specifies: spawn only once every listed file exists, polled every
 250 ms, one log line naming what is missing (and one when they appear), no
