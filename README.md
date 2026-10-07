@@ -126,13 +126,11 @@ is a workspace member but not a default one, so a golden's release build never
 compiles it: `sc-build 'cargo build --workspace && cargo test --workspace'`
 covers it too.
 
-**The test container**, `stormd-test-<suite>`, follows stormcentral's
+**The test image** follows stormcentral's
 [test standard](https://github.com/glennswest/stormcentral/blob/main/docs/test-standard.md)
-as it stood on 2026-09-26. The standard and stormcentral's runner have since
-moved to one image for all suites, built with the repo root as context and
-started as `/test <suite>`; this container does not build that way yet
-(#24):
-built from `test/`, run by stormcentral as a Job in the run's own namespace
+(#24): one image for every suite, started as `/test <suite>` (`short`,
+`medium` or `long`; `STORM_SUITE` when no suite is given), built from
+`test/Containerfile` with the repo root as context, run by stormcentral as a Job in the run's own namespace
 (`test/stormd-test.yaml`), one JSON object per test on stdout and in
 `/results/results.jsonl`, exit 0 (all passed), 1 (a test failed) or 2 (could
 not run).
@@ -154,16 +152,19 @@ Build it on the build box (stormd needs `stormpull` over `ssh://`, so the
 binaries are built by cargo there, not inside a container build):
 
 ```bash
-test/build.sh short                   # static musl binaries → podman build stormd-test-short
-STAGE_ONLY=1 test/build.sh            # just stage the context in test/.stage/
+test/build.sh                         # static musl binaries → test/out/{stormd,stormd-test}
 ```
+
+stormcentral's runner runs that, then makes the image from
+`test/Containerfile` itself (no container runtime): `FROM scratch`, the two
+binaries copied from `test/out/` as `/stormd` and `/test`.
 
 Run it by hand against a cargo build — it finds `stormd` next to itself, or
 `STORMD_BIN`; scratch goes to a temp directory when there is no `/results`:
 
 ```bash
-STORM_SUITE=short target/debug/stormd-test
-STORM_SUITE=long STORM_TIMEOUT=600 target/debug/stormd-test
+target/debug/stormd-test short
+STORM_TIMEOUT=600 target/debug/stormd-test long
 ```
 
 ## How it ships

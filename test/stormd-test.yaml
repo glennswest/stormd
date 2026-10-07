@@ -1,5 +1,6 @@
-# stormd-test-<suite> — how stormcentral runs stormd's tests on a test
-# machine, per stormcentral docs/test-standard.md.
+# stormd-test — how stormcentral runs stormd's tests on a test machine, per
+# stormcentral docs/test-standard.md. One image serves every suite; the Job
+# starts it as `/test <suite>` (an image's ENTRYPOINT is not kept).
 #
 # Test metadata (what the runner matches against the machine):
 #   suites:   short (< 2 min), medium (< 30 min), long (the night window)
@@ -37,6 +38,7 @@ spec:
       containers:
         - name: stormd-test
           image: ${IMAGE}
+          command: ["/test", "${SUITE}"]
           env:
             - { name: STORM_NAMESPACE, value: "${NAMESPACE}" }
             - { name: STORM_RUN_ID, value: "${RUN_ID}" }

@@ -1,17 +1,14 @@
-# stormd-test-<suite> — stormd's test container, per stormcentral
-# docs/test-standard.md: one per suite, built from test/, run as a Job in the
-# run's own namespace (test/stormd-test.yaml).
+# stormd's test image, per stormcentral docs/test-standard.md: one image for
+# every suite, started as `/test <suite>` (short, medium or long).
 #
-# The context is the directory test/build.sh stages: the stormd binary of the
-# commit under test and the test binary, both static (musl). The test runs
-# /stormd as its child and drives it through its REST API; the processes it
-# supervises are /test itself in helper mode, so the image needs nothing else.
+# Built with the repo root as context, after test/build.sh has put the two
+# static (musl) binaries in test/out/: the stormd of the commit under test and
+# the test program. The test runs /stormd as its child and drives it through
+# its REST API; the processes it supervises are /test itself in helper mode,
+# so the image needs nothing else.
 FROM scratch
-ARG SUITE=short
-ARG COMMIT=unknown
-LABEL storm.io/test-of="stormd" storm.io/test-commit="${COMMIT}" storm.io/test-suite="${SUITE}"
-# The runner sets STORM_SUITE; this is the image's own suite when it does not.
-ENV STORM_SUITE=${SUITE}
-COPY stormd /stormd
-COPY stormd-test /test
+LABEL storm.io/test-of="stormd"
+COPY test/out/stormd /stormd
+COPY test/out/stormd-test /test
 ENTRYPOINT ["/test"]
+CMD ["short"]

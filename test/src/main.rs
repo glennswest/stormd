@@ -34,7 +34,9 @@ fn main() {
         std::process::exit(helper::run(&args[1..]));
     }
 
-    let env = env::Env::read();
+    // `/test <suite>` (stormcentral docs/test-standard.md); STORM_SUITE when
+    // no suite is given.
+    let env = env::Env::read(args.first().map(String::as_str));
     let mut r = Report::new(&env.results);
     if let Err(e) = std::fs::create_dir_all(&env.work) {
         r.record("setup", Outcome::Infra(format!("cannot create {}: {e}", env.work.display())), 0, None);
@@ -49,7 +51,7 @@ fn main() {
         "medium" => medium::run(&env, &mut r),
         "long" => long::run(&env, &mut r),
         other => {
-            r.record("suite", Outcome::Infra(format!("STORM_SUITE {other:?} is not short, medium or long")), 0, None);
+            r.record("suite", Outcome::Infra(format!("suite {other:?} is not short, medium or long")), 0, None);
         }
     }
     // A hand run's scratch is a temp directory; the image's is the results

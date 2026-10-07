@@ -24,7 +24,7 @@ pub struct Env {
 }
 
 impl Env {
-    pub fn read() -> Env {
+    pub fn read(suite_arg: Option<&str>) -> Env {
         let var = |k: &str| std::env::var(k).unwrap_or_default();
         let me = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("/test"));
         let stormd = match std::env::var_os("STORMD_BIN") {
@@ -40,9 +40,10 @@ impl Env {
         } else {
             std::env::temp_dir().join(format!("stormd-test-{}", std::process::id()))
         };
-        let suite = match var("STORM_SUITE") {
-            s if s.is_empty() => "short".to_string(),
-            s => s,
+        let suite = match (suite_arg, var("STORM_SUITE")) {
+            (Some(a), _) if !a.is_empty() => a.to_string(),
+            (_, s) if !s.is_empty() => s,
+            _ => "short".to_string(),
         };
         let default_timeout = match suite.as_str() {
             "short" => 120,

@@ -33,3 +33,4 @@ temp/
 # Machine-local cargo config (e.g. dev's CARGO target-dir on /build)
 /.cargo/
 test/.stage/
+test/out/

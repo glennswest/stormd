@@ -4,6 +4,11 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-07
+- **test:** the test image follows the updated standard (#24). It is one
+  image for all suites, built from `test/Containerfile` with the repo root
+  as context. `test/build.sh` only builds the binaries into `test/out/` (no
+  podman), the test program takes its suite from `/test <suite>` (falling
+  back to `STORM_SUITE`), and the Job names that command.
 - **docs:** stormd ships as an input golden (`kind = "input"`), recorded
   after each issue that passes sc-build. This replaces "stormd never
   requests goldens" (owner, #43). The first one is
