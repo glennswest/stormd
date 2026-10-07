@@ -368,12 +368,19 @@ The issue's proposal, no owner decision needed. Decisions from the code:
   (timeout + 2 s) instead of a fixed 500 ms / 5 s — a slow exit no longer
   races the new run for its port.
 - Liveness keeps SIGUSR1 → 5 s → SIGKILL (and #48 may remove it).
-- [ ] config key + monitor SIGTERM/grace/SIGKILL + wait_stopped helper
-- [ ] stop_all tiers; watchdog from config; restart/updater waits
-- [ ] unit tests: TERM handler runs and exit is recorded; TERM ignored →
-      SIGKILL after the timeout; stop_all stops a dependent before its
-      dependency; timeout 0 → SIGKILL
-- [ ] README, example.toml, design doc, changelog; sc-build + live check
+- [x] config key + monitor SIGTERM/grace/SIGKILL + wait_stopped helper
+- [x] stop_all tiers; watchdog from config; restart/updater waits
+- [x] unit tests (`stop_tests`): TERM handler runs and exit is recorded; TERM
+      ignored → SIGKILL after the timeout; stop_all stops a dependent before
+      its dependency; timeout 0 → SIGKILL; tiers + cycle
+- [x] README, example.toml, design doc, presentation, changelog
+- [ ] sc-build NOT YET RUN (2026-10-07): build VMs drained (stormcentral#541,
+      queued jobs cancelled), then switched off (`409 build VMs are off`).
+      Planned run: `cargo build --workspace && cargo test -p stormd`, a live
+      script (db/app/stubborn with TERM traps: API stop of a TERM-ignorer
+      ≈ its 2 s timeout; restart waits for the 1 s TERM handler; SIGTERM to
+      stormd → db sees app gone first; no leftovers), then the medium suite.
+      The script is kept below so a resumed session can rerun it.
 
 **Issue #45 (P0) — a liveness task outlives its run (2026-10-07) ✅ done.**
 Cause: the task stops only when it reads `state != Running`, so one asleep in
