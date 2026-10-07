@@ -364,9 +364,11 @@ route; empty hostname). In the start order and before a restart it **waits**
 suggests: a node without an address is blocked, not failed, and DHCP may
 still come. An API start is refused with that message. The issue's stormpump
 log-volume EINVAL is stormpump's (filed there if not already).
-- [ ] nodevars::unexpanded + reason; supervisor check in spawn_process and
-      wait in start_all + both restart paths; unit tests
-- [ ] README, changelog; stormpump issue check; sc-build (blocked, #541)
+- [x] nodevars::unexpanded + reason; supervisor check in spawn_process and
+      wait in start_all + both restart paths; unit tests (`node_vars_tests`,
+      `nodevars::tests::unexpanded_names_only_stormds_own`)
+- [x] README, changelog; the log-volume EINVAL is stormpump#38 (closed)
+- [ ] sc-build — blocked 2026-10-07 (`409 build VMs are off`, stormcentral#541)
 
 **Issue #36 — a process names goldens; stormd attaches them read-only and
 presents them (2026-10-07), in progress.** Owner chose minismbd#11 option A.

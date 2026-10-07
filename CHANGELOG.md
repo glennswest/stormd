@@ -4,6 +4,14 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-07
+- **fix:** a process is never spawned with `${NODE_IP}`/`${NODE_NAME}` left
+  unexpanded in its arguments or applied environment (#3). It waits, with
+  one ERROR naming the process, the name and the reason (no address / no
+  route; empty hostname), and starts when the node has the value. This
+  applies at first start and before each restart. An API start is refused
+  with the message. Before, a node without an address failed three layers
+  down: stormcert-init exited 2 parsing `--ip …,${NODE_IP},…`, and the
+  container was retried every 300 s.
 - **feat:** goldens for a process (#36, minismbd#11 option A).
   `[[process.golden]]` names a stormblock golden (by name or volume id) as
   `filesystem` or `image`. Before the process first starts, stormd attaches

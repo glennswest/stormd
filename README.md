@@ -562,10 +562,16 @@ fresh restart at once with the old count, killing every restart).
 **`${NODE_IP}` and `${NODE_NAME}`** in `args`, `env` and `env_default` values (not `command`)
 are replaced at every spawn. `NODE_IP` is the source address the routing table
 picks for an off-node destination (no packet is sent); `NODE_NAME` is
-`/proc/sys/kernel/hostname`. A name with no value is left as written, and the
-process is spawned anyway: on a node with no address a `${NODE_IP}` argument
-reaches the program literally, and the failure shows up as that program's own
-parse error, not as "no address" (#3).
+`/proc/sys/kernel/hostname`. A process is **never spawned** with one of these
+two left unexpanded in an argument or in an environment value it would get
+(#3). Instead stormd logs one ERROR, e.g. `process 'stormcert-init' needs
+${NODE_IP}, and this node has no address on any interface (no route off the
+node) — waiting, not starting it`, and waits, re-resolving every second. It
+starts the process when the value appears (DHCP coming good), or gives up when
+shutdown begins. This applies at the first start and before every restart.
+Waiting counts nothing extra toward `max_restarts`. An API start is refused
+with the same message. Any other `${…}`, such as a shell script's own
+`${HOME}`, is passed through untouched.
 
 ## Logging
 
