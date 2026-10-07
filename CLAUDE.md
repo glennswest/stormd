@@ -476,8 +476,11 @@ namespace, a tmpfs `/dev` without the ublk node — so stormd mknods it from
 - [x] sc-build at v0.8.0: workspace tests, short + medium suites, live checks pass
 - [x] told minismbd#7 the config shape and paths
 
-**Issue #43 — record a stormd input golden at head (2026-10-07): waiting on
-the owner.** stormcentral now lists stormd as an `input` golden
+**Issue #43 — record a stormd input golden at head (2026-10-07) ✅ done.**
+Owner: yes, after each issue that passes sc-build (CLAUDE.md "How it ships",
+memory updated). The master requested it at 36a95f0 →
+`golden-stormd-3e9d395470bf` (verify: 33554432 bytes match), which carries
+#37, #45 and everything through #31. Previously: stormcentral now lists stormd as an `input` golden
 (golden-stormd-fe3f126b72c8, 8edb89c), which conflicts with the 2026-09-26 rule
 "stormd never requests goldens". Asked on #43 (needs-owner) whether stormd
 sessions should run `component build stormd`. If yes: only after sc-build
@@ -837,14 +840,15 @@ cd web && npm install && npm run build
 ```
 
 ### How it ships
-stormd is not a golden of its own: it is `/stormd` in every stormdbase golden
-(stormcos `deploy/build-goldens.sh` `stormdbase_stage` / `golden_stormd`;
-stormcentral registry `kind = "special"`). Authority: stormcos
-`docs/goldens.md`. A commit reaches a node when stormcos composes a release and
-rebuilds the goldens that carry it; they build stormd at **main** (`component
-stage` fetches main), so main must always build. **stormd never requests
-goldens** (owner, 2026-09-26): no `stormcentral component build` after a
-stormd issue. Sibling crates (stormcast, stormview,
+stormd is an **input golden** (stormcentral registry `kind = "input"`,
+`golden-stormd-<id>`): `/stormd` in every stormdbase golden is taken from it
+(stormcos `deploy/build-goldens.sh` `stormdbase_stage` / `golden_stormd`).
+Authority: stormcos `docs/goldens.md`. Nothing rebuilds it on its own, so
+**after each stormd issue whose work passes sc-build, record it**:
+`stormcentral component build stormd --url http://stormcentral.g8.lo` (owner,
+2026-10-07, #43 — this replaces the 2026-09-26 "stormd never requests
+goldens"). The goldens built on it pick it up; stormcos composes as usual.
+Main must still always build. Sibling crates (stormcast, stormview,
 stormpull) are pinned by `Cargo.lock`; a fix there needs `cargo update -p`.
 stormd's API port per container: fastetcd 9081, rustkube 9082–9085, service
 goldens port+100.

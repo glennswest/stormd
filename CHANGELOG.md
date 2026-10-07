@@ -4,6 +4,10 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-07
+- **docs:** stormd ships as an input golden (`kind = "input"`), recorded
+  after each issue that passes sc-build. This replaces "stormd never
+  requests goldens" (owner, #43). The first one is
+  `golden-stormd-3e9d395470bf` (36a95f0).
 - **fix:** standalone applets exit non-zero when they fail (#31): 1 on
   failure (`stat`/`cat`/`ls` of a missing file, `grep` with no match, `ping`
   with no answer, …), 2 on bad usage. Before, everything but `false` exited

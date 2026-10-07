@@ -181,9 +181,9 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 - **Start.** The container's argv is `/stormd`. It loads the config
   (exit 1 if invalid), binds the API (a taken port exits 1 before anything
   starts — #23), and starts the processes.
-- **Update.** stormcos builds goldens with stormd at main and rebuilds the
-  goldens that carry it when it composes a release; stormd never requests
-  one. The authority is stormcos `docs/goldens.md`.
+- **Update.** stormd is an input golden, recorded after each issue that
+  passes sc-build (#43). The goldens built on it pick it up, and stormcos
+  releases them. The authority is stormcos `docs/goldens.md`.
 - **Operate.**
   - Web console at `http(s)://<node>:<port>/ui/` (https once the config sets TLS).
   - `stormsh -H <node> -p <port>`.

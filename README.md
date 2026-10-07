@@ -168,10 +168,10 @@ STORM_SUITE=long STORM_TIMEOUT=600 target/debug/stormd-test
 
 ## How it ships
 
-stormd is **not a golden of its own**. It is `/stormd` inside every
-*stormdbase* golden — the base each supervised component golden is built on.
-stormcentral's component registry lists it as `kind = "special"`, recipe "not a
-golden: /stormd in every stormdbase golden".
+stormd is an **input golden**: stormcentral's component registry lists it as
+`kind = "input"` (`golden-stormd-<id>`), and `/stormd` inside every
+*stormdbase* golden — the base each supervised component golden is built on —
+is taken from it.
 
 The authority for how goldens are built is
 [stormcos `docs/goldens.md`](https://github.com/glennswest/stormcos/blob/main/docs/goldens.md).
@@ -195,10 +195,11 @@ builder, which mirrors it and pins the stormd commit per build):
   `max_runs = 5`), and seals a deterministic tar into the golden;
 - the container's `argv` is `/stormd`, and it reads `/etc/stormd/config.toml`.
 
-So **a commit here reaches a node when stormcos composes a release** and
-rebuilds the goldens that carry stormd. stormd itself never requests a golden:
-after work is pushed and sc-build passes, there is nothing to rebuild from
-here.
+So **a commit here reaches a node once it is in a stormd input golden** and
+a stormcos release carries the goldens built on it. The input golden is
+recorded after each stormd issue whose work passes sc-build (`stormcentral
+component build stormd`, #43). Nothing rebuilds it otherwise: until 2026-10-07
+every golden still carried stormd@8edb89c (09-29).
 
 ### stormd's API port on a node
 
