@@ -221,9 +221,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
     already exists.
   - **#24** — the test container does not yet build the way stormcentral's
     runner expects.
-  - **#3** — refuse to spawn with an unexpanded `${NODE_IP}`.
-  - **#1** — the log writer should create `log_dir` on demand and rate-limit
-    open failures.
   - **#31** — every applet but `false` exits 0, even on error, so no
     one-shot or exec probe can wait for a file.
   - **#7, #10** — config keys that do nothing, cron timeouts that don't kill,
@@ -241,15 +238,12 @@ From the open issues. **None of this works today:**
   multibyte truncation panic (#28).
 - The last stderr lines of a failed process echoed to stormd's own output
   (#29).
-- Refusing an unexpanded `${NODE_IP}` (#3).
 - Waking dependents on a state change instead of a 250 ms poll (#25), and
   not logging a crash for a child that died of the shutdown signal (#26).
 - The test container built as one image from the repo root (#24).
 - Starting image processes from an existing rootfs after a restart (#8).
 - Warnings for unknown config keys, and dead keys removed or implemented (#7).
 - A real liveness counter and a cron timeout that kills (#10).
-- The log writer creating `log_dir` on demand and rate-limiting open
-  failures (#1).
 
 ---
 
