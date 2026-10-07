@@ -354,6 +354,27 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #9 — stop is SIGTERM, then SIGKILL after a grace (2026-10-07), in progress.**
+The issue's proposal, no owner decision needed. Decisions from the code:
+- `[process] stop_timeout_secs` (default 10; 0 = SIGKILL at once). The run's
+  monitor task, on a stop request, sends SIGTERM to the child's pid, waits up
+  to the timeout for it to exit, then SIGKILLs; the exit code is recorded.
+  No exit event (a requested stop is not a crash, as before).
+- `stop_all` stops in reverse dependency order: tiers by `depends_on` depth,
+  deepest (dependents) first, each tier signalled together and waited for
+  (its max timeout + 2 s) before the next. The shutdown watchdog is no
+  longer a fixed 30 s: the sum of tier waits + 20 s, at least 30 s.
+- `restart_process` and the updater's pivot wait until the old run is gone
+  (timeout + 2 s) instead of a fixed 500 ms / 5 s — a slow exit no longer
+  races the new run for its port.
+- Liveness keeps SIGUSR1 → 5 s → SIGKILL (and #48 may remove it).
+- [ ] config key + monitor SIGTERM/grace/SIGKILL + wait_stopped helper
+- [ ] stop_all tiers; watchdog from config; restart/updater waits
+- [ ] unit tests: TERM handler runs and exit is recorded; TERM ignored →
+      SIGKILL after the timeout; stop_all stops a dependent before its
+      dependency; timeout 0 → SIGKILL
+- [ ] README, example.toml, design doc, changelog; sc-build + live check
+
 **Issue #45 (P0) — a liveness task outlives its run (2026-10-07) ✅ done.**
 Cause: the task stops only when it reads `state != Running`, so one asleep in
 `initial_delay_secs` (or mid-probe) across a crash + restart wakes on the new
