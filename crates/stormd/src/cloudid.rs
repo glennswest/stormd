@@ -264,7 +264,7 @@ mod tests {
     //! Against a stand-in for stormimds: the same token endpoint, headers and
     //! security modes (stormimds `src/auth/middleware.rs`, `src/api/token.rs`).
 
-    use super::{fetch_keys, Imds};
+    use super::{fetch_keys, refusal, Imds};
     use axum::{
         extract::{Path, State},
         http::{HeaderMap, StatusCode},
