@@ -354,8 +354,7 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #26 — a group signal's child exit logged as a crash (2026-10-08), in
-progress.** As proposed: the signal path sets the shutdown flag first thing
+**Issue #26 — a group signal's child exit logged as a crash (2026-10-08) ✅ done.** As proposed: the signal path sets the shutdown flag first thing
 (`Supervisor::begin_shutdown`); an exit by SIGTERM/SIGINT/SIGHUP waits up
 to 300 ms for shutdown to begin before it is counted as a crash. Test
 `group_signal_tests`. Live: `timeout -s TERM 3 stormd` with a sleeper.
