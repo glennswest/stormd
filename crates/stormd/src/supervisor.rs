@@ -38,6 +38,16 @@ pub struct ProcessStatus {
     pub liveness_failures: u32,
     pub has_liveness: bool,
     pub liveness_config: Option<crate::config::LivenessProbe>,
+    /// Which run this is (bumped at every spawn).
+    pub run: u64,
+    /// Its ready_probe has passed for this run (true when it has none).
+    pub ready: bool,
+    pub ready_at: Option<DateTime<Utc>>,
+    /// When the liveness probe last passed, and for which run (stormd#44).
+    pub liveness_passed_at: Option<DateTime<Utc>>,
+    pub liveness_passed_run: Option<u64>,
+    /// Every check it has passed for this run (see `Supervisor::health_of`).
+    pub healthy: bool,
 }
 
 struct ManagedProcess {
@@ -68,6 +78,9 @@ struct ManagedProcess {
     /// `true` when there is no probe: a process with nothing to check is ready
     /// when it is running, which is the previous behaviour.
     ready: bool,
+    ready_at: Option<DateTime<Utc>>,
+    liveness_passed_at: Option<DateTime<Utc>>,
+    liveness_passed_run: Option<u64>,
 }
 
 impl ManagedProcess {
@@ -95,6 +108,12 @@ impl ManagedProcess {
             liveness_failures: self.liveness_failures,
             has_liveness: self.config.liveness.is_some(),
             liveness_config: self.config.liveness.clone(),
+            run: self.run,
+            ready: self.ready,
+            ready_at: self.ready_at,
+            liveness_passed_at: self.liveness_passed_at,
+            liveness_passed_run: self.liveness_passed_run,
+            healthy: false,
         }
     }
 
@@ -335,6 +354,9 @@ impl Supervisor {
                 run: 0,
                 liveness_tasks: Arc::new(AtomicUsize::new(0)),
                 ready: cfg.ready_probe.is_none(),
+                ready_at: None,
+                liveness_passed_at: None,
+                liveness_passed_run: None,
             }));
             self.processes.write().await.insert(cfg.name.clone(), proc);
         }
@@ -359,7 +381,6 @@ impl Supervisor {
             }
 
             self.spawn_process(&cfg.name).await?;
-            self.watch_readiness(&cfg);
         }
 
         Ok(())
@@ -377,48 +398,36 @@ impl Supervisor {
     /// In the background rather than inline: only actual dependents should
     /// wait, and a slow probe on one process must not delay every unrelated
     /// process behind it.
-    fn watch_readiness(self: &Arc<Self>, cfg: &ProcessConfig) {
-        let Some(probe) = cfg.ready_probe.clone() else {
-            return;
+    ///
+    /// **A restart was never ready again** (stormd#46): this ran only from
+    /// the start order, while every spawn resets `ready`. Now each run has its
+    /// own watch, started by `spawn_process` and ended with the run.
+    async fn watch_ready(&self, name: &str, proc_arc: &Arc<Mutex<ManagedProcess>>, run: u64, probe: &crate::config::ReadyProbe) {
+        let interval = match probe {
+            crate::config::ReadyProbe::Http { interval_secs, .. }
+            | crate::config::ReadyProbe::Tcp { interval_secs, .. }
+            | crate::config::ReadyProbe::Exec { interval_secs, .. } => (*interval_secs).max(1),
         };
-        let name = cfg.name.clone();
-        let this = Arc::clone(self);
-        tokio::spawn(async move {
-            let interval = match &probe {
-                crate::config::ReadyProbe::Http { interval_secs, .. }
-                | crate::config::ReadyProbe::Tcp { interval_secs, .. }
-                | crate::config::ReadyProbe::Exec { interval_secs, .. } => (*interval_secs).max(1),
-            };
-            loop {
-                // Stop waiting on a process that is no longer coming up: a
-                // probe against something that has exited never passes, and
-                // looping on it hides the exit.
-                {
-                    let procs = this.processes.read().await;
-                    match procs.get(&name) {
-                        Some(p) => {
-                            let p = p.lock().await;
-                            if matches!(
-                                p.state,
-                                ProcessState::Stopped | ProcessState::Failed
-                            ) {
-                                return;
-                            }
-                        }
-                        None => return,
-                    }
-                }
-                if execute_ready_probe(&probe).await {
-                    let procs = this.processes.read().await;
-                    if let Some(p) = procs.get(&name) {
-                        p.lock().await.ready = true;
-                    }
-                    info!(process = %name, "ready");
+        loop {
+            // Stop waiting on a run that is over: a probe against something
+            // that has exited never passes, and looping on it hides the exit.
+            {
+                let p = proc_arc.lock().await;
+                if p.run != run || matches!(p.state, ProcessState::Stopped | ProcessState::Failed) {
                     return;
                 }
-                tokio::time::sleep(Duration::from_secs(interval)).await;
             }
-        });
+            if execute_ready_probe(probe).await {
+                let mut p = proc_arc.lock().await;
+                if p.run == run {
+                    p.ready = true;
+                    p.ready_at = Some(Utc::now());
+                    info!(process = %name, "ready");
+                }
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(interval)).await;
+        }
     }
 
     /// Hold a start until the node has a value for every `${NODE_*}` the
@@ -565,6 +574,7 @@ impl Supervisor {
             proc.state = ProcessState::Starting;
             // A restarted process is not ready until it says so again.
             proc.ready = proc.config.ready_probe.is_none();
+            proc.ready_at = None;
             // A new run, judged afresh: the last run's liveness failures are
             // not this one's (stormd#45).
             proc.run += 1;
@@ -673,6 +683,15 @@ impl Supervisor {
 
         // API health probes, one task per API for this run (stormd#49).
         let mut run_tasks: Vec<tokio::task::JoinHandle<()>> = liveness_task.into_iter().collect();
+        // Readiness, watched for every run, restarts included (stormd#46).
+        if let Some(probe) = config.ready_probe.clone() {
+            let supervisor = Arc::clone(self);
+            let name = config.name.clone();
+            let proc_arc = proc_arc.clone();
+            run_tasks.push(tokio::spawn(async move {
+                supervisor.watch_ready(&name, &proc_arc, run, &probe).await;
+            }));
+        }
         for api in config.api.clone() {
             let supervisor = Arc::clone(self);
             let name = config.name.clone();
@@ -737,6 +756,8 @@ impl Supervisor {
                 }
                 if ok {
                     proc.liveness_failures = 0;
+                    proc.liveness_passed_at = Some(Utc::now());
+                    proc.liveness_passed_run = Some(run);
                     continue;
                 }
                 proc.liveness_failures += 1;
@@ -1091,6 +1112,75 @@ impl Supervisor {
         }
     }
 
+    /// Whether a process is healthy for its current run (stormd#44): running,
+    /// and every check it has passed since this spawn — its ready_probe, its
+    /// liveness probe, each declared API (`healthy`, probed after the
+    /// spawn). With none of those, running for [`SETTLE_SECS`]. `Err` lists
+    /// what it is still waiting on.
+    fn health_of(&self, p: &ManagedProcess) -> Result<(), Vec<String>> {
+        let mut waiting = Vec::new();
+        if p.state != ProcessState::Running {
+            return Err(vec![format!("not running ({:?})", p.state)]);
+        }
+        let started = p.started_at.unwrap_or_else(Utc::now);
+        if p.config.ready_probe.is_some() && !p.ready {
+            waiting.push("ready_probe has not passed".to_string());
+        }
+        if p.config.liveness.is_some() && p.liveness_passed_run != Some(p.run) {
+            waiting.push(format!("liveness probe has not passed for this run ({} failures)", p.liveness_failures));
+        }
+        if !p.config.api.is_empty() {
+            let seen = self.api_health.list();
+            for a in &p.config.api {
+                match seen.iter().find(|h| h.process == p.config.name && h.api == a.name) {
+                    Some(h) if h.state == crate::apihealth::ApiState::Healthy && h.last_check.is_some_and(|t| t >= started) => {}
+                    Some(h) => waiting.push(format!(
+                        "api {} is {:?}{}",
+                        a.name,
+                        h.state,
+                        h.last_error.as_deref().map(|e| format!(": {e}")).unwrap_or_default()
+                    )),
+                    None => waiting.push(format!("api {} not probed yet", a.name)),
+                }
+            }
+        }
+        let has_checks = p.config.ready_probe.is_some() || p.config.liveness.is_some() || !p.config.api.is_empty();
+        if !has_checks && (Utc::now() - started).num_seconds() < SETTLE_SECS {
+            waiting.push(format!("running less than {SETTLE_SECS} s"));
+        }
+        if waiting.is_empty() { Ok(()) } else { Err(waiting) }
+    }
+
+    /// Restart a process and wait until its new run is healthy, it ends, or
+    /// `timeout` passes (stormd#44). On a timeout the process is left
+    /// running: the caller decides.
+    pub async fn restart_and_wait(self: &Arc<Self>, name: &str, timeout: Duration) -> anyhow::Result<WaitOutcome> {
+        self.restart_process(name).await?;
+        let proc_arc = self
+            .processes
+            .read()
+            .await
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("process not found: {}", name))?;
+        let run = proc_arc.lock().await.run;
+        let started = tokio::time::Instant::now();
+        loop {
+            {
+                let p = proc_arc.lock().await;
+                if p.run != run || matches!(p.state, ProcessState::Stopped | ProcessState::Failed | ProcessState::Restarting) {
+                    return Ok(WaitOutcome::Exited { run, exit_code: p.exit_code, state: p.state.clone() });
+                }
+                match self.health_of(&p) {
+                    Ok(()) => return Ok(WaitOutcome::Healthy { run, waited: started.elapsed() }),
+                    Err(w) if started.elapsed() >= timeout => return Ok(WaitOutcome::Timeout { run, waiting_on: w }),
+                    Err(_) => {}
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
     pub async fn get_status(&self, name: &str) -> anyhow::Result<ProcessStatus> {
         let procs = self.processes.read().await;
         let proc_arc = procs
@@ -1098,7 +1188,9 @@ impl Supervisor {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("process not found: {}", name))?;
         let proc = proc_arc.lock().await;
-        Ok(proc.status())
+        let mut st = proc.status();
+        st.healthy = self.health_of(&proc).is_ok();
+        Ok(st)
     }
 
     pub async fn get_all_statuses(&self) -> Vec<ProcessStatus> {
@@ -1106,7 +1198,9 @@ impl Supervisor {
         let mut statuses = Vec::new();
         for p in procs.values() {
             let proc = p.lock().await;
-            statuses.push(proc.status());
+            let mut st = proc.status();
+            st.healthy = self.health_of(&proc).is_ok();
+            statuses.push(st);
         }
         statuses.sort_by(|a, b| a.name.cmp(&b.name));
         statuses
@@ -1291,6 +1385,9 @@ impl Supervisor {
             run: 0,
             liveness_tasks: Arc::new(AtomicUsize::new(0)),
             ready: config.ready_probe.is_none(),
+            ready_at: None,
+            liveness_passed_at: None,
+            liveness_passed_run: None,
         }));
         self.processes.write().await.insert(config.name.clone(), proc);
     }
@@ -1323,6 +1420,23 @@ fn missing_files(files: &[String]) -> Vec<&str> {
         .filter(|f| !std::path::Path::new(f.as_str()).exists())
         .map(|f| f.as_str())
         .collect()
+}
+
+/// A process with no ready, liveness or API checks counts as healthy once it
+/// has been running this long (stormd#44).
+const SETTLE_SECS: i64 = 3;
+
+/// How a `restart_and_wait` ended.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum WaitOutcome {
+    Healthy { run: u64, #[serde(serialize_with = "ms")] waited: Duration },
+    Timeout { run: u64, waiting_on: Vec<String> },
+    Exited { run: u64, exit_code: Option<i32>, state: ProcessState },
+}
+
+fn ms<S: serde::Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_u64(d.as_millis() as u64)
 }
 
 /// Beyond a stop timeout: SIGKILL landing and the monitor recording it.
@@ -2413,5 +2527,118 @@ mod api_health_tests {
         let s = restarted.expect("not restarted within 10 s of a stall");
         assert_ne!(s.pid, first);
         assert_eq!(s.crashes, 1, "the SIGTERMed exit went through the restart policy as a failure");
+    }
+}
+
+#[cfg(test)]
+mod wait_healthy_tests {
+    use super::{Supervisor, WaitOutcome};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    async fn supervisor(label: &str) -> (Arc<Supervisor>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("stormd-wait-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        let sup = Arc::new(Supervisor::new(log, bus));
+        let h = sup.clone();
+        tokio::spawn(async move { h.run_exit_handler().await });
+        (sup, dir)
+    }
+
+    fn proc(t: &str) -> crate::config::ProcessConfig {
+        toml::from_str(&format!("name = \"svc\"\ncommand = \"/bin/sleep\"\nargs = [\"60\"]\n{t}")).unwrap()
+    }
+
+    /// stormd#44: the liveness probe has to pass for the *new* run; and the
+    /// status says which run it passed for.
+    #[tokio::test]
+    async fn waits_for_the_new_runs_liveness() {
+        let (sup, dir) = supervisor("live").await;
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move { loop { let _ = l.accept().await; } });
+        let p = proc(&format!("[liveness]\ntype = \"tcp\"\nport = {port}\ninitial_delay_secs = 1\ninterval_secs = 1\n"));
+        sup.start_all(&[p]).await.unwrap();
+        let t = Instant::now();
+        let out = sup.restart_and_wait("svc", Duration::from_secs(10)).await.unwrap();
+        let st = sup.get_status("svc").await.unwrap();
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        match out {
+            WaitOutcome::Healthy { run, .. } => {
+                assert_eq!(run, 2);
+                assert_eq!(st.liveness_passed_run, Some(2));
+                assert!(st.healthy);
+            }
+            o => panic!("{o:?}"),
+        }
+        assert!(t.elapsed() >= Duration::from_secs(2), "answered before the new run's first probe");
+    }
+
+    #[tokio::test]
+    async fn times_out_naming_what_it_waits_on_and_leaves_it_running() {
+        let (sup, dir) = supervisor("timeout").await;
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let p = proc(&format!("[liveness]\ntype = \"tcp\"\nport = {closed}\ninitial_delay_secs = 0\ninterval_secs = 1\nfailure_threshold = 100\n"));
+        sup.start_all(&[p]).await.unwrap();
+        let out = sup.restart_and_wait("svc", Duration::from_secs(2)).await.unwrap();
+        let st = sup.get_status("svc").await.unwrap();
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        match out {
+            WaitOutcome::Timeout { waiting_on, .. } => assert!(waiting_on[0].contains("liveness"), "{waiting_on:?}"),
+            o => panic!("{o:?}"),
+        }
+        assert_eq!(st.state, super::ProcessState::Running, "left running for the caller to decide");
+    }
+
+    #[tokio::test]
+    async fn no_checks_settles_and_an_exit_is_reported() {
+        let (sup, dir) = supervisor("settle").await;
+        sup.start_all(&[proc("")]).await.unwrap();
+        let out = sup.restart_and_wait("svc", Duration::from_secs(10)).await.unwrap();
+        assert!(matches!(out, WaitOutcome::Healthy { waited, .. } if waited >= Duration::from_secs(3)), "{out:?}");
+        sup.stop_all().await;
+
+        let (sup2, dir2) = supervisor("exit").await;
+        let p: crate::config::ProcessConfig = toml::from_str(
+            "name = \"svc\"\ncommand = \"/bin/sh\"\nargs = [\"-c\", \"sleep 1; exit 3\"]\nrestart_delay_secs = 5\n",
+        )
+        .unwrap();
+        sup2.start_all(&[p]).await.unwrap();
+        let out = sup2.restart_and_wait("svc", Duration::from_secs(10)).await.unwrap();
+        sup2.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+        assert!(matches!(out, WaitOutcome::Exited { .. }), "{out:?}");
+    }
+
+    /// stormd#46: a restarted process with a ready_probe is ready again.
+    #[tokio::test]
+    async fn a_restart_is_ready_again() {
+        let (sup, dir) = supervisor("ready").await;
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move { loop { let _ = l.accept().await; } });
+        let p = proc(&format!("ready_probe = {{ type = \"tcp\", port = {port}, interval_secs = 1 }}\n"));
+        sup.start_all(&[p]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(sup.get_status("svc").await.unwrap().ready);
+        let out = sup.restart_and_wait("svc", Duration::from_secs(10)).await.unwrap();
+        let st = sup.get_status("svc").await.unwrap();
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(matches!(out, WaitOutcome::Healthy { run: 2, .. }), "{out:?}");
+        assert!(st.ready && st.ready_at.is_some(), "not ready after the restart");
     }
 }

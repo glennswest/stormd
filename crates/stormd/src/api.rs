@@ -2,7 +2,7 @@ use crate::backup::BackupManager;
 use crate::cron::CronScheduler;
 use crate::debug;
 use crate::stats::StatsCollector;
-use crate::supervisor::{ProcessState, Supervisor};
+use crate::supervisor::{ProcessState, Supervisor, WaitOutcome};
 use crate::updater::Updater;
 use crate::ws;
 use axum::extract::{OriginalUri, Path, Query, State};
@@ -376,13 +376,48 @@ async fn stop_process(
     Ok(Json(serde_json::json!({ "status": "stopped", "process": name })))
 }
 
+#[derive(Debug, Deserialize)]
+struct RestartQuery {
+    /// `healthy`: answer once the new run is healthy (stormd#44).
+    wait: Option<String>,
+    /// Seconds to wait (default 60, at most 3600).
+    timeout: Option<u64>,
+}
+
+/// Restart a process. With `?wait=healthy&timeout=N`, answer once the new
+/// run is healthy (200), or say it ended (502) or did not get there in time
+/// (504, the process left running) — for a caller like stormcert that
+/// rotates a certificate and must report when the service is back.
 async fn restart_process(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
-) -> Result<impl IntoResponse, AppError> {
-    state.supervisor.restart_process(&name).await?;
-    Ok(Json(serde_json::json!({ "status": "restarted", "process": name })))
+    Query(q): Query<RestartQuery>,
+) -> Result<axum::response::Response, AppError> {
+    match q.wait.as_deref() {
+        None | Some("") => {
+            state.supervisor.restart_process(&name).await?;
+            Ok(Json(serde_json::json!({ "status": "restarted", "process": name })).into_response())
+        }
+        Some("healthy") => {
+            let timeout = std::time::Duration::from_secs(q.timeout.unwrap_or(60).clamp(1, 3600));
+            let outcome = state.supervisor.restart_and_wait(&name, timeout).await?;
+            let code = match &outcome {
+                WaitOutcome::Healthy { .. } => StatusCode::OK,
+                WaitOutcome::Timeout { .. } => StatusCode::GATEWAY_TIMEOUT,
+                WaitOutcome::Exited { .. } => StatusCode::BAD_GATEWAY,
+            };
+            let mut body = serde_json::to_value(&outcome).unwrap_or_default();
+            body["process"] = serde_json::Value::String(name);
+            Ok((code, Json(body)).into_response())
+        }
+        Some(other) => Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("wait={other}: only wait=healthy is known") })),
+        )
+            .into_response()),
+    }
 }
+
 
 // --- Goldens (stormd#36) ---
 
