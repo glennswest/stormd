@@ -358,12 +358,16 @@ screen loads).
 Standard (stormcentral docs/test-standard.md, runner `BUILD_PUSH`): one image,
 `test/Containerfile` with the repo root as context, no container runtime
 (#121), `/test <suite>`, `test/build.sh` runs first with CARGO_TARGET_DIR set.
-- [ ] build.sh → binaries in `test/out/` (gitignored), no podman; Containerfile
+- [x] build.sh → binaries in `test/out/` (gitignored), no podman; Containerfile
       FROM scratch COPY test/out/…; no SUITE arg; argv[1] suite (helper kept);
-      Job `command: ["/test", "${SUITE}"]`; README; changelog
+      Job `command: ["/test", "${SUITE}"]`; README; changelog (4973039)
 - [ ] verify under sc-build: build.sh, then the runner's own Containerfile
       interpreter (from stormcentral testruns.rs) up to the push; run
-      `test/out/stormd-test short`
+      `test/out/stormd-test short` — NOT YET RUN: 2026-10-07 build VMs drained
+      by the master for the 11.95 install test on pvetest1. Script:
+      build.sh with CARGO_TARGET_DIR, then the python from stormcentral
+      src/testruns.rs (`<<'PY'` block) with dest 127.0.0.1:1, then
+      `./test short|medium|bogus` in the image root
 
 **Issue #31 — applets exit non-zero on failure (2026-10-07) ✅ done.**
 `ShellOutput.status` (0/1/2), `error`/`usage`/`failed_if` helpers; every
