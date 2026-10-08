@@ -354,6 +354,24 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #44 — restart that waits for health (+ #46) (2026-10-08), in progress.**
+Decisions (from the issue and code, not asked; #48 removes liveness *kills*,
+not the probe result used here):
+- "Healthy for a run" = every check the process has, passed after that
+  spawn: ready_probe passed (needs #46: readiness is now watched per run,
+  from spawn_process, so a restart is ready again), liveness probe passed
+  for that run, every `[[process.api]]` healthy with a probe after the
+  spawn. None of these → healthy once Running 3 s (SETTLE).
+- `POST …/restart?wait=healthy&timeout=N` (default 60, max 3600): 200
+  `{status: healthy, run, waited_ms}`; 504 `{status: timeout, run, waiting_on}`
+  with the process left running; 502 `{status: exited, exit_code}` if the run
+  ended. Plain restart unchanged.
+- Status gains `run`, `liveness_passed_at` + `liveness_passed_run`,
+  `ready_at`, `healthy`.
+- [ ] supervisor: per-run readiness (#46), liveness pass record, healthy(),
+      wait_healthy(); API; unit + medium tests; README, changelog; sc-build;
+      golden; close #44 and #46
+
 **Issue #49 (P0) — API health probes (2026-10-08) ✅ done.** As the issue
 specifies (stormcos#458). Decisions from the code, not asked:
 - `[[process.api]]`: `name`, `url` (GET), `interval_secs` 15, `timeout_secs`
