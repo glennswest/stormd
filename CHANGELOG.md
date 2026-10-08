@@ -4,6 +4,9 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-08
+- **fix:** a CloudID key refresh answered 404 says why it probably happened:
+  on a stormcos node the link-local address is stormimds, not cloudid
+  (#30). The rest of #30 waits on stormimds#9.
 - **fix:** stormcast bumped 0.1.0 (`9244121`) → 0.1.1 (`3cec734`) (#28). The
   old pin panicked PID 1 when a line's byte 8192 fell inside a multibyte
   character (stormcast#4). The bump also brings stormcast#5: HOSTNAME and

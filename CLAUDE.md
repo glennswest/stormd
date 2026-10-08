@@ -354,6 +354,12 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #30 — CloudID refresh on a node reaches stormimds (2026-10-08): part
+done, rest waits on stormimds#9 (needs-owner).** Done now (the issue's
+"either way"): a 404 names the likely cause (`cloudid::refusal`, test). The
+real fix, refuse `[ssh] owner` on a node (master's recommendation) or point
+`cloudid_url` at cloudid, depends on stormimds#9; proposed after it.
+
 **Issue #28 — stormcast 0.1.0 → 0.1.1 (2026-10-08) ✅ done.** Lock
 edited by hand (`3cec734`, no deps): the API stormd uses (send_at,
 strip_ansi, DEFAULT_GROUP, Limiter/Verdict/RATE_PER_SEC/BURST, offer, flush)

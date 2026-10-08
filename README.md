@@ -875,8 +875,8 @@ node puts `169.254.169.254/32` on `lo` and stormimds answers it. stormimds
 knows only registered guests, so it answers a node's stormd 404, and it serves
 no `public-keys/` yet (stormimds#5). Which service should answer a node's own
 processes is undecided (stormimds#9); until then the refresh gets no keys
-there (#30). No stormcos golden sets `[ssh] owner` today, so no node runs the
-refresh.
+there (#30). A 404 is logged once as a WARN that names that likely cause.
+No stormcos golden sets `[ssh] owner` today, so no node runs the refresh.
 
 A session is an interactive shell (a PTY is expected); `ssh host command`
 (exec requests) is not supported. The `sftp` subsystem is, so `sftp` and

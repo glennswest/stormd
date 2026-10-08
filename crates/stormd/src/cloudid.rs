@@ -111,7 +111,7 @@ impl Imds {
                 continue;
             }
             if !status.is_success() {
-                return Err(format!("GET {url}: HTTP {status}"));
+                return Err(refusal(&url, status));
             }
             return resp.text().await.map_err(|e| format!("GET {url}: {e}"));
         }
@@ -243,6 +243,20 @@ pub async fn start_key_refresh(
     });
 
     store
+}
+
+/// The error for a refused request. A 404 says what it most likely means: on
+/// a stormcos node 169.254.169.254 is on the node's `lo` and answered by
+/// stormimds, which knows only its guests, not this host (stormd#30).
+fn refusal(url: &str, status: reqwest::StatusCode) -> String {
+    if status == reqwest::StatusCode::NOT_FOUND {
+        format!(
+            "GET {url}: HTTP {status} — the metadata service does not know this host \
+             (on a stormcos node the link-local address is stormimds, not cloudid: stormd#30)"
+        )
+    } else {
+        format!("GET {url}: HTTP {status}")
+    }
 }
 
 #[cfg(test)]
@@ -389,6 +403,14 @@ mod tests {
     async fn a_service_without_tokens_still_works() {
         let (url, _) = serve(Mode::V1, None).await;
         assert_eq!(keys(&url).await.0, Ok(2));
+    }
+
+    #[test]
+    fn a_404_says_the_service_may_not_be_the_one_meant() {
+        let e = refusal("http://169.254.169.254/latest/meta-data/public-keys/", reqwest::StatusCode::NOT_FOUND);
+        assert!(e.contains("404") && e.contains("stormimds") && e.contains("stormd#30"), "{e}");
+        let e = refusal("http://x/", reqwest::StatusCode::UNAUTHORIZED);
+        assert_eq!(e, "GET http://x/: HTTP 401 Unauthorized");
     }
 
     #[tokio::test]
