@@ -16,6 +16,10 @@
   5 min, reset after 10 minutes of running), in a new `CrashLoopBackOff`
   state, with no restart limit. When set, it replaces
   `on_exit`/`on_failure`/`restart_delay_secs`/`max_restarts`.
+- **feat:** Kubernetes-shaped events for every probe failure, kill, back-off
+  and start (`Unhealthy`, `Killing`, `BackOff`, `Created`, `Started`, with
+  upstream's wording, de-duplicated with `count`), served at `GET
+  /api/v1/events?since=<seq>` for rustkube-node to put on mirror pods (#48).
 - **BREAKING:** the old `[process.liveness]` no longer kills anything (#48).
   It parses, warns that it is retired, and is ignored. On the Dell it killed
   the apiserver six times during a normal 40 s start; components move to

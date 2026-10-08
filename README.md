@@ -595,6 +595,18 @@ are not used:
 3. **Readiness**: `success_threshold` passes mark the process ready,
    `failure_threshold` failures mark it not ready. It is never restarted.
 
+**Events** (#48). Every probe failure, kill, back-off and start is recorded
+with Kubernetes' reasons and wording, and de-duplicated as the kubelet does
+it: the same reason and message again raises `count` and `lastTimestamp`.
+- `Created` / `Started`: `Started container <name>`.
+- `Unhealthy`: `Liveness probe failed: dial tcp …`.
+- `Killing`: `Container <name> failed liveness probe, will be restarted`,
+  or `Stopping container <name>`.
+- `BackOff`: `Back-off restarting failed container <name>`.
+
+The last 1000 are kept and served at `GET /api/v1/events?since=<seq>`.
+rustkube-node puts them on the process's mirror pod (`kubectl get events`).
+
 A process with any of these starts not ready. With a startup probe and no
 readiness probe, it is ready once the startup probe succeeds. Readiness is
 what `depends_on` waits for. Each failure is logged as `Unhealthy: <kind>
@@ -706,6 +718,7 @@ client certificate, a session cookie, or `Authorization: Bearer <token>`
 | GET | `/api/v1/processes` | all process statuses |
 | GET | `/api/v1/processes/{name}` | one |
 | POST | `/api/v1/processes/{name}/start` \| `stop` \| `restart` | `restart?wait=healthy&timeout=N`: answer once the new run is healthy (200), it ended (502), or N s passed (504, process left running) — below |
+| GET | `/api/v1/events?since=<seq>` | Kubernetes-shaped events (`type`, `reason`, `message`, `process`, `count`, `firstTimestamp`, `lastTimestamp`, `seq`), changed after `seq` — below (behind auth) |
 | GET | `/api/v1/health/apis` | every declared API's health: state, since, last latency, p50/p99 seen, budgets, last error (behind auth) |
 | GET | `/api/v1/goldens` | goldens presented: process, name, golden, volume, content, device, path, size_bytes |
 | PUT | `/api/v1/processes/{name}/goldens/{golden}` | `{"golden": "…"}` or `{"volume_id": "…"}` — swap it (see [Goldens](#goldens)) |
