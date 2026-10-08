@@ -21,8 +21,10 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
   escalating restart delay capped at 30 s, a restart budget per window, and
   exit codes a process can declare not worth retrying (`no_restart_exit_codes`).
   A one-shot (`on_exit = "stop"`) satisfies its dependents once it has exited 0.
-- **Liveness probes** — HTTP or TCP; on failure, SIGUSR1, 5 s grace, then
-  SIGKILL, and the restart policy takes over.
+- **Startup, liveness and readiness probes, the Kubernetes way** —
+  `http_get` / `tcp_socket` / `exec`, with Kubernetes' fields and defaults.
+  The startup probe gates the others, liveness restarts, readiness only
+  marks not ready (#48).
 - **Fills in node values** — `${NODE_IP}` and `${NODE_NAME}` in a process's
   `args` and `env` values are expanded each time it is spawned.
 - **Node-overridable defaults** — `env_default` entries apply only when stormd
@@ -148,7 +150,7 @@ dies in the pod.
 | suite | budget | covers |
 |---|---|---|
 | `short` | < 2 min | API up; a dependent waits for a tcp ready probe and for a one-shot to finish; a crash is restarted; stdout and stderr reach the logs API; SIGTERM exits 0 with no process left behind; the node's own stormds (ports 9081–9085) answer `/api/v1/health` — a skip where none do |
-| `medium` | < 30 min | a failed one-shot holds its dependents, and SIGTERM still stops stormd; `no_restart_exit_codes` hold and fail; `on_failure = "fail"`; `max_restarts`; `on_exit = "restart"`; liveness restarts; API stop/start/restart and shutdown with an exit code; bearer-token auth; `/metrics` (with the worker's own RSS, CPU and fds); the component feed; cron; a config that does not parse exits 1; run as `ps` (not an applet), exits 127 and spawns nothing; `wait_for_files` holds the start until the file exists; a taken API port exits 1 with nothing started; `restart?wait=healthy` answers 200 only after the new run's probe and 504 naming what it waits on |
+| `medium` | < 30 min | a failed one-shot holds its dependents, and SIGTERM still stops stormd; `no_restart_exit_codes` hold and fail; `on_failure = "fail"`; `max_restarts`; `on_exit = "restart"`; a liveness probe that keeps failing restarts; API stop/start/restart and shutdown with an exit code; bearer-token auth; `/metrics` (with the worker's own RSS, CPU and fds); the component feed; cron; a config that does not parse exits 1; run as `ps` (not an applet), exits 127 and spawns nothing; `wait_for_files` holds the start until the file exists; a taken API port exits 1 with nothing started; `restart?wait=healthy` answers 200 only after the new run's probe and 504 naming what it waits on |
 | `long` | the night window | waves of processes sized from the pod's own CPU, memory and pid limits (mostly long-running, some crash-once, one-shots with dependents), started, settled and stopped with SIGTERM; one resident stormd has its processes restarted through the API every wave. Per wave: settle time, stop time, leftover processes, the resident's RSS and fds. A wave twice as slow as the first of its size, a leftover, or growing residue fails |
 
 Build it on the build box (stormd needs `stormpull` over `ssh://`, so the
@@ -373,7 +375,8 @@ spawned.
 | `stop_timeout_secs` | `10` | on a stop: SIGTERM, wait this long, then SIGKILL; `0` = SIGKILL at once |
 | `startup_delay_secs` | `0` | sleep before the first spawn |
 | `ready_probe` | — | inline table, below |
-| `[process.liveness]` | — | below |
+| `[process.startup_probe]`, `[process.liveness_probe]`, `[process.readiness_probe]` | — | Kubernetes-style probes, below |
+| `[process.liveness]` | — | **retired** (#48): parsed, logged as retired, never acted on |
 | `[process.ui]` | — | plugin tab, below |
 | `capture_stdout`, `capture_stderr` | `true` | **parsed, not used** — both are always captured |
 | `[[process.golden]]` | — | goldens presented to the process, below and [Goldens](#goldens) |
@@ -389,19 +392,29 @@ only. Applets exit non-zero when they fail (see [Busybox commands](#busybox-comm
 so `{ type = "exec", command = "/bin/test -e /etc/stormcert/x.crt" }` waits for
 a file (#31).
 
-**`[process.liveness]`**
+**`[process.startup_probe]` / `[process.liveness_probe]` /
+`[process.readiness_probe]`** (#48) take the fields of a Kubernetes container
+probe, with Kubernetes' meaning and defaults (camelCase spellings such as
+`periodSeconds` and `httpGet` are accepted too):
 
 | Key | Default | |
 |---|---|---|
-| `type` | required | `http` (with `url`) \| `tcp` (with `port`, on 127.0.0.1) |
-| `interval_secs` | `10` | |
-| `timeout_secs` | `5` | |
-| `failure_threshold` | `1` | consecutive failures before acting |
-| `initial_delay_secs` | `5` | after each spawn |
+| `http_get` | — | `{ path = "/", port, host = "127.0.0.1", scheme = "HTTP"\|"HTTPS", http_headers = [{name, value}] }`: passes on 200–399; certificates not verified, redirects not followed |
+| `tcp_socket` | — | `{ port, host = "127.0.0.1" }`: passes if it connects |
+| `exec` | — | `{ command = ["/bin/test", "-e", "/x"] }`: passes on exit 0 |
+| `grpc` | — | `{ port, service }`: parsed, **not supported yet**, and always fails (follow-up on #48) |
+| `initial_delay_seconds` | `0` | from the spawn |
+| `period_seconds` | `10` | |
+| `timeout_seconds` | `1` | |
+| `success_threshold` | `1` | consecutive passes (must be 1 for startup and liveness) |
+| `failure_threshold` | `3` | consecutive failures |
 
-HTTP passes on 2xx or 3xx and does not verify certificates (the supervisor
-already knows what it started; a self-signed apiserver was otherwise killed
-every 25 s).
+Exactly one of `http_get` / `tcp_socket` / `exec` / `grpc`.
+
+The old `[process.liveness]` is **retired**. It had no startup grace and
+killed slow starts: the apiserver six times during a normal 40 s start on the
+Dell, and fastetcd while opening its data. It still parses, logs a warning at
+each spawn, and is never acted on.
 
 **`[process.ui]`** — `label` (required), `proxy` (required, URL), `host`
 (Host-based route to this plugin), `summary` (URL of the plugin's own card
@@ -557,14 +570,21 @@ treated as one, and a death by signal has no code to match.
 
 A failed container makes stormd shut down (checked every second) and exit 1.
 
-**Liveness:** after `initial_delay_secs`, every `interval_secs`. When
-`failure_threshold` consecutive probes fail stormd emits
-`liveness_check_failed`, sends SIGUSR1, waits 5 s, and sends SIGKILL if the
-process is still there; the exit then goes through the table above. Each
-run has its own probe task and its own count: the task ends when that run
-ends, and a restarted process starts at zero failures and waits its own
-`initial_delay_secs` (before #45 a task from an earlier run could probe a
-fresh restart at once with the old count, killing every restart).
+**Probes** (#48), per run, ending with the run (the #45 lesson):
+1. **Startup**, if any, runs first; liveness and readiness wait for it. It
+   gets `failure_threshold × period_seconds` to succeed once. If it runs out,
+   the run is killed (SIGTERM, then SIGKILL after `stop_timeout_secs`) and
+   its exit goes through the table above.
+2. **Liveness**: `failure_threshold` consecutive failures kill the run the
+   same way (`Killing: Container … failed liveness probe, will be
+   restarted`).
+3. **Readiness**: `success_threshold` passes mark the process ready,
+   `failure_threshold` failures mark it not ready. It is never restarted.
+
+A process with any of these starts not ready. With a startup probe and no
+readiness probe, it is ready once the startup probe succeeds. Readiness is
+what `depends_on` waits for. Each failure is logged as `Unhealthy: <kind>
+probe failed: <message>`, in Kubernetes' wording.
 
 **`${NODE_IP}` and `${NODE_NAME}`** in `args`, `env` and `env_default` values (not `command`)
 are replaced at every spawn. `NODE_IP` is the source address the routing table

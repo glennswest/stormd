@@ -73,13 +73,17 @@ restart_delay_secs = 3
 max_restarts = 10
 ready_probe = { type = "tcp", port = 5432, interval_secs = 2 }
 
-[process.liveness]
-type = "tcp"
-port = 5432
-interval_secs = 10
-timeout_secs = 5
-failure_threshold = 3
-initial_delay_secs = 5
+# Kubernetes-style probes (stormd#48): same fields and meaning as a container
+# spec (camelCase spellings accepted). The startup probe gates the others, so a
+# slow first start (here up to 60 × 2 s) is never killed.
+[process.startup_probe]
+tcp_socket = { port = 5432 }
+period_seconds = 2
+failure_threshold = 60
+
+[process.liveness_probe]          # failing failure_threshold times → SIGTERM, restart
+tcp_socket = { port = 5432 }
+period_seconds = 10               # defaults: period 10, timeout 1, thresholds 3 / 1
 
 [[process]]
 name = "main-app"
@@ -107,9 +111,8 @@ stop_timeout_secs = 15          # on a stop: SIGTERM, up to 15 s, then SIGKILL (
 # startup_delay_secs = 0
 # working_dir = "/app"
 
-[process.liveness]
-type = "http"
-url = "http://127.0.0.1:3000/health"
+[process.readiness_probe]         # not ready while failing; never restarts
+http_get = { path = "/health", port = 3000 }
 
 # Adds a tab to the web UI, reverse-proxied at /ui/proxy/main-app/
 [process.ui]

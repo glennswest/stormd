@@ -354,6 +354,21 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #48 (P0, owner URGENT) — Kubernetes-style probes, backoff, events
+(2026-10-08), in progress.** Owner's spec: latest comments on #48. Steps, each
+pushed + built + golden:
+- [x] 1. startup/liveness/readiness probes (`probes.rs`, http_get/tcp_socket/
+      exec, k8s fields/defaults/camelCase aliases), startup gates the rest,
+      liveness → SIGTERM/SIGKILL → restart policy, readiness → ready only;
+      old `[process.liveness]` retired (warn, never kills). Tests
+      `supervisor::liveness_tests` (rewritten), `probes::tests`
+- [ ] 2. restart policy Always/OnFailure/Never, backoff 10 s ×2 to 5 min,
+      reset after 10 min, state CrashLoopBackOff
+- [ ] 3. Kubernetes events (Unhealthy/Killing/BackOff/Started/Created):
+      stormd-side feed + rustkube-node issue to publish on the mirror pod
+- [ ] 4. grpc probes (needs h2 → Cargo.lock change from a build job)
+- [ ] tell stormcos: move fastetcd / rustkube-apiserver to startup probes
+
 **Issue #44 — restart that waits for health (+ #46) (2026-10-08) ✅ done.**
 Decisions (from the issue and code, not asked; #48 removes liveness *kills*,
 not the probe result used here):

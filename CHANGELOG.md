@@ -4,6 +4,17 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-08
+- **feat:** Kubernetes-style `startup_probe`, `liveness_probe` and
+  `readiness_probe` per process (#48): `http_get` / `tcp_socket` / `exec`,
+  `initial_delay_seconds`, `period_seconds`, `timeout_seconds`,
+  `success_threshold`, `failure_threshold`, Kubernetes defaults and
+  spellings. The startup probe gates the others, so a slow start is never
+  killed. Liveness failing kills the run (SIGTERM, then SIGKILL) for the
+  restart policy. Readiness only marks the process ready or not.
+- **BREAKING:** the old `[process.liveness]` no longer kills anything (#48).
+  It parses, warns that it is retired, and is ignored. On the Dell it killed
+  the apiserver six times during a normal 40 s start; components move to
+  the new probes. `grpc` probes parse but are not supported yet.
 - **feat:** `POST …/restart?wait=healthy&timeout=N` answers once the new run
   is healthy (200), it ended (502), or the timeout passed (504, process left
   running, with what it still waits on) (#44, stormcos#25). Healthy means
