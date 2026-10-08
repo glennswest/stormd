@@ -354,7 +354,7 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #44 — restart that waits for health (+ #46) (2026-10-08), in progress.**
+**Issue #44 — restart that waits for health (+ #46) (2026-10-08) ✅ done.**
 Decisions (from the issue and code, not asked; #48 removes liveness *kills*,
 not the probe result used here):
 - "Healthy for a run" = every check the process has, passed after that
@@ -371,7 +371,9 @@ not the probe result used here):
 - [x] supervisor: per-run readiness (#46), liveness pass record, health_of(),
       restart_and_wait(); API; unit (`wait_healthy_tests`) + medium
       (`restart-wait-healthy`) tests; README, changelog
-- [ ] sc-build; golden; close #44 and #46
+- [x] sc-build: 79 unit tests incl. `wait_healthy_tests`; medium 19 incl.
+      `restart-wait-healthy` (200 after 2062 ms, 504 naming the ready_probe);
+      golden; closed #44, #46; told stormcos#25
 
 **Issue #49 (P0) — API health probes (2026-10-08) ✅ done.** As the issue
 specifies (stormcos#458). Decisions from the code, not asked:
