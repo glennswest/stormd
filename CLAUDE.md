@@ -354,6 +354,32 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #49 (P0) — API health probes (2026-10-08), in progress.** As the issue
+specifies (stormcos#458). Decisions from the code, not asked:
+- `[[process.api]]`: `name`, `url` (GET), `interval_secs` 15, `timeout_secs`
+  5, `p50_ms`/`p99_ms` budgets (optional), `initial_delay_secs` 10 (a
+  starting process is not stalled), `token_file` (bearer, re-read) or
+  `client_cert_file` + `client_key_file`, `restart_after_stalled_secs`
+  (unset = never). Certificates not verified (as liveness).
+- States: `healthy`; `slow` = this answer over `p99_ms`, or the p50 of the
+  last 20 answers over `p50_ms`; `stalled` = no answer within the timeout;
+  `down` = refused / error / HTTP status ≥ 400 (a 401 is a misconfigured
+  probe, and saying so beats calling it healthy). `unknown` before the first.
+- One task per API per run, aborted with the run (the #45 pattern). State is
+  kept across runs per (process, api).
+- A change logs once: `healthy` INFO, `slow` WARN, `stalled`/`down` ERROR,
+  with the latency, the state before and how long it lasted. Appended to
+  `/system-data/history/api/<process>.jsonl` when `/system-data/history`
+  exists. `GET /api/v1/health/apis` (behind auth) serves the current state,
+  since, last latency, p50/p99 seen and the last error.
+- `restart_after_stalled_secs = N`: stalled for N s → ERROR, SIGTERM to that
+  run's pid (SIGKILL after its stop timeout), so the normal restart policy
+  takes the exit. "What the process reports in flight" is not part of any
+  protocol yet, so it is left out.
+- [ ] config + validation; apihealth.rs (classify, store, history); task in
+      spawn_process; API route; unit tests; README, example.toml, changelog;
+      sc-build + live check; golden
+
 **Issue #24 — test image per the updated standard (2026-10-07), in progress.**
 Standard (stormcentral docs/test-standard.md, runner `BUILD_PUSH`): one image,
 `test/Containerfile` with the repo root as context, no container runtime
