@@ -729,6 +729,7 @@ mod tests {
         assert!(c.process.iter().any(|p| p.ui.is_some()));
         assert!(c.process.iter().any(|p| !p.wait_for_files.is_empty()));
         assert!(c.process.iter().any(|p| p.golden.len() == 2));
+        assert!(c.process.iter().any(|p| !p.api.is_empty()));
     }
 
     #[test]

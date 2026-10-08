@@ -126,6 +126,18 @@ on_exit = "stop"                # one-shot: done is done — its dependents
                                 # start only after it exits 0
 depends_on = ["db"]
 
+# Its real APIs, probed for health (stormd#49): healthy / slow / stalled / down,
+# each change logged and kept; GET /api/v1/health/apis serves them.
+[[process.api]]
+name = "status"
+url = "http://127.0.0.1:8080/api/v1/status"
+interval_secs = 15
+timeout_secs = 5
+p50_ms = 50                                # budgets: over → "slow"
+p99_ms = 500
+# token_file = "/run/app/token"
+# restart_after_stalled_secs = 300         # opt-in; never by default
+
 # A process given goldens (stormblock), read-only, before it first starts.
 # stormd attaches each one ro over ublk from this node's engine and presents
 # it: a filesystem golden is mounted read-only, an image golden is a device

@@ -27,6 +27,9 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
   `args` and `env` values are expanded each time it is spawned.
 - **Node-overridable defaults** — `env_default` entries apply only when stormd
   did not inherit the key, so a node's env.d can override them.
+- **API health** — a process declares its real APIs; stormd times them
+  against a budget (`healthy`/`slow`/`stalled`/`down`), logs each change
+  loudly, keeps it, and restarts on a long stall only when told to (#49).
 - **Goldens** — a process can name stormblock goldens; stormd attaches each
   read-only and presents it (a filesystem golden mounted read-only, an image
   golden as a readable device node) before the process starts, and swaps one
@@ -374,6 +377,7 @@ spawned.
 | `[process.ui]` | — | plugin tab, below |
 | `capture_stdout`, `capture_stderr` | `true` | **parsed, not used** — both are always captured |
 | `[[process.golden]]` | — | goldens presented to the process, below and [Goldens](#goldens) |
+| `[[process.api]]` | — | the process's APIs, probed for health — [API health](#api-health) |
 
 **`ready_probe`** — `{ type = "http", url = "...", interval_secs = N }`,
 `{ type = "tcp", port = N, interval_secs = N }` or
@@ -668,6 +672,7 @@ client certificate, a session cookie, or `Authorization: Bearer <token>`
 | GET | `/api/v1/processes` | all process statuses |
 | GET | `/api/v1/processes/{name}` | one |
 | POST | `/api/v1/processes/{name}/start` \| `stop` \| `restart` | |
+| GET | `/api/v1/health/apis` | every declared API's health: state, since, last latency, p50/p99 seen, budgets, last error (behind auth) |
 | GET | `/api/v1/goldens` | goldens presented: process, name, golden, volume, content, device, path, size_bytes |
 | PUT | `/api/v1/processes/{name}/goldens/{golden}` | `{"golden": "…"}` or `{"volume_id": "…"}` — swap it (see [Goldens](#goldens)) |
 | GET | `/api/v1/logs` | lines from the log files (`?process=&tail=&search=`) |
@@ -909,6 +914,60 @@ the registry has something newer the first poll pulls it. A rootfs without a
 record (left by an older stormd) is pulled again. With `[updater] enabled =
 false` an `image` process never runs, and stormd logs one ERROR per such
 process at start saying so.
+
+## API health
+
+Liveness asks a cheap `/healthz`, and that answers while the real work is
+stuck. On 2026-10-08 a storage engine held its volume mutex through a
+six-minute build, and every API call behind it stalled unnoticed
+(stormblock#358, stormcos#458). So a process can declare the APIs it serves,
+each with a cheap *real* read:
+
+```toml
+[[process.api]]
+name = "volumes"
+url = "http://127.0.0.1:9090/api/v1/volumes?limit=1"
+p50_ms = 50
+p99_ms = 500
+token_file = "/run/stormblock/engine/api_token"
+# restart_after_stalled_secs = 300
+```
+
+| Key | Default | |
+|---|---|---|
+| `name` | required | unique in the process |
+| `url` | required | `http://` or `https://`, GET (certificates not verified, redirects not followed) |
+| `interval_secs` | `15` | between probes |
+| `timeout_secs` | `5` | no complete answer (headers *and* body) within this → `stalled` |
+| `p50_ms`, `p99_ms` | — | budgets: an answer over `p99_ms`, or a p50 of the last 20 answers over `p50_ms`, is `slow` |
+| `initial_delay_secs` | `10` | after each start, before the first probe |
+| `token_file` | — | bearer token, re-read every probe |
+| `client_cert_file` + `client_key_file` | — | a client certificate (PEM) |
+| `restart_after_stalled_secs` | — (never) | stalled this long → restart |
+
+**States:**
+- `healthy`: answered, within budget.
+- `slow`: answered, over budget.
+- `stalled`: no answer within the timeout.
+- `down`: refused, a connection error, or an HTTP status of 400 or more.
+  A 401 means the probe's credentials are wrong, which is reported rather
+  than passed as healthy.
+- `unknown`: before the first probe.
+
+**Logging:** each change is logged once. `healthy` is INFO, `slow` WARN, and
+`stalled`/`down` ERROR. The line names the process, the API, the URL, the
+latency or error, the state before and how long it lasted. Each change is
+appended to `/system-data/history/api/<process>.jsonl` when
+`/system-data/history` exists (stormcos#456). `GET /api/v1/health/apis`
+serves the current state of every API.
+
+**Acting** is opt-in, per API. With `restart_after_stalled_secs = N`, an API
+stalled for N seconds is logged as such, and the process is sent SIGTERM
+(SIGKILL after its `stop_timeout_secs`). Its exit then goes through the
+restart policy: it counts as a crash, with cool-off and `max_restarts`.
+Without the key nothing is ever done. The probes run one task per API per
+run and end with the run. The state is kept per process and API across
+restarts.
 
 ## Goldens
 

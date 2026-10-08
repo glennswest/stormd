@@ -3,6 +3,17 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-10-08
+- **feat:** API health probes (#49, stormcos#458). `[[process.api]]`
+  declares a process's real APIs (url, interval, timeout, `p50_ms`/`p99_ms`
+  budgets, bearer token or client cert). stormd times them into `healthy`,
+  `slow`, `stalled` or `down`. Each change is logged loudly with the latency,
+  the state before and how long it lasted, and appended to
+  `/system-data/history/api/<process>.jsonl` when that volume is there.
+  `GET /api/v1/health/apis` serves the current state. Opt-in
+  `restart_after_stalled_secs` restarts the process through the restart
+  policy, logged as such.
+
 ### 2026-10-07
 - **test:** the test image follows the updated standard (#24). It is one
   image for all suites, built from `test/Containerfile` with the repo root
