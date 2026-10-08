@@ -354,6 +354,13 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #28 — stormcast 0.1.0 → 0.1.1 (2026-10-08), in progress.** Lock
+edited by hand (`3cec734`, no deps): the API stormd uses (send_at,
+strip_ansi, DEFAULT_GROUP, Limiter/Verdict/RATE_PER_SEC/BURST, offer, flush)
+is unchanged at main. Regression test `mcast::wire_tests`. stormcast#5's
+header repair changes nothing for stormd's process names unless they hold a
+space or non-ASCII. Verify with --locked build + tests; golden.
+
 **Issue #26 — a group signal's child exit logged as a crash (2026-10-08) ✅ done.** As proposed: the signal path sets the shutdown flag first thing
 (`Supervisor::begin_shutdown`); an exit by SIGTERM/SIGINT/SIGHUP waits up
 to 300 ms for shutdown to begin before it is counted as a crash. Test

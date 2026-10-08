@@ -3455,8 +3455,8 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stormcast"
-version = "0.1.0"
-source = "git+https://github.com/glennswest/stormcast?branch=main#9244121e2f9c73f83ebc978245329ab9942c9878"
+version = "0.1.1"
+source = "git+https://github.com/glennswest/stormcast?branch=main#3cec734ee0239604e9ce6e203cda403ab49aba75"
 
 [[package]]
 name = "stormd"

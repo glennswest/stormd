@@ -162,3 +162,26 @@ mod gate_tests {
         assert_eq!(g.flush("never-seen"), None);
     }
 }
+
+#[cfg(test)]
+mod wire_tests {
+    use super::Emitter;
+    use crate::types::{LogEntry, LogStream};
+
+    /// stormd#28 (stormcast#4): a line whose byte 8192 falls inside a
+    /// multibyte character is cut at a character boundary, not a panic in
+    /// PID 1.
+    #[test]
+    fn a_long_multibyte_line_is_sent_not_a_panic() {
+        let rx = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        rx.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+        let em = Emitter::new(rx.local_addr().unwrap(), "node-1").expect("emitter");
+        let line = "a".repeat(8191) + &"é".repeat(100);
+        em.send(&LogEntry::new("app", LogStream::Stdout, line));
+        let mut buf = vec![0u8; 65536];
+        let n = rx.recv(&mut buf).expect("a datagram");
+        let text = std::str::from_utf8(&buf[..n]).expect("valid UTF-8 on the wire");
+        assert!(text.contains(" app ") && text.contains("aaaa"), "{}", &text[..120]);
+        assert!(n < 8192 + 200, "not cut: {n} bytes");
+    }
+}

@@ -4,6 +4,11 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-08
+- **fix:** stormcast bumped 0.1.0 (`9244121`) → 0.1.1 (`3cec734`) (#28). The
+  old pin panicked PID 1 when a line's byte 8192 fell inside a multibyte
+  character (stormcast#4). The bump also brings stormcast#5: HOSTNAME and
+  APP-NAME are one RFC 5424 token each (a space or non-ASCII becomes `_`),
+  and IPv6 groups deliver.
 - **fix:** under a process-group signal (`timeout`, Ctrl-C), a child that
   died of the same SIGTERM/SIGINT is logged as a stop, not as a crash with a
   restart scheduled (#26). The signal path starts shutdown first thing, and

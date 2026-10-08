@@ -656,12 +656,12 @@ Every line of every process, and every event, goes three places:
    lines/s`). Both notices go out as Notice lines from the same process. A
    run of repeats still held when the process's output ends is sent then.
    stormd's own `*** PROCESS CRASHED ***` line is never rate-dropped. Only
-   the group is limited: the file and the live streams keep every line. The
-   stormcast commit
-   pinned in `Cargo.lock` (0.1.0, `9244121`) truncates a long line with
-   `String::truncate` and **panics** when byte 8192 falls inside a multibyte
-   character; the fix is in stormcast and arrives with `cargo update -p
-   stormcast` (#28).
+   the group is limited: the file and the live streams keep every line. stormcast is pinned in
+   `Cargo.lock` at 0.1.1 (`3cec734`). It cuts a line over 8 KiB at a character
+   boundary; the 0.1.0 it replaced panicked PID 1 when byte 8192 fell inside
+   a multibyte character (#28, stormcast#4). Since stormcast#5, HOSTNAME and
+   APP-NAME are each one RFC 5424 token: a process name with a space or a
+   non-ASCII character is sent with `_` in its place.
 3. **Live streams** — the VT100 screen per process and a broadcast channel,
    followed by the web console, stormsh, `attach`, and `/ws/logs`.
 
