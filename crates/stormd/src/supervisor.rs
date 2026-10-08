@@ -936,6 +936,9 @@ impl Supervisor {
             proc.exit_code = exit_code;
             proc.stopped_at = Some(Utc::now());
             proc.pid = None;
+            // An exited process is not ready, whatever its last probe said.
+            proc.ready = false;
+            proc.ready_at = None;
             let ran_secs = proc.started_at.map(|t| (Utc::now() - t).num_seconds()).unwrap_or(0);
 
             let in_window = proc.restart_count_in_window(proc.config.restart_window_secs);
@@ -2919,6 +2922,7 @@ mod backoff_tests {
         let b = sup.get_status("p").await.unwrap();
         sup.stop_all().await;
         let _ = std::fs::remove_dir_all(&dir);
+        assert!(!a.ready, "not ready while backing off");
         assert_eq!((a.state, a.restarts), (ProcessState::CrashLoopBackOff, 1));
         assert_eq!((b.state, b.restarts), (ProcessState::CrashLoopBackOff, 2), "second restart, past max_restarts");
         assert!(!sup.has_failed().await, "a restart policy never fails the container");
