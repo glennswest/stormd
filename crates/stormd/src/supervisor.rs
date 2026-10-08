@@ -885,6 +885,8 @@ impl Supervisor {
                     proc.stopped_at = Some(Utc::now());
                     proc.pid = None;
                     proc.exit_code = exit_code;
+                    proc.ready = false;
+                    proc.ready_at = None;
                     info!(process = %name_owned, exit_code = ?exit_code, "process stopped by request");
                 }
             }
