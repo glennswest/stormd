@@ -355,7 +355,7 @@ screen loads).
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
 **Issue #48 (P0, owner URGENT) — Kubernetes-style probes, backoff, events
-(2026-10-08), in progress.** Owner's spec: latest comments on #48. Steps, each
+(2026-10-08) ✅ done (stormd side).** Owner's spec: latest comments on #48. Steps, each
 pushed + built + golden:
 - [x] 1. startup/liveness/readiness probes (`probes.rs`, http_get/tcp_socket/
       exec, k8s fields/defaults/camelCase aliases), startup gates the rest,
@@ -368,9 +368,14 @@ pushed + built + golden:
 - [x] 3. Kubernetes events (Unhealthy/Killing/BackOff/Started/Created):
       `k8sevents.rs`, GET /api/v1/events?since=; rustkube-node#215 told the
       interface (and that node_health.rs reads the retired [process.liveness])
-- [x] 4. grpc probes (reqwest http2) — Cargo.lock diff to come from the
-      next build job (it is NOT committed yet: --locked builds fail until it is)
-- [ ] tell stormcos: move fastetcd / rustkube-apiserver to startup probes
+- [x] 4. grpc probes (reqwest http2); Cargo.lock diff taken from a build job
+      and committed
+- [x] verified: --locked build, 93 unit tests, medium 19; live Dell-style run
+      (8 s start under startupProbe never killed, ready after, old liveness
+      ignored, events Created/Started/Unhealthy x9/BackOff, CrashLoopBackOff);
+      found + fixed: an exited/stopped process stayed `ready`
+- [x] golden; told stormcos (#186) how to move fastetcd / the apiserver to
+      startup probes; mirror-pod publishing is rustkube-node#215
 
 **Issue #44 — restart that waits for health (+ #46) (2026-10-08) ✅ done.**
 Decisions (from the issue and code, not asked; #48 removes liveness *kills*,
