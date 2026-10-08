@@ -157,6 +157,8 @@ pub struct Supervisor {
     shutting_down: AtomicBool,
     /// The health of every process's declared APIs (stormd#49).
     api_health: Arc<crate::apihealth::ApiHealthStore>,
+    /// Kubernetes-shaped events (stormd#48).
+    k8s_events: Arc<crate::k8sevents::EventStore>,
     /// Presents the goldens processes name (stormd#36); set by main when any does.
     goldens: std::sync::OnceLock<Arc<crate::goldens::Goldens>>,
 }
@@ -174,7 +176,12 @@ impl Supervisor {
             shutting_down: AtomicBool::new(false),
             goldens: std::sync::OnceLock::new(),
             api_health: Arc::new(crate::apihealth::ApiHealthStore::default()),
+            k8s_events: Arc::new(crate::k8sevents::EventStore::default()),
         }
+    }
+
+    pub fn k8s_events(&self) -> &Arc<crate::k8sevents::EventStore> {
+        &self.k8s_events
     }
 
     pub fn api_health(&self) -> &Arc<crate::apihealth::ApiHealthStore> {
@@ -198,6 +205,7 @@ impl Supervisor {
                 let r = sp.run().await;
                 if let Err(m) = &r {
                     warn!(process = %name, reason = "Unhealthy", "Startup probe failed: {m}");
+                    self.k8s_events.warning(name, "Unhealthy", format!("Startup probe failed: {m}"));
                 }
                 match c.record(r.is_ok(), sp) {
                     Some(true) => {
@@ -215,6 +223,7 @@ impl Supervisor {
                     }
                     Some(false) => {
                         warn!(process = %name, reason = "Killing", "Container {name} failed startup probe, will be restarted");
+                        self.k8s_events.normal(name, "Killing", format!("Container {name} failed startup probe, will be restarted"));
                         self.stop_run(proc_arc, run, pid).await;
                         return;
                     }
@@ -252,9 +261,11 @@ impl Supervisor {
                 }
                 if let Err(m) = &r {
                     warn!(process = %name, reason = "Unhealthy", "Liveness probe failed: {m}");
+                    self.k8s_events.warning(name, "Unhealthy", format!("Liveness probe failed: {m}"));
                 }
                 if c.record(r.is_ok(), lp) == Some(false) {
                     warn!(process = %name, reason = "Killing", "Container {name} failed liveness probe, will be restarted");
+                    self.k8s_events.normal(name, "Killing", format!("Container {name} failed liveness probe, will be restarted"));
                     self.event_bus.emit_simple(EventKind::LivenessCheckFailed, Some(name.to_string())).await;
                     self.stop_run(proc_arc, run, pid).await;
                     return;
@@ -273,6 +284,7 @@ impl Supervisor {
                 let r = rp.run().await;
                 if let Err(m) = &r {
                     warn!(process = %name, reason = "Unhealthy", "Readiness probe failed: {m}");
+                    self.k8s_events.warning(name, "Unhealthy", format!("Readiness probe failed: {m}"));
                 }
                 if let Some(ready) = c.record(r.is_ok(), rp) {
                     let mut p = proc_arc.lock().await;
@@ -794,6 +806,8 @@ impl Supervisor {
         }
 
         info!(process = %config.name, pid = ?pid, "process started");
+        self.k8s_events.normal(&config.name, "Created", format!("Created container {}", config.name));
+        self.k8s_events.normal(&config.name, "Started", format!("Started container {}", config.name));
         self.event_bus
             .emit_simple(EventKind::ProcessStarted, Some(config.name.clone()))
             .await;
@@ -1164,6 +1178,7 @@ impl Supervisor {
         if let Some(tx) = proc.kill_tx.take() {
             let _ = tx.send(());
         }
+        self.k8s_events.normal(name, "Killing", format!("Stopping container {name}"));
         self.event_bus
             .emit_simple(EventKind::ProcessStopped, Some(name.to_string()))
             .await;
@@ -1483,6 +1498,7 @@ impl Supervisor {
             (d, p.restarts)
         };
         warn!(process = %name, reason = "BackOff", delay_secs = delay.as_secs(), restarts, "Back-off restarting failed container {name}");
+        self.k8s_events.warning(name, "BackOff", format!("Back-off restarting failed container {name}"));
         self.event_bus.emit_simple(EventKind::ProcessRestarting, Some(name.to_string())).await;
         self.sleep_unless_shutdown(delay).await;
         self.wait_for_node_vars(name).await;
@@ -2922,5 +2938,52 @@ mod backoff_tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!((ok.state, ok.restarts), (ProcessState::Stopped, 0), "OnFailure leaves a clean exit stopped");
         assert_eq!((never.state, never.restarts), (ProcessState::Failed, 0), "Never restarts nothing");
+    }
+}
+
+#[cfg(test)]
+mod k8s_event_tests {
+    use super::Supervisor;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// A failing startup probe leaves Created, Started, Unhealthy (counted),
+    /// Killing and BackOff, in upstream's wording.
+    #[tokio::test]
+    async fn probe_failures_and_restarts_are_events() {
+        let dir = std::env::temp_dir().join(format!("stormd-k8sev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        let sup = Arc::new(Supervisor::new(log, bus));
+        let h = sup.clone();
+        tokio::spawn(async move { h.run_exit_handler().await });
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let p: crate::config::ProcessConfig = toml::from_str(&format!(
+            "name = \"etcd\"\ncommand = \"/bin/sleep\"\nargs = [\"60\"]\nstop_timeout_secs = 1\nrestart_policy = \"Always\"\n\
+             [startup_probe]\ntcp_socket = {{ port = {closed} }}\nperiod_seconds = 1\nfailure_threshold = 2\n"
+        ))
+        .unwrap();
+        sup.start_all(&[p]).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        let ev = sup.k8s_events().since(0);
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        let has = |reason: &str, start: &str| ev.iter().any(|e| e.reason == reason && e.message.starts_with(start));
+        assert!(has("Created", "Created container etcd"), "{ev:?}");
+        assert!(has("Started", "Started container etcd"));
+        assert!(has("Unhealthy", "Startup probe failed: dial tcp 127.0.0.1:"));
+        assert!(has("Killing", "Container etcd failed startup probe, will be restarted"));
+        assert!(has("BackOff", "Back-off restarting failed container etcd"));
+        let u = ev.iter().find(|e| e.reason == "Unhealthy").unwrap();
+        assert!(u.count >= 2 && u.kind == "Warning", "{u:?}");
     }
 }

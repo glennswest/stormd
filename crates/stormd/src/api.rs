@@ -55,6 +55,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/health", get(health))
         .route("/healthz", get(health))
         .route("/api/v1/health/apis", get(api_health))
+        .route("/api/v1/events", get(k8s_events))
         .route("/api/v1/status", get(status))
         .route("/api/v1/stats", get(stats))
         // Prometheus text format, at the path everything that scrapes expects.
@@ -144,6 +145,16 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 }
 
 // --- Health & Status ---
+
+#[derive(Debug, Deserialize)]
+struct EventsQuery {
+    since: Option<u64>,
+}
+
+/// Kubernetes-shaped events (stormd#48), changed after `?since=<seq>`.
+async fn k8s_events(State(state): State<Arc<AppState>>, Query(q): Query<EventsQuery>) -> impl IntoResponse {
+    Json(serde_json::json!({ "items": state.supervisor.k8s_events().since(q.since.unwrap_or(0)) }))
+}
 
 /// Every declared API's health (stormd#49): state, since when, latencies.
 async fn api_health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
