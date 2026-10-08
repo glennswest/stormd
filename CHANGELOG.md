@@ -4,6 +4,10 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-08
+- **fix:** `[stormlog.mcast] group = "off"` (or `""`) sends nothing (#27).
+  It used to be replaced by the fleet's default group, so a container
+  configured to be quiet emitted anyway. A group that does not parse sends
+  nothing, with a WARN.
 - **fix:** a CloudID key refresh answered 404 says why it probably happened:
   on a stormcos node the link-local address is stormimds, not cloudid
   (#30). The rest of #30 waits on stormimds#9.

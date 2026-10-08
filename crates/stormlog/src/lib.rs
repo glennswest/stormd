@@ -98,15 +98,7 @@ impl StormLog {
                 .filter(|h| !h.is_empty() && h != "localhost")
                 .unwrap_or_else(|| name.clone())
         });
-        let mcast = config
-            .mcast
-            .group
-            .as_deref()
-            .filter(|g| !g.is_empty() && *g != "off")
-            .unwrap_or(mcast::DEFAULT_GROUP)
-            .parse()
-            .ok()
-            .and_then(|addr| mcast::Emitter::new(addr, host));
+        let mcast = mcast_group(config.mcast.group.as_deref()).and_then(|addr| mcast::Emitter::new(addr, host));
 
         Self {
             config,
@@ -403,5 +395,40 @@ impl StormLog {
     pub async fn flush(&self) -> anyhow::Result<usize> {
         self.file_logger.sync_all().await;
         Ok(0)
+    }
+}
+
+/// Where lines go on the wire: no `group` → the fleet's default group;
+/// `"off"` or `""` → nowhere; anything else → that `host:port` (nowhere, with
+/// a warning, if it does not parse).
+///
+/// **`off` used to send to the fleet group** (stormd#27): it was filtered
+/// out and then replaced by the default, so a container configured to be
+/// quiet emitted like every other.
+fn mcast_group(group: Option<&str>) -> Option<std::net::SocketAddr> {
+    match group.map(str::trim) {
+        None => mcast::DEFAULT_GROUP.parse().ok(),
+        Some("") | Some("off") => None,
+        Some(g) => match g.parse() {
+            Ok(a) => Some(a),
+            Err(e) => {
+                tracing::warn!(group = %g, error = %e, "[stormlog.mcast] group is not host:port — not sending");
+                None
+            }
+        },
+    }
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::mcast_group;
+
+    #[test]
+    fn off_is_off() {
+        assert_eq!(mcast_group(Some("off")), None);
+        assert_eq!(mcast_group(Some("")), None);
+        assert_eq!(mcast_group(None), Some("239.255.42.1:5514".parse().unwrap()));
+        assert_eq!(mcast_group(Some("239.1.2.3:600")), Some("239.1.2.3:600".parse().unwrap()));
+        assert_eq!(mcast_group(Some("not an address")), None);
     }
 }

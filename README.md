@@ -507,7 +507,7 @@ See [Image updater](#image-updater).
 | `file.max_files` | `10` | rotated generations kept per process |
 | `file.max_runs` | `10` | finished runs kept per process |
 | `file.log_dir` | — | **ignored**: always `[general] log_dir` |
-| `mcast.group` | `239.255.42.1:5514` | `host:port`. **`"off"` (or `""`) does not silence today: it is replaced by the default group, so the lines still go out (#27)** |
+| `mcast.group` | `239.255.42.1:5514` | `host:port`, or `"off"` / `""` to send nothing (#27). An address that does not parse sends nothing, with a WARN |
 | `mcast.host` | this machine's hostname | syslog HOSTNAME field (the node, not the container) |
 | `terminal.rows` / `cols` | `24` / `80` | VT100 screen per process |
 | `terminal.scrollback` | `1000` | lines |

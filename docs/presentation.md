@@ -208,11 +208,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
   - **#32** — done in stormd (TLS, client certificates, token file,
     `/metrics` behind auth); it protects a node once stormcos wires the
     stormcert pair, node CA and token into each container's config.
-  - **#12** — container logs reach the multicast group **without stormcast's
-    limiter**; a looping process floods it. And `group = "off"` still sends
-    (#27).
-  - **#28** — the pinned stormcast panics PID 1 on a multibyte character at
-    byte 8192; the fix needs `cargo update -p stormcast`.
   - **#29** — a failed process's error is in its log file, never in stormd's
     own output, so a node console shows only "exited with error".
   - **#30** — on a node, CloudID's address is stormimds, which does not know
@@ -228,9 +223,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 
 From the open issues. **None of this works today:**
 
-- Rate limiting and repeat-collapsing, per process, on the multicast group
-  (#12); `group = "off"` meaning no emitter (#27); stormcast bumped past the
-  multibyte truncation panic (#28).
 - The last stderr lines of a failed process echoed to stormd's own output
   (#29).
 - Waking dependents on a state change instead of a 250 ms poll (#25), and

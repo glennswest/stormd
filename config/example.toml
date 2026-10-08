@@ -41,8 +41,7 @@ max_runs = 10               # finished runs kept, per process
 
 # Where lines go on the network. Emitting only — a collector (mcastsyslog)
 # receives, stores and indexes. Defaults to the fleet group, so a container is
-# watchable with no configuration at all. "off" is meant to stay quiet, but
-# today it is replaced by the default group and still sends (stormd#27).
+# watchable with no configuration at all. "off" sends nothing.
 [stormlog.mcast]
 # group = "239.255.42.1:5514"
 # host = "node1"            # syslog HOSTNAME; defaults to this machine's hostname
