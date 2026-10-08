@@ -165,7 +165,7 @@ fn liveness(env: &Env) -> Outcome {
         "stuck",
         "\"sleep\"",
         &format!(
-            "restart_delay_secs = 1\nliveness = {{ type = \"tcp\", port = {dead}, interval_secs = 1, failure_threshold = 2, initial_delay_secs = 0, timeout_secs = 1 }}"
+            "restart_delay_secs = 1\nstop_timeout_secs = 1\nliveness_probe = {{ tcp_socket = {{ port = {dead} }}, period_seconds = 1, failure_threshold = 2 }}"
         ),
     );
     with(env, "liveness", &body, Opts::default(), |sd| {

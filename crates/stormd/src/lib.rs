@@ -10,6 +10,7 @@ pub mod debug;
 pub mod events;
 pub mod goldens;
 pub mod nodevars;
+pub mod probes;
 pub mod sftp;
 pub mod shell;
 pub mod ssh;

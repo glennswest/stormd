@@ -270,6 +270,15 @@ pub struct ProcessConfig {
     /// `${NODE_IP}`/`${NODE_NAME}` are expanded.
     #[serde(default)]
     pub wait_for_files: Vec<String>,
+    /// Kubernetes-style probes (stormd#48). The startup probe gates the
+    /// other two; liveness failing restarts the run; readiness only marks it
+    /// ready or not.
+    #[serde(default, alias = "startupProbe")]
+    pub startup_probe: Option<crate::probes::Probe>,
+    #[serde(default, alias = "livenessProbe")]
+    pub liveness_probe: Option<crate::probes::Probe>,
+    #[serde(default, alias = "readinessProbe")]
+    pub readiness_probe: Option<crate::probes::Probe>,
     /// The APIs this process serves, probed for health (stormd#49).
     #[serde(default)]
     pub api: Vec<ApiProbe>,
@@ -653,6 +662,13 @@ impl Config {
         for p in &self.process {
             if let Some(f) = p.wait_for_files.iter().find(|f| !f.starts_with('/')) {
                 anyhow::bail!("process '{}': wait_for_files entry '{}' is not an absolute path", p.name, f);
+            }
+            for (kind, probe) in [("startup", &p.startup_probe), ("liveness", &p.liveness_probe), ("readiness", &p.readiness_probe)] {
+                if let Some(pr) = probe {
+                    if let Err(e) = pr.check(kind) {
+                        anyhow::bail!("process '{}', {kind}_probe: {e}", p.name);
+                    }
+                }
             }
             let mut apis = std::collections::HashSet::new();
             for a in &p.api {
