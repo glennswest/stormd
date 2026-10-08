@@ -354,7 +354,7 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #28 — stormcast 0.1.0 → 0.1.1 (2026-10-08), in progress.** Lock
+**Issue #28 — stormcast 0.1.0 → 0.1.1 (2026-10-08) ✅ done.** Lock
 edited by hand (`3cec734`, no deps): the API stormd uses (send_at,
 strip_ansi, DEFAULT_GROUP, Limiter/Verdict/RATE_PER_SEC/BURST, offer, flush)
 is unchanged at main. Regression test `mcast::wire_tests`. stormcast#5's
