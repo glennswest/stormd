@@ -142,6 +142,8 @@ impl ManagedProcess {
 struct ExitEvent {
     name: String,
     exit_code: Option<i32>,
+    /// The signal it died of, if it did.
+    signal: Option<i32>,
 }
 
 pub struct Supervisor {
@@ -465,6 +467,31 @@ impl Supervisor {
         result
     }
 
+    /// Start shutting down: from here nothing new starts and an exit is a
+    /// stop. Called first thing when stormd is signalled (stormd#26);
+    /// `stop_all` does the rest.
+    pub fn begin_shutdown(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+    }
+
+    /// A child that died of SIGTERM/SIGINT/SIGHUP may have got it from the
+    /// same process-group signal as stormd (`timeout`, Ctrl-C, a harness),
+    /// and been reaped before stormd's own handler ran. Give shutdown a
+    /// moment (up to 300 ms) to begin, so that exit is logged as a stop, not
+    /// a crash with a restart scheduled (stormd#26).
+    async fn settle_group_signal(&self, signal: Option<i32>) {
+        const GROUP_SIGNALS: [i32; 3] = [libc::SIGTERM, libc::SIGINT, libc::SIGHUP];
+        if !signal.is_some_and(|s| GROUP_SIGNALS.contains(&s)) {
+            return;
+        }
+        for _ in 0..15 {
+            if self.is_shutting_down() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     fn is_shutting_down(&self) -> bool {
         self.shutting_down.load(Ordering::SeqCst)
     }
@@ -487,7 +514,10 @@ impl Supervisor {
         let mut rx = self.exit_rx.lock().await.take().expect("exit handler already running");
         while let Some(evt) = rx.recv().await {
             let this = Arc::clone(self);
-            tokio::spawn(async move { this.handle_exit(&evt.name, evt.exit_code).await });
+            tokio::spawn(async move {
+                this.settle_group_signal(evt.signal).await;
+                this.handle_exit(&evt.name, evt.exit_code).await
+            });
         }
     }
 
@@ -875,8 +905,12 @@ impl Supervisor {
             let _run_tasks = AbortOnDrop(run_tasks);
             tokio::select! {
                 status = child.wait() => {
-                    let exit_code = status.ok().and_then(|s| s.code());
-                    let _ = exit_tx.send(ExitEvent { name: name_owned, exit_code }).await;
+                    let exit_code = status.as_ref().ok().and_then(|s| s.code());
+                    #[cfg(unix)]
+                    let signal = status.as_ref().ok().and_then(std::os::unix::process::ExitStatusExt::signal);
+                    #[cfg(not(unix))]
+                    let signal = None;
+                    let _ = exit_tx.send(ExitEvent { name: name_owned, exit_code, signal }).await;
                 }
                 _ = &mut kill_rx => {
                     let exit_code = stop_child(&mut child, pid, stop_timeout, &name_owned).await;
@@ -2992,5 +3026,62 @@ mod k8s_event_tests {
         assert!(has("BackOff", "Back-off restarting failed container etcd"));
         let u = ev.iter().find(|e| e.reason == "Unhealthy").unwrap();
         assert!(u.count >= 2 && u.kind == "Warning", "{u:?}");
+    }
+}
+
+#[cfg(test)]
+mod group_signal_tests {
+    use super::{ProcessState, Supervisor};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    async fn started(label: &str) -> (Arc<Supervisor>, std::path::PathBuf, u32) {
+        let dir = std::env::temp_dir().join(format!("stormd-grpsig-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        let sup = Arc::new(Supervisor::new(log, bus));
+        let h = sup.clone();
+        tokio::spawn(async move { h.run_exit_handler().await });
+        let p: crate::config::ProcessConfig =
+            toml::from_str("name = \"sleeper\"\ncommand = \"/bin/sleep\"\nargs = [\"60\"]\nrestart_delay_secs = 1\n").unwrap();
+        sup.start_all(&[p]).await.unwrap();
+        let pid = sup.get_status("sleeper").await.unwrap().pid.unwrap();
+        (sup, dir, pid)
+    }
+
+    /// stormd#26: the child gets the group's SIGTERM and is reaped just
+    /// before stormd's own handler runs — a stop, not a crash.
+    #[tokio::test]
+    async fn a_group_sigterm_just_before_shutdown_is_a_stop() {
+        let (sup, dir, pid) = started("group").await;
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        sup.begin_shutdown();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let s = sup.get_status("sleeper").await.unwrap();
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!((s.state, s.crashes, s.restarts), (ProcessState::Stopped, 0, 0));
+    }
+
+    /// A SIGTERM from anything else, with no shutdown, is still a crash.
+    #[tokio::test]
+    async fn a_sigterm_without_shutdown_is_still_a_crash() {
+        let (sup, dir, pid) = started("alone").await;
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let s = sup.get_status("sleeper").await.unwrap();
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(s.crashes, 1);
     }
 }

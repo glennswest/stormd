@@ -4,6 +4,10 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-08
+- **fix:** under a process-group signal (`timeout`, Ctrl-C), a child that
+  died of the same SIGTERM/SIGINT is logged as a stop, not as a crash with a
+  restart scheduled (#26). The signal path starts shutdown first thing, and
+  a signal death waits up to 300 ms for it before being counted.
 - **feat:** Kubernetes-style `startup_probe`, `liveness_probe` and
   `readiness_probe` per process (#48): `http_get` / `tcp_socket` / `exec`,
   `initial_delay_seconds`, `period_seconds`, `timeout_seconds`,

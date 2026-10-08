@@ -422,6 +422,7 @@ async fn main() {
 
     let exit_code_rx = shutdown_rx.clone();
     let mut api_shutdown_rx = shutdown_rx;
+    let sup_signal = supervisor.clone();
     let shutdown_signal = async move {
         let ctrl_c = tokio::signal::ctrl_c();
         let api_shutdown = async {
@@ -456,6 +457,9 @@ async fn main() {
                 }
             }
         }
+        // First thing: a child killed by the same group signal is a stop,
+        // not a crash (stormd#26).
+        sup_signal.begin_shutdown();
     };
 
     // PID 1 zombie reaper (Linux only)

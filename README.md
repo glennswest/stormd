@@ -276,10 +276,12 @@ the container failed, else 0. If shutdown has not finished by then, stormd
 exits 1 regardless: the deadline is every tier's longest `stop_timeout_secs`
 plus 2 s, summed, plus 20 s, and never less than 30 s. A test that starts stormd should still use
 `timeout -k 5 N`, so a regression here cannot hang a build. An exit handled
-after shutdown began is recorded as a stop, not a crash; under something that
-signals the whole process group (`timeout`, a terminal's Ctrl-C) a child can
-die before shutdown begins, and that exit is still logged as a crash with a
-restart scheduled, which then stands down (#26).
+after shutdown began is recorded as a stop, not a crash. The signal handler
+starts shutdown first thing. Something that signals the whole process group
+(`timeout`, a terminal's Ctrl-C) can kill a child before that handler runs.
+So a child that died of SIGTERM, SIGINT or SIGHUP is given up to 300 ms for
+shutdown to begin, and is then a stop, not a crash with a restart scheduled
+(#26).
 
 Logging goes to stderr as plain compact lines — no timestamp, no ANSI, no JSON
 (the envelope that carries them already has those). `RUST_LOG` overrides the
