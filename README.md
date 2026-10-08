@@ -148,7 +148,7 @@ dies in the pod.
 | suite | budget | covers |
 |---|---|---|
 | `short` | < 2 min | API up; a dependent waits for a tcp ready probe and for a one-shot to finish; a crash is restarted; stdout and stderr reach the logs API; SIGTERM exits 0 with no process left behind; the node's own stormds (ports 9081–9085) answer `/api/v1/health` — a skip where none do |
-| `medium` | < 30 min | a failed one-shot holds its dependents, and SIGTERM still stops stormd; `no_restart_exit_codes` hold and fail; `on_failure = "fail"`; `max_restarts`; `on_exit = "restart"`; liveness restarts; API stop/start/restart and shutdown with an exit code; bearer-token auth; `/metrics` (with the worker's own RSS, CPU and fds); the component feed; cron; a config that does not parse exits 1; run as `ps` (not an applet), exits 127 and spawns nothing; `wait_for_files` holds the start until the file exists; a taken API port exits 1 with nothing started |
+| `medium` | < 30 min | a failed one-shot holds its dependents, and SIGTERM still stops stormd; `no_restart_exit_codes` hold and fail; `on_failure = "fail"`; `max_restarts`; `on_exit = "restart"`; liveness restarts; API stop/start/restart and shutdown with an exit code; bearer-token auth; `/metrics` (with the worker's own RSS, CPU and fds); the component feed; cron; a config that does not parse exits 1; run as `ps` (not an applet), exits 127 and spawns nothing; `wait_for_files` holds the start until the file exists; a taken API port exits 1 with nothing started; `restart?wait=healthy` answers 200 only after the new run's probe and 504 naming what it waits on |
 | `long` | the night window | waves of processes sized from the pod's own CPU, memory and pid limits (mostly long-running, some crash-once, one-shots with dependents), started, settled and stopped with SIGTERM; one resident stormd has its processes restarted through the API every wave. Per wave: settle time, stop time, leftover processes, the resident's RSS and fds. A wave twice as slow as the first of its size, a leftover, or growing residue fails |
 
 Build it on the build box (stormd needs `stormpull` over `ssh://`, so the
@@ -671,7 +671,7 @@ client certificate, a session cookie, or `Authorization: Bearer <token>`
 | GET | `/api/v1/auth/session` | *open* — whether login is required/held, instance name, default theme |
 | GET | `/api/v1/processes` | all process statuses |
 | GET | `/api/v1/processes/{name}` | one |
-| POST | `/api/v1/processes/{name}/start` \| `stop` \| `restart` | |
+| POST | `/api/v1/processes/{name}/start` \| `stop` \| `restart` | `restart?wait=healthy&timeout=N`: answer once the new run is healthy (200), it ended (502), or N s passed (504, process left running) — below |
 | GET | `/api/v1/health/apis` | every declared API's health: state, since, last latency, p50/p99 seen, budgets, last error (behind auth) |
 | GET | `/api/v1/goldens` | goldens presented: process, name, golden, volume, content, device, path, size_bytes |
 | PUT | `/api/v1/processes/{name}/goldens/{golden}` | `{"golden": "…"}` or `{"volume_id": "…"}` — swap it (see [Goldens](#goldens)) |
@@ -914,6 +914,33 @@ the registry has something newer the first poll pulls it. A rootfs without a
 record (left by an older stormd) is pulled again. With `[updater] enabled =
 false` an `image` process never runs, and stormd logs one ERROR per such
 process at start saying so.
+
+## Restart that waits for health
+
+`POST /api/v1/processes/{name}/restart?wait=healthy&timeout=N` (default 60 s,
+at most 3600) answers once the *new* run is healthy (#44). This is for a
+caller like stormcert, which rotates a certificate and must say when the
+service is back.
+
+A run is **healthy** once it is running and has passed every check it has,
+counted from this spawn:
+- its `ready_probe`;
+- its liveness probe;
+- each `[[process.api]]`, `healthy` on a probe made after the spawn.
+
+With none of those, it is healthy after 3 s of running.
+
+| Answer | When |
+|---|---|
+| 200 `{"status":"healthy","run":N,"waited":ms}` | healthy |
+| 504 `{"status":"timeout","run":N,"waiting_on":[…]}` | `timeout` passed first; the process is **left running** for the caller to decide |
+| 502 `{"status":"exited","run":N,"exit_code":…,"state":…}` | the run ended while it was waited for |
+
+`GET /api/v1/processes/{name}` reports `run`, `ready` / `ready_at`,
+`liveness_passed_at` and `liveness_passed_run`, and `healthy`. A caller that
+lost the connection can tell from these whether *this* run passed. A
+restarted process's `ready_probe` is now watched again for each run: before
+#46 a restart was never `ready` again.
 
 ## API health
 

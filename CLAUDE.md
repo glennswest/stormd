@@ -368,9 +368,10 @@ not the probe result used here):
   ended. Plain restart unchanged.
 - Status gains `run`, `liveness_passed_at` + `liveness_passed_run`,
   `ready_at`, `healthy`.
-- [ ] supervisor: per-run readiness (#46), liveness pass record, healthy(),
-      wait_healthy(); API; unit + medium tests; README, changelog; sc-build;
-      golden; close #44 and #46
+- [x] supervisor: per-run readiness (#46), liveness pass record, health_of(),
+      restart_and_wait(); API; unit (`wait_healthy_tests`) + medium
+      (`restart-wait-healthy`) tests; README, changelog
+- [ ] sc-build; golden; close #44 and #46
 
 **Issue #49 (P0) — API health probes (2026-10-08) ✅ done.** As the issue
 specifies (stormcos#458). Decisions from the code, not asked:

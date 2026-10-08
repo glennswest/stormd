@@ -4,6 +4,14 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-08
+- **feat:** `POST …/restart?wait=healthy&timeout=N` answers once the new run
+  is healthy (200), it ended (502), or the timeout passed (504, process left
+  running, with what it still waits on) (#44, stormcos#25). Healthy means
+  every check the process has passed since that spawn: ready_probe,
+  liveness, declared APIs; with none, 3 s running. Process status adds
+  `run`, `ready`/`ready_at`, `liveness_passed_at`/`_run` and `healthy`.
+- **fix:** a restarted process's `ready_probe` is watched again, once per
+  run, so a restart becomes `ready` again (#46).
 - **feat:** API health probes (#49, stormcos#458). `[[process.api]]`
   declares a process's real APIs (url, interval, timeout, `p50_ms`/`p99_ms`
   budgets, bearer token or client cert). stormd times them into `healthy`,

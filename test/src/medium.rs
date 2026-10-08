@@ -28,6 +28,7 @@ pub fn run(env: &Env, r: &mut Report) {
     r.run("unknown-argv0-refused", || unknown_argv0(env));
     r.run("wait-for-files", || wait_for_files(env));
     r.run("api-port-taken", || api_port_taken(env));
+    r.run("restart-wait-healthy", || restart_wait_healthy(env));
     r.run("node-stormd", || crate::short::node_stormd(env));
 }
 
@@ -349,6 +350,47 @@ fn cron(env: &Env) -> Outcome {
         match sd.json("/api/v1/cron") {
             Ok(v) if v.to_string().contains("tick") => Outcome::Pass(format!("ran within {} ms; listed by /api/v1/cron", t.elapsed().as_millis())),
             Ok(v) => Outcome::Fail(format!("ran, but /api/v1/cron does not list it: {v:.200}")),
+            Err(e) => Outcome::Fail(e),
+        }
+    })
+}
+
+/// `restart?wait=healthy`: answers once the new run's probe passes (200), or
+/// 504 naming what it waits on, with the process left running (stormd#44).
+fn restart_wait_healthy(env: &Env) -> Outcome {
+    let (port, closed) = match (free_port(), free_port()) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => return Outcome::Infra(e),
+    };
+    // The new run takes 1.5 s to listen: an answer before that is a lie.
+    let body = proc("web", &format!("\"serve\", \"{port}\", \"1500\""), &format!("ready_probe = {{ type = \"tcp\", port = {port}, interval_secs = 1 }}"))
+        + &proc("never", "\"sleep\"", &format!("ready_probe = {{ type = \"tcp\", port = {closed}, interval_secs = 1 }}"));
+    with(env, "waithealthy", &body, Opts::default(), |sd| {
+        if let Err(e) = sd.wait_state("web", "running", S(10)) {
+            return Outcome::Fail(e);
+        }
+        let t = std::time::Instant::now();
+        let (code, b) = match sd.post("/api/v1/processes/web/restart?wait=healthy&timeout=20", None) {
+            Ok(r) => r,
+            Err(e) => return Outcome::Fail(e),
+        };
+        let took = t.elapsed();
+        if code != 200 || !b.contains("\"healthy\"") || took < std::time::Duration::from_millis(1400) {
+            return Outcome::Fail(format!("web: HTTP {code} after {} ms: {b}", took.as_millis()));
+        }
+        let (code, b) = match sd.post("/api/v1/processes/never/restart?wait=healthy&timeout=2", None) {
+            Ok(r) => r,
+            Err(e) => return Outcome::Fail(e),
+        };
+        if code != 504 || !b.contains("ready_probe") {
+            return Outcome::Fail(format!("never: HTTP {code}: {b}"));
+        }
+        match sd.process("never") {
+            Ok(p) if p["state"] == "running" => Outcome::Pass(format!(
+                "200 after {} ms (new run listened at 1.5 s); 504 naming the ready_probe, process left running",
+                took.as_millis()
+            )),
+            Ok(p) => Outcome::Fail(format!("never is {} after the 504", p["state"])),
             Err(e) => Outcome::Fail(e),
         }
     })
