@@ -123,6 +123,8 @@ pub struct Supervisor {
     /// of the start order, not a restart, not an API start — and a dependency
     /// wait gives up. See `stop_all`.
     shutting_down: AtomicBool,
+    /// The health of every process's declared APIs (stormd#49).
+    api_health: Arc<crate::apihealth::ApiHealthStore>,
     /// Presents the goldens processes name (stormd#36); set by main when any does.
     goldens: std::sync::OnceLock<Arc<crate::goldens::Goldens>>,
 }
@@ -139,6 +141,66 @@ impl Supervisor {
             exit_rx: Mutex::new(Some(exit_rx)),
             shutting_down: AtomicBool::new(false),
             goldens: std::sync::OnceLock::new(),
+            api_health: Arc::new(crate::apihealth::ApiHealthStore::default()),
+        }
+    }
+
+    pub fn api_health(&self) -> &Arc<crate::apihealth::ApiHealthStore> {
+        &self.api_health
+    }
+
+    /// Probe one of a run's APIs until the run ends (the task is aborted with
+    /// it). With `restart_after_stalled_secs`, a stall that long ends the run:
+    /// SIGTERM, SIGKILL after its stop timeout, and the restart policy takes
+    /// the exit.
+    async fn watch_api(
+        &self,
+        name: &str,
+        proc_arc: &Arc<Mutex<ManagedProcess>>,
+        run: u64,
+        pid: Option<u32>,
+        api: &crate::config::ApiProbe,
+    ) {
+        use crate::apihealth::ApiState;
+        let client = match crate::apihealth::client(api) {
+            Ok(c) => c,
+            Err(e) => {
+                error!(process = %name, api = %api.name, error = %e, "API probe cannot be set up — not probing it");
+                return;
+            }
+        };
+        tokio::time::sleep(Duration::from_secs(api.initial_delay_secs)).await;
+        loop {
+            {
+                let p = proc_arc.lock().await;
+                if p.run != run || p.state != ProcessState::Running {
+                    return;
+                }
+            }
+            let seen = crate::apihealth::probe(&client, api).await;
+            let (state, since) = self.api_health.record(name, api, seen, Utc::now());
+            if let (ApiState::Stalled, Some(limit)) = (state, api.restart_after_stalled_secs) {
+                let stalled = (Utc::now() - since).num_seconds().max(0) as u64;
+                if stalled >= limit {
+                    error!(
+                        process = %name, api = %api.name, stalled_secs = stalled,
+                        "API stalled past restart_after_stalled_secs — restarting the process"
+                    );
+                    let stop = Duration::from_secs(proc_arc.lock().await.config.stop_timeout_secs);
+                    if self.signal_run(proc_arc, run, pid, "SIGTERM").await {
+                        tokio::time::sleep(stop).await;
+                        let still = {
+                            let p = proc_arc.lock().await;
+                            p.run == run && p.state == ProcessState::Running
+                        };
+                        if still {
+                            let _ = self.signal_run(proc_arc, run, pid, "SIGKILL").await;
+                        }
+                    }
+                    return;
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(api.interval_secs)).await;
         }
     }
 
@@ -609,13 +671,24 @@ impl Supervisor {
             })
         });
 
+        // API health probes, one task per API for this run (stormd#49).
+        let mut run_tasks: Vec<tokio::task::JoinHandle<()>> = liveness_task.into_iter().collect();
+        for api in config.api.clone() {
+            let supervisor = Arc::clone(self);
+            let name = config.name.clone();
+            let proc_arc = proc_arc.clone();
+            run_tasks.push(tokio::spawn(async move {
+                supervisor.watch_api(&name, &proc_arc, run, pid, &api).await;
+            }));
+        }
+
         let exit_tx = self.exit_tx.clone();
         let name_owned = config.name.clone();
         let stop_timeout = Duration::from_secs(config.stop_timeout_secs);
         let proc_arc_clone = proc_arc.clone();
         tokio::spawn(async move {
-            // However the run ends, its liveness task ends with it.
-            let _liveness = AbortOnDrop(liveness_task);
+            // However the run ends, its liveness and API tasks end with it.
+            let _run_tasks = AbortOnDrop(run_tasks);
             tokio::select! {
                 status = child.wait() => {
                     let exit_code = status.ok().and_then(|s| s.code());
@@ -1364,12 +1437,12 @@ impl Drop for TaskCount {
     }
 }
 
-/// Aborts a task when dropped.
-struct AbortOnDrop(Option<tokio::task::JoinHandle<()>>);
+/// Aborts tasks when dropped.
+struct AbortOnDrop(Vec<tokio::task::JoinHandle<()>>);
 
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
-        if let Some(h) = self.0.take() {
+        for h in self.0.drain(..) {
             h.abort();
         }
     }
@@ -2250,5 +2323,95 @@ mod node_vars_tests {
         let c = cfg("args = [\"${NODE_NAME}\", \"${NODE_IP}\"]\n");
         let why = node_vars_missing(&c, &HashMap::new()).unwrap();
         assert!(why.contains("needs ${NODE_NAME}, ${NODE_IP}"), "{why}");
+    }
+}
+
+#[cfg(test)]
+mod api_health_tests {
+    use super::{ProcessState, Supervisor};
+    use crate::apihealth::ApiState;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    async fn supervisor(label: &str) -> (Arc<Supervisor>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("stormd-apiht-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        let sup = Arc::new(Supervisor::new(log, bus));
+        let h = sup.clone();
+        tokio::spawn(async move { h.run_exit_handler().await });
+        (sup, dir)
+    }
+
+    /// A server that accepts and never answers: a held mutex.
+    async fn stuck_port() -> u16 {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                let (s, _) = l.accept().await.unwrap();
+                held.push(s);
+            }
+        });
+        port
+    }
+
+    fn proc(port: u16, extra: &str) -> crate::config::ProcessConfig {
+        toml::from_str(&format!(
+            "name = \"engine\"\ncommand = \"/bin/sleep\"\nargs = [\"60\"]\n\
+             [[api]]\nname = \"volumes\"\nurl = \"http://127.0.0.1:{port}/api/v1/volumes?limit=1\"\n\
+             interval_secs = 1\ntimeout_secs = 1\ninitial_delay_secs = 0\n{extra}"
+        ))
+        .unwrap()
+    }
+
+    /// stormd#49: a stalled API is said and kept, and the process is left
+    /// alone unless `restart_after_stalled_secs` says otherwise.
+    #[tokio::test]
+    async fn a_stall_is_reported_and_not_acted_on_by_default() {
+        let (sup, dir) = supervisor("noact").await;
+        let port = stuck_port().await;
+        sup.start_all(&[proc(port, "")]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(4500)).await;
+        let h = sup.api_health().list();
+        let s = sup.get_status("engine").await.unwrap();
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(h.len(), 1);
+        assert_eq!(h[0].state, ApiState::Stalled);
+        assert!(h[0].checks >= 2, "{:?}", h[0]);
+        assert_eq!((s.state, s.restarts), (ProcessState::Running, 0), "restarted without being asked");
+    }
+
+    #[tokio::test]
+    async fn restart_after_stalled_secs_restarts_through_the_policy() {
+        let (sup, dir) = supervisor("act").await;
+        let port = stuck_port().await;
+        sup.start_all(&[proc(port, "restart_after_stalled_secs = 2\n")]).await.unwrap();
+        let first = sup.get_status("engine").await.unwrap().pid;
+        let mut restarted = None;
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let s = sup.get_status("engine").await.unwrap();
+            if s.restarts >= 1 && s.state == ProcessState::Running {
+                restarted = Some(s);
+                break;
+            }
+        }
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        let s = restarted.expect("not restarted within 10 s of a stall");
+        assert_ne!(s.pid, first);
+        assert_eq!(s.crashes, 1, "the SIGTERMed exit went through the restart policy as a failure");
     }
 }

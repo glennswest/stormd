@@ -32,6 +32,46 @@ pub struct Config {
     pub goldens: GoldensConfig,
 }
 
+/// One API a process serves, probed for health (`[[process.api]]`,
+/// stormd#49): a cheap real read, not `/healthz`.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ApiProbe {
+    pub name: String,
+    /// GET this, e.g. `http://127.0.0.1:9090/api/v1/volumes?limit=1`.
+    pub url: String,
+    #[serde(default = "default_api_interval")]
+    pub interval_secs: u64,
+    /// No answer within this is `stalled`.
+    #[serde(default = "default_api_timeout")]
+    pub timeout_secs: u64,
+    /// Budgets: an answer over `p99_ms`, or a p50 of the last 20 over
+    /// `p50_ms`, is `slow`. Unset: no budget.
+    #[serde(default)]
+    pub p50_ms: Option<u64>,
+    #[serde(default)]
+    pub p99_ms: Option<u64>,
+    /// After each start, before the first probe: a starting process is not
+    /// stalled.
+    #[serde(default = "default_api_initial_delay")]
+    pub initial_delay_secs: u64,
+    /// A bearer token, re-read on every probe.
+    #[serde(default)]
+    pub token_file: Option<PathBuf>,
+    /// A client certificate and its key (PEM).
+    #[serde(default)]
+    pub client_cert_file: Option<PathBuf>,
+    #[serde(default)]
+    pub client_key_file: Option<PathBuf>,
+    /// Stalled this long: restart the process (SIGTERM, its exit goes
+    /// through the restart policy). Unset: never — the default.
+    #[serde(default)]
+    pub restart_after_stalled_secs: Option<u64>,
+}
+
+fn default_api_interval() -> u64 { 15 }
+fn default_api_timeout() -> u64 { 5 }
+fn default_api_initial_delay() -> u64 { 10 }
+
 /// Where stormd attaches the goldens processes name (`[[process.golden]]`,
 /// stormd#36): the node's stormblock engine.
 #[derive(Debug, Clone, Deserialize)]
@@ -230,6 +270,9 @@ pub struct ProcessConfig {
     /// `${NODE_IP}`/`${NODE_NAME}` are expanded.
     #[serde(default)]
     pub wait_for_files: Vec<String>,
+    /// The APIs this process serves, probed for health (stormd#49).
+    #[serde(default)]
+    pub api: Vec<ApiProbe>,
     /// Goldens presented to this process, read-only, before it first starts
     /// (stormd#36).
     #[serde(default)]
@@ -610,6 +653,25 @@ impl Config {
         for p in &self.process {
             if let Some(f) = p.wait_for_files.iter().find(|f| !f.starts_with('/')) {
                 anyhow::bail!("process '{}': wait_for_files entry '{}' is not an absolute path", p.name, f);
+            }
+            let mut apis = std::collections::HashSet::new();
+            for a in &p.api {
+                let at = format!("process '{}', api '{}'", p.name, a.name);
+                if a.name.is_empty() || !apis.insert(&a.name) {
+                    anyhow::bail!("{at}: name must be non-empty and unique in the process");
+                }
+                if !(a.url.starts_with("http://") || a.url.starts_with("https://")) {
+                    anyhow::bail!("{at}: url must be http:// or https://");
+                }
+                if a.interval_secs == 0 || a.timeout_secs == 0 {
+                    anyhow::bail!("{at}: interval_secs and timeout_secs must be at least 1");
+                }
+                if a.client_cert_file.is_some() != a.client_key_file.is_some() {
+                    anyhow::bail!("{at}: client_cert_file and client_key_file go together");
+                }
+                if a.restart_after_stalled_secs == Some(0) {
+                    anyhow::bail!("{at}: restart_after_stalled_secs must be at least 1 (leave it out for never)");
+                }
             }
             let mut seen = std::collections::HashSet::new();
             for g in &p.golden {

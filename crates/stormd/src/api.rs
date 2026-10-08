@@ -54,6 +54,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // Health & status
         .route("/api/v1/health", get(health))
         .route("/healthz", get(health))
+        .route("/api/v1/health/apis", get(api_health))
         .route("/api/v1/status", get(status))
         .route("/api/v1/stats", get(stats))
         // Prometheus text format, at the path everything that scrapes expects.
@@ -143,6 +144,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 }
 
 // --- Health & Status ---
+
+/// Every declared API's health (stormd#49): state, since when, latencies.
+async fn api_health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(serde_json::json!({ "items": state.supervisor.api_health().list() }))
+}
 
 async fn health() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok" }))

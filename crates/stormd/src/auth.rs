@@ -361,6 +361,7 @@ mod tests {
     fn public_paths() {
         assert!(is_public("/api/v1/health"));
         assert!(is_public("/healthz"));
+        assert!(!is_public("/api/v1/health/apis"), "API health is data, behind auth (stormd#49)");
         assert!(!is_public("/metrics"));
         assert!(is_public("/api/v1/auth/login"));
         assert!(is_public("/ui/"));
