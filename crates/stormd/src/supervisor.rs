@@ -2806,7 +2806,8 @@ mod wait_healthy_tests {
             }
             o => panic!("{o:?}"),
         }
-        assert!(t.elapsed() >= Duration::from_secs(2), "answered before the new run's first probe");
+        // Kubernetes probes first at initialDelaySeconds (1 s here) after the spawn.
+        assert!(t.elapsed() >= Duration::from_secs(1), "answered before the new run's first probe");
     }
 
     #[tokio::test]
