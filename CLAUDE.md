@@ -365,9 +365,11 @@ pushed + built + golden:
 - [x] 2. restart policy Always/OnFailure/Never, backoff 10 s ×2 to 5 min,
       reset after 10 min, state CrashLoopBackOff (`backoff_tests`); opt-in
       per process, old fields untouched when unset
-- [ ] 3. Kubernetes events (Unhealthy/Killing/BackOff/Started/Created):
-      stormd-side feed + rustkube-node issue to publish on the mirror pod
-- [ ] 4. grpc probes (needs h2 → Cargo.lock change from a build job)
+- [x] 3. Kubernetes events (Unhealthy/Killing/BackOff/Started/Created):
+      `k8sevents.rs`, GET /api/v1/events?since=; rustkube-node#215 told the
+      interface (and that node_health.rs reads the retired [process.liveness])
+- [x] 4. grpc probes (reqwest http2) — Cargo.lock diff to come from the
+      next build job (it is NOT committed yet: --locked builds fail until it is)
 - [ ] tell stormcos: move fastetcd / rustkube-apiserver to startup probes
 
 **Issue #44 — restart that waits for health (+ #46) (2026-10-08) ✅ done.**

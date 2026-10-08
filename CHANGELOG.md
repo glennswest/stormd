@@ -23,7 +23,8 @@
 - **BREAKING:** the old `[process.liveness]` no longer kills anything (#48).
   It parses, warns that it is retired, and is ignored. On the Dell it killed
   the apiserver six times during a normal 40 s start; components move to
-  the new probes. `grpc` probes parse but are not supported yet.
+  the new probes. `grpc` probes speak `grpc.health.v1.Health/Check` over
+  plaintext HTTP/2 (reqwest gains its `http2` feature).
 - **feat:** `POST …/restart?wait=healthy&timeout=N` answers once the new run
   is healthy (200), it ended (502), or the timeout passed (504, process left
   running, with what it still waits on) (#44, stormcos#25). Healthy means

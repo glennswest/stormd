@@ -403,7 +403,7 @@ probe, with Kubernetes' meaning and defaults (camelCase spellings such as
 | `http_get` | — | `{ path = "/", port, host = "127.0.0.1", scheme = "HTTP"\|"HTTPS", http_headers = [{name, value}] }`: passes on 200–399; certificates not verified, redirects not followed |
 | `tcp_socket` | — | `{ port, host = "127.0.0.1" }`: passes if it connects |
 | `exec` | — | `{ command = ["/bin/test", "-e", "/x"] }`: passes on exit 0 |
-| `grpc` | — | `{ port, service }`: parsed, **not supported yet**, and always fails (follow-up on #48) |
+| `grpc` | — | `{ port, service }`: `grpc.health.v1.Health/Check` over plaintext HTTP/2 on 127.0.0.1, passes only on `SERVING` (a TCP connect passes while a server is up but not serving) |
 | `initial_delay_seconds` | `0` | from the spawn |
 | `period_seconds` | `10` | |
 | `timeout_seconds` | `1` | |

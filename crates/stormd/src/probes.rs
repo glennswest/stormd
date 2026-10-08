@@ -184,10 +184,117 @@ impl Probe {
     }
 }
 
-/// gRPC health checks need HTTP/2, which this build does not carry yet:
-/// say so rather than pass (stormd#48 follow-up).
-async fn grpc_check(g: &Grpc, _timeout: Duration) -> Result<(), String> {
-    Err(format!("grpc probe on port {} is not supported by this stormd yet", g.port))
+/// `grpc.health.v1.Health/Check` over plaintext HTTP/2, as the kubelet's
+/// gRPC probe does: passes only on `SERVING`. A TCP connect would pass while
+/// the server is up but not serving.
+async fn grpc_check(g: &Grpc, timeout: Duration) -> Result<(), String> {
+    let addr = format!("127.0.0.1:{}", g.port);
+    let client = reqwest::Client::builder()
+        .http2_prior_knowledge()
+        .timeout(timeout)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(format!("http://{addr}/grpc.health.v1.Health/Check"))
+        .header("content-type", "application/grpc")
+        .header("te", "trailers")
+        .body(grpc_request(g.service.as_deref().unwrap_or("")))
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                format!("timeout: failed to connect service \"{addr}\" within {}s", timeout.as_secs())
+            } else {
+                format!("failed to connect service \"{addr}\": {e}")
+            }
+        })?;
+    // An error comes trailers-only: grpc-status in the headers.
+    if let Some(st) = resp.headers().get("grpc-status").and_then(|v| v.to_str().ok()) {
+        if st != "0" {
+            let msg = resp.headers().get("grpc-message").and_then(|v| v.to_str().ok()).unwrap_or("");
+            return Err(format!("rpc error: code = {st} desc = {msg}"));
+        }
+    }
+    let body = resp.bytes().await.map_err(|e| e.to_string())?;
+    match grpc_serving_status(&body) {
+        Some(1) => Ok(()),
+        Some(s) => Err(format!("service unhealthy (responded with \"{}\")", serving_name(s))),
+        None => Err("service unhealthy (no health response)".into()),
+    }
+}
+
+/// A length-prefixed `HealthCheckRequest { service }`.
+fn grpc_request(service: &str) -> Vec<u8> {
+    let mut msg = Vec::new();
+    if !service.is_empty() {
+        msg.push(0x0a); // field 1, length-delimited
+        put_varint(&mut msg, service.len() as u64);
+        msg.extend_from_slice(service.as_bytes());
+    }
+    let mut out = vec![0u8];
+    out.extend_from_slice(&(msg.len() as u32).to_be_bytes());
+    out.extend(msg);
+    out
+}
+
+fn put_varint(out: &mut Vec<u8>, mut v: u64) {
+    while v >= 0x80 {
+        out.push((v as u8) | 0x80);
+        v >>= 7;
+    }
+    out.push(v as u8);
+}
+
+/// The `status` of a length-prefixed `HealthCheckResponse`: 0 UNKNOWN when
+/// absent (proto3 default), `None` when the frame is not one.
+fn grpc_serving_status(frame: &[u8]) -> Option<u64> {
+    if frame.len() < 5 || frame[0] != 0 {
+        return None;
+    }
+    let len = u32::from_be_bytes([frame[1], frame[2], frame[3], frame[4]]) as usize;
+    let msg = frame.get(5..5 + len)?;
+    let mut i = 0;
+    let mut status = 0;
+    while i < msg.len() {
+        let (tag, n) = varint(&msg[i..])?;
+        i += n;
+        match tag & 7 {
+            0 => {
+                let (v, n) = varint(&msg[i..])?;
+                i += n;
+                if tag >> 3 == 1 {
+                    status = v;
+                }
+            }
+            2 => {
+                let (l, n) = varint(&msg[i..])?;
+                i += n + l as usize;
+            }
+            _ => return None,
+        }
+    }
+    Some(status)
+}
+
+fn varint(b: &[u8]) -> Option<(u64, usize)> {
+    let mut v = 0u64;
+    for (i, byte) in b.iter().enumerate().take(10) {
+        v |= ((byte & 0x7f) as u64) << (7 * i);
+        if byte & 0x80 == 0 {
+            return Some((v, i + 1));
+        }
+    }
+    None
+}
+
+fn serving_name(s: u64) -> &'static str {
+    match s {
+        0 => "UNKNOWN",
+        1 => "SERVING",
+        2 => "NOT_SERVING",
+        3 => "SERVICE_UNKNOWN",
+        _ => "?",
+    }
 }
 
 /// Consecutive results of one probe, and what they add up to.
@@ -232,6 +339,24 @@ mod tests {
         assert!(p("tcp_socket = { port = 1 }\nexec = { command = [\"x\"] }\n").check("liveness").is_err());
         assert!(p("tcp_socket = { port = 1 }\nsuccess_threshold = 2\n").check("liveness").is_err());
         assert!(p("tcp_socket = { port = 1 }\nsuccess_threshold = 2\n").check("readiness").is_ok());
+    }
+
+    #[test]
+    fn grpc_frames() {
+        assert_eq!(grpc_request(""), vec![0, 0, 0, 0, 0]);
+        assert_eq!(grpc_request("etcd"), vec![0, 0, 0, 0, 6, 0x0a, 4, b'e', b't', b'c', b'd']);
+        assert_eq!(grpc_serving_status(&[0, 0, 0, 0, 2, 0x08, 1]), Some(1));
+        assert_eq!(grpc_serving_status(&[0, 0, 0, 0, 2, 0x08, 2]), Some(2));
+        assert_eq!(grpc_serving_status(&[0, 0, 0, 0, 0]), Some(0), "absent = UNKNOWN");
+        assert_eq!(grpc_serving_status(&[1, 0, 0, 0, 0]), None, "compressed: not understood");
+        assert_eq!(grpc_serving_status(&[0, 0]), None);
+    }
+
+    #[tokio::test]
+    async fn grpc_to_a_closed_port_fails() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let e = p(&format!("grpc = {{ port = {closed} }}\n")).run().await.unwrap_err();
+        assert!(e.contains("failed to connect service"), "{e}");
     }
 
     #[test]
