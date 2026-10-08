@@ -21,6 +21,10 @@ pub enum ProcessState {
     Stopped,
     Failed,
     Restarting,
+    /// Waiting out a Kubernetes-style back-off before the next restart
+    /// (stormd#48).
+    #[serde(rename = "CrashLoopBackOff")]
+    CrashLoopBackOff,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -83,6 +87,8 @@ struct ManagedProcess {
     liveness_passed_run: Option<u64>,
     /// The run whose startup probe succeeded (stormd#48).
     startup_passed_run: Option<u64>,
+    /// Consecutive back-offs under a `restart_policy` (stormd#48).
+    backoff_step: u32,
 }
 
 impl ManagedProcess {
@@ -495,6 +501,7 @@ impl Supervisor {
                 liveness_passed_at: None,
                 liveness_passed_run: None,
                 startup_passed_run: None,
+                backoff_step: 0,
             }));
             self.processes.write().await.insert(cfg.name.clone(), proc);
         }
@@ -908,11 +915,14 @@ impl Supervisor {
             restarts_in_window,
             no_restart,
             no_restart_action,
+            restart_policy,
+            ran_secs,
         ) = {
             let mut proc = proc_arc.lock().await;
             proc.exit_code = exit_code;
             proc.stopped_at = Some(Utc::now());
             proc.pid = None;
+            let ran_secs = proc.started_at.map(|t| (Utc::now() - t).num_seconds()).unwrap_or(0);
 
             let in_window = proc.restart_count_in_window(proc.config.restart_window_secs);
             (
@@ -924,6 +934,8 @@ impl Supervisor {
                 in_window,
                 is_no_restart(exit_code, &proc.config.no_restart_exit_codes),
                 proc.config.on_no_restart.clone(),
+                proc.config.restart_policy,
+                ran_secs,
             )
         };
 
@@ -953,6 +965,16 @@ impl Supervisor {
 
         // Close out this run's log file: renamed after the run, old runs pruned
         self.stormlog.archive_run(name, failed).await;
+
+        // A Kubernetes restart policy decides alone (stormd#48), except for
+        // an exit the process itself says no restart will fix.
+        if let Some(policy) = restart_policy.filter(|_| !no_restart) {
+            if failed {
+                warn!(process = %name, code = ?exit_code, "process exited with error");
+            }
+            self.restart_with_backoff(&proc_arc, name, policy, success, ran_secs).await;
+            return;
+        }
 
         if success {
             match exit_action {
@@ -1264,7 +1286,9 @@ impl Supervisor {
         loop {
             {
                 let p = proc_arc.lock().await;
-                if p.run != run || matches!(p.state, ProcessState::Stopped | ProcessState::Failed | ProcessState::Restarting) {
+                if p.run != run
+                    || matches!(p.state, ProcessState::Stopped | ProcessState::Failed | ProcessState::Restarting | ProcessState::CrashLoopBackOff)
+                {
                     return Ok(WaitOutcome::Exited { run, exit_code: p.exit_code, state: p.state.clone() });
                 }
                 match self.health_of(&p) {
@@ -1422,6 +1446,55 @@ impl Supervisor {
         warn!(process = %name, "still not stopped after its stop timeout");
     }
 
+    /// Kubernetes' restart policy (stormd#48): `Always` restarts every exit,
+    /// `OnFailure` every failed one, `Never` none. Each restart waits out an
+    /// exponential back-off (10 s, 20 s, 40 s … 5 min) in `CrashLoopBackOff`,
+    /// reset once a run has lasted 10 minutes. No restart limit, as upstream.
+    async fn restart_with_backoff(
+        self: &Arc<Self>,
+        proc_arc: &Arc<Mutex<ManagedProcess>>,
+        name: &str,
+        policy: crate::config::RestartPolicy,
+        success: bool,
+        ran_secs: i64,
+    ) {
+        use crate::config::RestartPolicy;
+        let restart = match policy {
+            RestartPolicy::Always => true,
+            RestartPolicy::OnFailure => !success,
+            RestartPolicy::Never => false,
+        };
+        if !restart {
+            let mut p = proc_arc.lock().await;
+            p.state = if success { ProcessState::Stopped } else { ProcessState::Failed };
+            info!(process = %name, policy = ?policy, "not restarted (restartPolicy)");
+            return;
+        }
+        let (delay, restarts) = {
+            let mut p = proc_arc.lock().await;
+            if ran_secs >= BACKOFF_RESET_SECS {
+                p.backoff_step = 0;
+            }
+            let d = backoff(p.backoff_step);
+            p.backoff_step = p.backoff_step.saturating_add(1);
+            p.state = ProcessState::CrashLoopBackOff;
+            p.restarts += 1;
+            p.restart_timestamps.push(Utc::now());
+            (d, p.restarts)
+        };
+        warn!(process = %name, reason = "BackOff", delay_secs = delay.as_secs(), restarts, "Back-off restarting failed container {name}");
+        self.event_bus.emit_simple(EventKind::ProcessRestarting, Some(name.to_string())).await;
+        self.sleep_unless_shutdown(delay).await;
+        self.wait_for_node_vars(name).await;
+        if self.stand_down(proc_arc, name).await {
+            return;
+        }
+        if let Err(e) = self.spawn_process(name).await {
+            error!(process = %name, error = %e, "failed to restart process");
+            proc_arc.lock().await.state = ProcessState::Failed;
+        }
+    }
+
     /// After a restart's cooloff: if stormd began shutting down meanwhile,
     /// leave the process stopped rather than start it into a container that
     /// is going away. `true` when it stood down.
@@ -1485,6 +1558,7 @@ impl Supervisor {
             liveness_passed_at: None,
             liveness_passed_run: None,
             startup_passed_run: None,
+            backoff_step: 0,
         }));
         self.processes.write().await.insert(config.name.clone(), proc);
     }
@@ -1517,6 +1591,14 @@ fn missing_files(files: &[String]) -> Vec<&str> {
         .filter(|f| !std::path::Path::new(f.as_str()).exists())
         .map(|f| f.as_str())
         .collect()
+}
+
+/// A run that lasted this long resets the back-off (Kubernetes: 10 min).
+const BACKOFF_RESET_SECS: i64 = 600;
+
+/// The `step`th back-off: 10 s doubling, capped at 5 min.
+fn backoff(step: u32) -> Duration {
+    Duration::from_secs((10u64 << step.min(6)).min(300))
 }
 
 /// A process with no ready, liveness or API checks counts as healthy once it
@@ -2766,5 +2848,79 @@ mod wait_healthy_tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert!(matches!(out, WaitOutcome::Healthy { run: 2, .. }), "{out:?}");
         assert!(st.ready && st.ready_at.is_some(), "not ready after the restart");
+    }
+}
+
+#[cfg(test)]
+mod backoff_tests {
+    use super::{backoff, ProcessState, Supervisor};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[test]
+    fn kubernetes_backoff_series() {
+        let s: Vec<u64> = (0..8).map(|i| backoff(i).as_secs()).collect();
+        assert_eq!(s, vec![10, 20, 40, 80, 160, 300, 300, 300]);
+        assert_eq!(backoff(u32::MAX), Duration::from_secs(300));
+    }
+
+    async fn supervisor(label: &str) -> (Arc<Supervisor>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("stormd-backoff-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        let sup = Arc::new(Supervisor::new(log, bus));
+        let h = sup.clone();
+        tokio::spawn(async move { h.run_exit_handler().await });
+        (sup, dir)
+    }
+
+    fn proc(policy: &str, script: &str) -> crate::config::ProcessConfig {
+        toml::from_str(&format!(
+            "name = \"p\"\ncommand = \"/bin/sh\"\nargs = [\"-c\", \"{script}\"]\nrestart_policy = \"{policy}\"\nmax_restarts = 1\n"
+        ))
+        .unwrap()
+    }
+
+    /// A crash loop sits in CrashLoopBackOff for 10 s, then 20 s …, with no
+    /// restart limit (max_restarts = 1 is ignored under a restart policy).
+    #[tokio::test]
+    async fn a_crash_loop_backs_off() {
+        let (sup, dir) = supervisor("loop").await;
+        sup.start_all(&[proc("Always", "exit 1")]).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let a = sup.get_status("p").await.unwrap();
+        tokio::time::sleep(Duration::from_secs(10)).await; // first back-off (10 s) over, second (20 s) begun
+        let b = sup.get_status("p").await.unwrap();
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!((a.state, a.restarts), (ProcessState::CrashLoopBackOff, 1));
+        assert_eq!((b.state, b.restarts), (ProcessState::CrashLoopBackOff, 2), "second restart, past max_restarts");
+        assert!(!sup.has_failed().await, "a restart policy never fails the container");
+    }
+
+    #[tokio::test]
+    async fn on_failure_and_never() {
+        let (sup, dir) = supervisor("policies").await;
+        let mut ok = proc("OnFailure", "exit 0");
+        ok.name = "ok".into();
+        let mut never = proc("Never", "exit 3");
+        never.name = "never".into();
+        sup.start_all(&[ok, never]).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let ok = sup.get_status("ok").await.unwrap();
+        let never = sup.get_status("never").await.unwrap();
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!((ok.state, ok.restarts), (ProcessState::Stopped, 0), "OnFailure leaves a clean exit stopped");
+        assert_eq!((never.state, never.restarts), (ProcessState::Failed, 0), "Never restarts nothing");
     }
 }

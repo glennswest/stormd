@@ -86,6 +86,7 @@ pub async fn collect(state: &AppState) -> Vec<ComponentSummary> {
             }
             ProcessState::Failed => Health::Error,
             ProcessState::Starting | ProcessState::Restarting => Health::Warn,
+            ProcessState::CrashLoopBackOff => Health::Error,
             ProcessState::Stopping | ProcessState::Stopped | ProcessState::Pending => Health::Idle,
         };
 

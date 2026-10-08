@@ -24,7 +24,7 @@ pub async fn cmd_ps(state: &Arc<AppState>) -> ShellOutput {
             ProcessState::Running => "\x1b[32m",
             ProcessState::Failed => "\x1b[31m",
             ProcessState::Stopped => "\x1b[33m",
-            ProcessState::Restarting => "\x1b[36m",
+            ProcessState::Restarting | ProcessState::CrashLoopBackOff => "\x1b[36m",
             _ => "\x1b[37m",
         };
         let pid = s

@@ -11,6 +11,11 @@
   spellings. The startup probe gates the others, so a slow start is never
   killed. Liveness failing kills the run (SIGTERM, then SIGKILL) for the
   restart policy. Readiness only marks the process ready or not.
+- **feat:** `restart_policy = "Always" | "OnFailure" | "Never"` (#48), as in
+  Kubernetes. Each restart backs off exponentially (10 s doubling, capped at
+  5 min, reset after 10 minutes of running), in a new `CrashLoopBackOff`
+  state, with no restart limit. When set, it replaces
+  `on_exit`/`on_failure`/`restart_delay_secs`/`max_restarts`.
 - **BREAKING:** the old `[process.liveness]` no longer kills anything (#48).
   It parses, warns that it is retired, and is ignored. On the Dell it killed
   the apiserver six times during a normal 40 s start; components move to

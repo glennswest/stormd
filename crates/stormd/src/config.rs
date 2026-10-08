@@ -270,6 +270,9 @@ pub struct ProcessConfig {
     /// `${NODE_IP}`/`${NODE_NAME}` are expanded.
     #[serde(default)]
     pub wait_for_files: Vec<String>,
+    /// Kubernetes restart policy with exponential back-off (stormd#48).
+    #[serde(default, alias = "restartPolicy")]
+    pub restart_policy: Option<RestartPolicy>,
     /// Kubernetes-style probes (stormd#48). The startup probe gates the
     /// other two; liveness failing restarts the run; readiness only marks it
     /// ready or not.
@@ -339,6 +342,17 @@ pub enum NoRestartAction {
     #[default]
     Hold,
     Fail,
+}
+
+/// A Kubernetes restart policy (stormd#48). Set, it replaces `on_exit`,
+/// `on_failure`, `restart_delay_secs` and `max_restarts` for the process:
+/// restarts back off 10 s, 20 s, 40 s … to 5 min, forever, and the back-off
+/// resets after 10 minutes of running.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum RestartPolicy {
+    Always,
+    OnFailure,
+    Never,
 }
 
 /// What to do when a process exits cleanly (exit code 0).

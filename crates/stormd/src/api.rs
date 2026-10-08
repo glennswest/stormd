@@ -256,7 +256,7 @@ async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     );
     let _ = writeln!(o, "# TYPE stormd_process_state gauge");
     for p in &statuses {
-        for st in ["running", "stopped", "failed", "starting", "restarting"] {
+        for st in ["running", "stopped", "failed", "starting", "restarting", "crashloopbackoff"] {
             let now = format!("{:?}", p.state).to_lowercase();
             let v = if now == st { 1 } else { 0 };
             let _ = writeln!(

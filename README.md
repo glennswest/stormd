@@ -377,6 +377,7 @@ spawned.
 | `ready_probe` | — | inline table, below |
 | `[process.startup_probe]`, `[process.liveness_probe]`, `[process.readiness_probe]` | — | Kubernetes-style probes, below |
 | `[process.liveness]` | — | **retired** (#48): parsed, logged as retired, never acted on |
+| `restart_policy` | — | `Always` \| `OnFailure` \| `Never` (Kubernetes): replaces `on_exit`/`on_failure`/`restart_delay_secs`/`max_restarts` — below |
 | `[process.ui]` | — | plugin tab, below |
 | `capture_stdout`, `capture_stderr` | `true` | **parsed, not used** — both are always captured |
 | `[[process.golden]]` | — | goldens presented to the process, below and [Goldens](#goldens) |
@@ -569,6 +570,19 @@ logs `process exited with a non-retryable code — not restarting` once, and the
 treated as one, and a death by signal has no code to match.
 
 A failed container makes stormd shut down (checked every second) and exit 1.
+
+**`restart_policy`** (#48), as in Kubernetes. When it is set, it decides
+alone, and `on_exit`, `on_failure`, `restart_delay_secs` and `max_restarts`
+are not used:
+- `Always` restarts every exit, `OnFailure` every failed one (an exit code
+  other than 0, or a signal, which includes a liveness kill), and `Never`
+  none. A process left down is `stopped` after exit 0 and `failed`
+  otherwise. It never fails the container.
+- Each restart waits out an exponential back-off: 10 s, 20 s, 40 s … capped
+  at 5 min. The process is `CrashLoopBackOff` meanwhile, and the restart
+  count is kept. A run that lasted 10 minutes resets the back-off.
+- There is no restart limit, as upstream. An exit code in
+  `no_restart_exit_codes` still holds the process.
 
 **Probes** (#48), per run, ending with the run (the #45 lesson):
 1. **Startup**, if any, runs first; liveness and readiness wait for it. It

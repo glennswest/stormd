@@ -362,8 +362,9 @@ pushed + built + golden:
       liveness → SIGTERM/SIGKILL → restart policy, readiness → ready only;
       old `[process.liveness]` retired (warn, never kills). Tests
       `supervisor::liveness_tests` (rewritten), `probes::tests`
-- [ ] 2. restart policy Always/OnFailure/Never, backoff 10 s ×2 to 5 min,
-      reset after 10 min, state CrashLoopBackOff
+- [x] 2. restart policy Always/OnFailure/Never, backoff 10 s ×2 to 5 min,
+      reset after 10 min, state CrashLoopBackOff (`backoff_tests`); opt-in
+      per process, old fields untouched when unset
 - [ ] 3. Kubernetes events (Unhealthy/Killing/BackOff/Started/Created):
       stormd-side feed + rustkube-node issue to publish on the mirror pod
 - [ ] 4. grpc probes (needs h2 → Cargo.lock change from a build job)
