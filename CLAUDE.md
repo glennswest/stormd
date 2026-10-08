@@ -354,7 +354,7 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #49 (P0) — API health probes (2026-10-08), in progress.** As the issue
+**Issue #49 (P0) — API health probes (2026-10-08) ✅ done.** As the issue
 specifies (stormcos#458). Decisions from the code, not asked:
 - `[[process.api]]`: `name`, `url` (GET), `interval_secs` 15, `timeout_secs`
   5, `p50_ms`/`p99_ms` budgets (optional), `initial_delay_secs` 10 (a
@@ -376,9 +376,12 @@ specifies (stormcos#458). Decisions from the code, not asked:
   run's pid (SIGKILL after its stop timeout), so the normal restart policy
   takes the exit. "What the process reports in flight" is not part of any
   protocol yet, so it is left out.
-- [ ] config + validation; apihealth.rs (classify, store, history); task in
-      spawn_process; API route; unit tests; README, example.toml, changelog;
-      sc-build + live check; golden
+- [x] config + validation; apihealth.rs (classify, store, history); task in
+      spawn_process; API route; unit tests; README, example.toml, changelog
+- [x] sc-build (P0 slot): 75 stormd tests incl. `apihealth::tests` and
+      `supervisor::api_health_tests`; live: fine→healthy 1 ms, stuck→stalled,
+      refused→down, one log line each, web server stopped → down; medium 18
+- [x] golden recorded; told stormcos#458
 
 **Issue #24 — test image per the updated standard (2026-10-07), in progress.**
 Standard (stormcentral docs/test-standard.md, runner `BUILD_PUSH`): one image,
