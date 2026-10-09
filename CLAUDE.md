@@ -354,7 +354,7 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #7 — dead config keys; unknown keys warned (2026-10-09), in progress.**
+**Issue #7 — dead config keys; unknown keys warned (2026-10-09) ✅ done.**
 As the issue proposes (no owner decision needed):
 - unknown keys: one WARN per key at load (serde_ignored), never rejected;
 - removed (so they now warn as unknown): `[log]`, `[general] pid_file`,
@@ -364,8 +364,9 @@ As the issue proposes (no owner decision needed):
 - `[stormlog.file] log_dir` set to something other than `[general] log_dir`
   → WARN (it is overridden);
 - `process_ready` event emitted when a process becomes ready.
-- [ ] code + tests; README (drop "parsed, not used"), example.toml, changelog;
-      Cargo.lock from a build job; sc-build; golden
+- [x] code + tests (`unknown_keys_are_reported_not_refused`,
+      `authorized_keys_tests`); README, changelog; Cargo.lock (serde_ignored)
+      from a build job; --locked sc-build, live warnings, medium 19; golden
 
 **Issue #29 — echo a failed run's last lines on stormd's stderr (2026-10-08) ✅ done.** stormlog keeps the last 20 lines per run (`tail`, reset at
 spawn_capture); `echo_tail` writes `name| line` to stderr after archive_run,
