@@ -225,8 +225,6 @@ From the open issues. **None of this works today:**
 
 - The last stderr lines of a failed process echoed to stormd's own output
   (#29).
-- Waking dependents on a state change instead of a 250 ms poll (#25), and
-  not logging a crash for a child that died of the shutdown signal (#26).
 - The test container built as one image from the repo root (#24).
 - Warnings for unknown config keys, and dead keys removed or implemented (#7).
 - A real liveness counter and a cron timeout that kills (#10).

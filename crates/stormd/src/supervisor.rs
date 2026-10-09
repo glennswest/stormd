@@ -167,6 +167,9 @@ pub struct Supervisor {
     api_health: Arc<crate::apihealth::ApiHealthStore>,
     /// Kubernetes-shaped events (stormd#48).
     k8s_events: Arc<crate::k8sevents::EventStore>,
+    /// Signalled when a process's state or readiness changes, so a
+    /// dependency wait wakes at once instead of on a 250 ms poll (stormd#25).
+    state_changed: tokio::sync::Notify,
     /// Presents the goldens processes name (stormd#36); set by main when any does.
     goldens: std::sync::OnceLock<Arc<crate::goldens::Goldens>>,
 }
@@ -185,6 +188,7 @@ impl Supervisor {
             goldens: std::sync::OnceLock::new(),
             api_health: Arc::new(crate::apihealth::ApiHealthStore::default()),
             k8s_events: Arc::new(crate::k8sevents::EventStore::default()),
+            state_changed: tokio::sync::Notify::new(),
         }
     }
 
@@ -227,6 +231,8 @@ impl Supervisor {
                             p.ready_at = Some(Utc::now());
                         }
                         info!(process = %name, took_secs = spawned.elapsed().as_secs(), "startup probe succeeded");
+                        drop(p);
+                        self.state_changed.notify_waiters();
                         break;
                     }
                     Some(false) => {
@@ -309,6 +315,8 @@ impl Supervisor {
                             warn!(process = %name, "not ready — readiness probe failed {} times (not restarted)", rp.failure_threshold);
                         }
                     }
+                    drop(p);
+                    self.state_changed.notify_waiters();
                 }
                 tokio::time::sleep(Duration::from_secs(rp.period_seconds)).await;
             }
@@ -523,7 +531,8 @@ impl Supervisor {
             let this = Arc::clone(self);
             tokio::spawn(async move {
                 this.settle_group_signal(evt.signal).await;
-                this.handle_exit(&evt.name, evt.exit_code).await
+                this.handle_exit(&evt.name, evt.exit_code).await;
+                this.state_changed.notify_waiters();
             });
         }
     }
@@ -619,6 +628,8 @@ impl Supervisor {
                     p.ready_at = Some(Utc::now());
                     info!(process = %name, "ready");
                 }
+                drop(p);
+                self.state_changed.notify_waiters();
                 return;
             }
             tokio::time::sleep(Duration::from_secs(interval)).await;
@@ -709,13 +720,18 @@ impl Supervisor {
                 if self.is_shutting_down() {
                     return;
                 }
+                // Registered before the check, so a change between the check
+                // and the wait is not lost (stormd#25).
+                let changed = self.state_changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
                 let procs = self.processes.read().await;
                 if let Some(p) = procs.get(dep) {
                     let p = p.lock().await;
                     if dependency_satisfied(
                         &p.state,
                         p.ready,
-                        p.config.ready_probe.is_some(),
+                        p.config.ready_probe.is_some() || p.config.readiness_probe.is_some() || p.config.startup_probe.is_some(),
                         &p.config.on_exit,
                         p.exit_code,
                     ) {
@@ -736,7 +752,11 @@ impl Supervisor {
                     }
                 }
                 drop(procs);
-                tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+                // Woken by the change; the slow poll is only a backstop.
+                tokio::select! {
+                    _ = &mut changed => {}
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                }
             }
         }
     }
@@ -844,6 +864,7 @@ impl Supervisor {
         }
 
         info!(process = %config.name, pid = ?pid, "process started");
+        self.state_changed.notify_waiters();
         self.k8s_events.normal(&config.name, "Created", format!("Created container {}", config.name));
         self.k8s_events.normal(&config.name, "Started", format!("Started container {}", config.name));
         self.event_bus
@@ -3092,5 +3113,50 @@ mod group_signal_tests {
         sup.stop_all().await;
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(s.crashes, 1);
+    }
+}
+
+#[cfg(test)]
+mod dependency_wake_tests {
+    use super::Supervisor;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    /// stormd#25: a chain of one-shots starts each link as soon as the one
+    /// before it finishes, not on the next 250 ms poll.
+    #[tokio::test]
+    async fn a_chain_of_one_shots_does_not_wait_for_a_poll() {
+        let dir = std::env::temp_dir().join(format!("stormd-depwake-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        let sup = Arc::new(Supervisor::new(log, bus));
+        let h = sup.clone();
+        tokio::spawn(async move { h.run_exit_handler().await });
+        let mut procs = Vec::new();
+        for i in 0..6 {
+            let dep = if i == 0 { String::new() } else { format!("depends_on = [\"s{}\"]\n", i - 1) };
+            procs.push(
+                toml::from_str::<crate::config::ProcessConfig>(&format!(
+                    "name = \"s{i}\"\ncommand = \"/bin/true\"\non_exit = \"stop\"\n{dep}"
+                ))
+                .unwrap(),
+            );
+        }
+        let t = Instant::now();
+        sup.start_all(&procs).await.unwrap();
+        let took = t.elapsed();
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        // Five waits: at 250 ms polls that was ≥ 1.25 s.
+        assert!(took < Duration::from_millis(600), "6 chained one-shots took {took:?}");
     }
 }

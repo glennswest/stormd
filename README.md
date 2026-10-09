@@ -519,8 +519,8 @@ used.** Rotation is `[stormlog.file]`.
 ## Process supervision
 
 Processes without `image` are started at boot **in config order**; each first
-waits for its `depends_on` (polled every 250 ms, so up to a quarter second per
-dependency — #25), then its `wait_for_files`, then `startup_delay_secs`,
+waits for its `depends_on` (woken the moment a dependency's state or
+readiness changes, with a 1 s poll as a backstop — #25), then its `wait_for_files`, then `startup_delay_secs`,
 then is spawned. `wait_for_files` holds the first start until every listed
 file exists (polled every 250 ms; a dangling symlink counts as missing), with
 one log line naming what is missing and one when it appears — a cert pair

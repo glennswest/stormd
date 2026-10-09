@@ -4,6 +4,11 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-08
+- **perf:** a dependent starts the moment its dependency is ready or its
+  one-shot has finished, instead of on the next 250 ms poll (#25). State and
+  readiness changes wake the wait, with a 1 s poll as a backstop. A
+  dependency's `readiness_probe`/`startup_probe` (#48) now counts, as
+  `ready_probe` did.
 - **fix:** a cron job that passes its `timeout_secs` is killed, not left
   running (#10). Each job runs on its own task, so a long one no longer
   holds up the others, and a job still running skips its next fire time
