@@ -3,7 +3,7 @@ use crate::events::{EventBus, EventKind};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use stormlog::StormLog;
@@ -75,8 +75,6 @@ struct ManagedProcess {
     /// Which run this is: bumped at every spawn. A liveness task belongs to
     /// one run and acts only while it is still the current one (stormd#45).
     run: u64,
-    /// Liveness tasks alive for this process — one at most, by construction.
-    liveness_tasks: Arc<AtomicUsize>,
     /// Has this process's `ready_probe` passed since it last started?
     ///
     /// Separate from `Running`, because they answer different questions. A
@@ -562,7 +560,6 @@ impl Supervisor {
                 liveness_failures: 0,
                 liveness_failures_total: 0,
                 run: 0,
-                liveness_tasks: Arc::new(AtomicUsize::new(0)),
                 ready: !ManagedProcess::starts_unready(cfg),
                 ready_at: None,
                 liveness_passed_at: None,
@@ -793,7 +790,7 @@ impl Supervisor {
             }
         }
 
-        let (config, run, liveness_tasks) = {
+        let (config, run) = {
             let mut proc = proc_arc.lock().await;
             proc.state = ProcessState::Starting;
             // A restarted process is not ready until it says so again.
@@ -803,7 +800,7 @@ impl Supervisor {
             // not this one's (stormd#45).
             proc.run += 1;
             proc.liveness_failures = 0;
-            (proc.config.clone(), proc.run, proc.liveness_tasks.clone())
+            (proc.config.clone(), proc.run)
         };
 
         // Fill in what only this node knows — its address above all. See
@@ -901,7 +898,6 @@ impl Supervisor {
         // The old `[process.liveness]` no longer kills (stormd#48): it had no
         // startup grace, and killed slow starts (the apiserver on the Dell,
         // fastetcd opening its data). Kubernetes-style probes replace it.
-        let _ = liveness_tasks;
         if config.liveness.is_some() {
             warn!(process = %config.name, "[process.liveness] is retired and not acted on — use startup_probe / liveness_probe (stormd#48)");
         }
@@ -1665,7 +1661,6 @@ impl Supervisor {
             liveness_failures: 0,
             liveness_failures_total: 0,
             run: 0,
-            liveness_tasks: Arc::new(AtomicUsize::new(0)),
             ready: !ManagedProcess::starts_unready(&config),
             ready_at: None,
             liveness_passed_at: None,
@@ -1825,22 +1820,6 @@ fn send_signal(pid: u32, signal: &str) -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-/// Counts a live task for as long as it is held (dropped on abort too).
-struct TaskCount(Arc<AtomicUsize>);
-
-impl TaskCount {
-    fn enter(count: Arc<AtomicUsize>) -> Self {
-        count.fetch_add(1, Ordering::SeqCst);
-        TaskCount(count)
-    }
-}
-
-impl Drop for TaskCount {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
-    }
 }
 
 /// Aborts tasks when dropped.

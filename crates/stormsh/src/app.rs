@@ -13,7 +13,6 @@ pub enum View {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputMode {
     Normal,
-    Search,
 }
 
 pub struct App {
@@ -27,7 +26,6 @@ pub struct App {
     pub dash_index: usize,
     pub log_lines: Arc<Mutex<Vec<String>>>,
     pub terminal_content: String,
-    pub search_query: String,
     pub status_message: String,
     pub connected: bool,
 }
@@ -45,7 +43,6 @@ impl App {
             dash_index: 0,
             log_lines: Arc::new(Mutex::new(Vec::new())),
             terminal_content: String::new(),
-            search_query: String::new(),
             status_message: String::new(),
             connected: false,
         }

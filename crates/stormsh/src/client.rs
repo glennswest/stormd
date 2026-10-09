@@ -28,11 +28,6 @@ pub struct ProcessStatus {
     pub uptime_secs: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct HealthResponse {
-    pub status: String,
-}
-
 // The component summary shapes come from the shared stormview crate — the
 // same types stormd serializes, so the two cannot disagree about the wire.
 pub use stormview::ComponentSummary;
@@ -74,10 +69,6 @@ impl StormClient {
             Some(t) => req.bearer_auth(t),
             None => req,
         }
-    }
-
-    pub async fn health(&self) -> Result<HealthResponse> {
-        Ok(self.get("/api/v1/health").send().await?.json().await?)
     }
 
     pub async fn processes(&self) -> Result<Vec<ProcessStatus>> {
@@ -142,20 +133,5 @@ impl StormClient {
             .error_for_status()?
             .json()
             .await?)
-    }
-
-    /// Get the WebSocket URL for console streaming.
-    pub fn ws_console_url(&self, process: &str) -> String {
-        let ws_base = self.base_url.replace("http://", "ws://").replace("https://", "wss://");
-        format!("{}/ws/console/{}", ws_base, process)
-    }
-
-    /// Get the WebSocket URL for log streaming.
-    pub fn ws_logs_url(&self, process: Option<&str>) -> String {
-        let ws_base = self.base_url.replace("http://", "ws://").replace("https://", "wss://");
-        match process {
-            Some(p) => format!("{}/ws/logs?process={}", ws_base, p),
-            None => format!("{}/ws/logs", ws_base),
-        }
     }
 }

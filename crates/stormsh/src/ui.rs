@@ -334,7 +334,6 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
             View::Dashboard => " q:Quit  1-4:Views  ←↑↓→:Select  Enter:Terminal  s/r/x:Start/Restart/Stop  u:Update ",
             _ => " q:Quit  1:Dashboard  2:Processes  3:Terminal  4:Logs  Enter:Select  s/r:Start/Restart  x:Stop ",
         },
-        InputMode::Search => " ESC:Cancel  Enter:Search ",
     };
 
     let status = Line::from(vec![

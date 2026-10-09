@@ -245,23 +245,6 @@ async fn run_app(
                         }
                         _ => {}
                     },
-                    InputMode::Search => match key.code {
-                        KeyCode::Esc => {
-                            app.input_mode = InputMode::Normal;
-                            app.search_query.clear();
-                        }
-                        KeyCode::Enter => {
-                            app.input_mode = InputMode::Normal;
-                            // Apply search filter to logs
-                        }
-                        KeyCode::Backspace => {
-                            app.search_query.pop();
-                        }
-                        KeyCode::Char(c) => {
-                            app.search_query.push(c);
-                        }
-                        _ => {}
-                    },
                 }
             }
         }
