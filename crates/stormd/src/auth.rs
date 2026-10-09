@@ -95,7 +95,7 @@ impl AuthState {
         if users.is_empty()
             && api.auth_token.is_none()
             && api.token_file.is_none()
-            && api.client_ca_file.is_none()
+            && api.client_ca_file.is_empty()
         {
             return None;
         }

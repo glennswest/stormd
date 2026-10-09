@@ -1,7 +1,8 @@
 //! Throwaway certificates for the TLS tests only (stormd#32): a test CA, a
 //! server pair for 127.0.0.1 (two, to test rotation), a client pair the CA
 //! issued, and one from an unrelated CA. Generated once with openssl, valid
-//! for 100 years, used nowhere else. Not secrets.
+//! for 100 years, used nowhere else. Not secrets. A second CA and a client
+//! pair it issued test `client_ca_file` lists (stormd#59).
 
 pub const CA_CERT: &str = "\
 -----BEGIN CERTIFICATE-----
@@ -104,5 +105,41 @@ pub const STRANGER_KEY: &str = "\
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdRhzYHQFOhEEF1/d
 D0ZQgBuhz64gD5zwDDDcEjUJwy+hRANCAAStmIys9sGWk6QVOR1W/BZkzAaLIlq7
 bWTdv+wEeMG6q3Qf2Zf4otie4xRztRgCwPN/BcIhyo37lN/9qmxe+VD0
+-----END PRIVATE KEY-----
+";
+
+pub const CA2_CERT: &str = "\
+-----BEGIN CERTIFICATE-----
+MIIBnTCCAUOgAwIBAgIUYtCPwkop5HleznAchDCnItBCIvcwCgYIKoZIzj0EAwIw
+GzEZMBcGA1UEAwwQc3Rvcm1kIHRlc3QgQ0EgMjAgFw0yNjEwMDkyMjMwMTVaGA8y
+MTI2MDkxNTIyMzAxNVowGzEZMBcGA1UEAwwQc3Rvcm1kIHRlc3QgQ0EgMjBZMBMG
+ByqGSM49AgEGCCqGSM49AwEHA0IABJSPbmbdSo8ihHirokTCdtaght8Y5ir3ioMO
+Vr7UYEW4eNzINJUP064F3PGuu4Q66X+xAnpegDcxZUk7hBiT7KKjYzBhMB0GA1Ud
+DgQWBBRqdeprS5uSUJCBbZ31Jy/g7si0EDAfBgNVHSMEGDAWgBRqdeprS5uSUJCB
+bZ31Jy/g7si0EDAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBBjAKBggq
+hkjOPQQDAgNIADBFAiEA9+34OrbuFgu5RjZZBUYwujm9ukLAaI929xVjauukmykC
+ICRrJBtUaDphqKq7Vp+EjPevCGBNGWPV4qR6vzdly59+
+-----END CERTIFICATE-----
+";
+
+pub const CLIENT2_CERT: &str = "\
+-----BEGIN CERTIFICATE-----
+MIIBpzCCAU6gAwIBAgIUOji69FfSbymrPCcL9hpPDq+LElQwCgYIKoZIzj0EAwIw
+GzEZMBcGA1UEAwwQc3Rvcm1kIHRlc3QgQ0EgMjAgFw0yNjEwMDkyMjMwMTVaGA8y
+MTI2MDkxNTIyMzAxNVowFzEVMBMGA1UEAwwMZm9yZ2UtY2xpZW50MFkwEwYHKoZI
+zj0CAQYIKoZIzj0DAQcDQgAEtufZt3F8jtJb7IeYqCh3LM7FwA0NgC/bEZradCci
+VIxmxW5BYuYJB+F6GZcrm2j6keU3Q9AuSQCTdGSFop+jEKNyMHAwCQYDVR0TBAIw
+ADAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwIwHQYDVR0OBBYE
+FNhzm/wHl383ZeeFAQPurIvFpX/pMB8GA1UdIwQYMBaAFGp16mtLm5JQkIFtnfUn
+L+DuyLQQMAoGCCqGSM49BAMCA0cAMEQCIH+JIBx8IJ7jDwLQoSU8qK3Q7Ur2dxVz
+iEkQG8lKInXMAiA8EvK4rQiIFIf5LB3b35nNil5hnZPBeUEfUwk0n+D+oQ==
+-----END CERTIFICATE-----
+";
+
+pub const CLIENT2_KEY: &str = "\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdfbAsJho0jHaf7oP
+0yRmmYBSUGgcZzBHYXf9GdggigChRANCAAS259m3cXyO0lvsh5ioKHcszsXADQ2A
+L9sRmtp0JyJUjGbFbkFi5gkH4XoZlyubaPqR5TdD0C5JAJN0ZIWin6MQ
 -----END PRIVATE KEY-----
 ";

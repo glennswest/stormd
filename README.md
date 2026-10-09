@@ -356,7 +356,7 @@ Theme ids (from stormview): `storm`, `one`, `gruvbox`, `catppuccin`, `rose`,
 |---|---|---|
 | `bind` | `"0.0.0.0:9080"` | REST API, WS, metrics and UI |
 | `tls_cert_file`, `tls_key_file` | — | PEM certificate chain and key: serve the API over TLS (HTTP/1.1). Both or neither; re-read when either file changes |
-| `client_ca_file` | — | PEM CA bundle (needs TLS): a client certificate that verifies against it authenticates the request; one that does not fails the handshake |
+| `client_ca_file` | — | a PEM CA bundle or a **list** of them, e.g. the node CA and forge's CA (#59). Needs TLS. A client certificate that verifies against any of them authenticates the request; one that verifies against none fails the handshake. Each file is re-read when it changes; a missing or unreadable one is skipped with one WARN; with none readable no client certificate is accepted (clients without one still connect, anonymously) |
 | `token_file` | — | file holding the bearer token (whitespace trimmed), re-read when it changes; an unreadable or empty file accepts no token |
 | `auth_token` | — | bearer token for any request; also the `admin` login password |
 | `password` | — | legacy: user `admin` with this password |
@@ -369,9 +369,10 @@ them the API is anonymous, and stormd logs a warning at start saying so; with
 auth on but no TLS it warns that credentials travel in the clear. On a
 stormcos node every container's stormd answers on the node's address, so a
 node's stormd should have all three: a stormcert serving pair, the node CA as
-`client_ca_file`, and a `token_file` (#32). A missing, unreadable or
-mismatched pair or CA stops stormd at start (exit 1), before any process is
-spawned.
+`client_ca_file` (the node CA and, for stormcentral, forge's CA, #59), and a
+`token_file` (#32). A missing, unreadable or mismatched pair stops stormd at
+start (exit 1), before any process is spawned. A missing client CA file does
+not: it is skipped, and taken up when it appears.
 
 ### `[[process]]`
 

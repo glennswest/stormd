@@ -109,6 +109,20 @@ impl Default for GoldensConfig {
     }
 }
 
+/// A path or a list of paths.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<PathBuf>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(PathBuf),
+        Many(Vec<PathBuf>),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::One(p) => vec![p],
+        OneOrMany::Many(v) => v,
+    })
+}
+
 fn default_goldens_engine_url() -> String { "http://${NODE_IP}:9090".into() }
 fn default_goldens_token_file() -> PathBuf { PathBuf::from("/run/stormblock/engine/api_token") }
 fn default_goldens_dir() -> PathBuf { PathBuf::from("/goldens") }
@@ -501,8 +515,11 @@ pub struct ApiConfig {
     pub tls_key_file: Option<PathBuf>,
     /// With TLS: a client certificate that verifies against this PEM CA
     /// bundle authenticates the request. Turns authentication on. Needs TLS.
-    #[serde(default)]
-    pub client_ca_file: Option<PathBuf>,
+    /// One CA bundle or a list (stormd#59): a client certificate that
+    /// verifies against any of them authenticates. Each file is re-read when
+    /// it changes; a missing one is skipped.
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub client_ca_file: Vec<PathBuf>,
     /// Reusable, config-driven host-based routing: `Host:` header -> redirect
     /// target path (e.g. "manager.mob.lo" = "/ui/", "api.x" = "/api/v1/health").
     #[serde(default)]
@@ -519,7 +536,7 @@ impl Default for ApiConfig {
             token_file: None,
             tls_cert_file: None,
             tls_key_file: None,
-            client_ca_file: None,
+            client_ca_file: Vec::new(),
             hosts: std::collections::HashMap::new(),
         }
     }
@@ -731,7 +748,7 @@ impl Config {
         if self.api.tls_cert_file.is_some() != self.api.tls_key_file.is_some() {
             anyhow::bail!("[api] tls_cert_file and tls_key_file must be set together");
         }
-        if self.api.client_ca_file.is_some() && self.api.tls_cert_file.is_none() {
+        if !self.api.client_ca_file.is_empty() && self.api.tls_cert_file.is_none() {
             anyhow::bail!("[api] client_ca_file needs TLS (tls_cert_file + tls_key_file)");
         }
         Ok(())
@@ -774,6 +791,16 @@ mod tests {
         }
         let (_, none) = Config::parse(include_str!("../../../config/example.toml")).unwrap();
         assert!(none.is_empty(), "example.toml has unknown keys: {none:?}");
+    }
+
+    #[test]
+    fn client_ca_file_is_one_path_or_a_list() {
+        let one: ApiConfig = toml::from_str("client_ca_file = \"/a.crt\"\n").unwrap();
+        assert_eq!(one.client_ca_file, vec![PathBuf::from("/a.crt")]);
+        let two: ApiConfig = toml::from_str("client_ca_file = [\"/a.crt\", \"/b.crt\"]\n").unwrap();
+        assert_eq!(two.client_ca_file.len(), 2);
+        let none: ApiConfig = toml::from_str("").unwrap();
+        assert!(none.client_ca_file.is_empty());
     }
 
     #[test]

@@ -4,6 +4,11 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-09
+- **feat:** `[api] client_ca_file` takes a list as well as one path (#59,
+  stormcos#371): the node CA and forge's CA. A client certificate from any
+  of them authenticates. Each file is re-read when it changes. A missing or
+  unreadable one is skipped with a WARN, and no longer stops stormd at
+  start. With none readable, no client certificate is accepted.
 - **feat:** `[api_health] state_file` (#52, stormpump#127). After every API
   probe stormd writes the current state of every declared API (the
   `/api/v1/health/apis` body, plus `updated` and each API's

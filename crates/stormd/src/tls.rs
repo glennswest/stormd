@@ -13,11 +13,14 @@
 
 use crate::auth::ClientCertVerified;
 use rustls::crypto::CryptoProvider;
+use rustls::client::danger::HandshakeSignatureValid;
+use rustls::server::danger::{ClientCertVerified as TlsClientCertVerified, ClientCertVerifier};
 use rustls::server::{ClientHello, ResolvesServerCert, WebPkiClientVerifier};
+use rustls::{DigitallySignedStruct, DistinguishedName, SignatureScheme};
 use rustls::sign::CertifiedKey;
 use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::pem::PemObject;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, UnixTime};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -106,6 +109,166 @@ impl ResolvesServerCert for ReloadingCert {
     }
 }
 
+/// Client certificates verified against every readable file of
+/// `client_ca_file` (stormd#59): the node CA and forge's CA, say. Each file
+/// is re-read when it changes. A missing or unreadable one is skipped and
+/// said once per change; with none readable, no client certificate is
+/// accepted. A client without a certificate still connects: the request is
+/// then anonymous, for the bearer token or the session to authenticate.
+#[derive(Debug)]
+struct ReloadingClientVerifier {
+    files: Vec<PathBuf>,
+    provider: Arc<CryptoProvider>,
+    current: Mutex<(Vec<Stamp>, Arc<dyn ClientCertVerifier>)>,
+}
+
+impl ReloadingClientVerifier {
+    fn new(files: Vec<PathBuf>, provider: Arc<CryptoProvider>) -> Self {
+        let stamps = files.iter().map(|f| stamp(f)).collect();
+        let v = Self::build(&files, &provider);
+        Self { files, provider, current: Mutex::new((stamps, v)) }
+    }
+
+    fn build(files: &[PathBuf], provider: &Arc<CryptoProvider>) -> Arc<dyn ClientCertVerifier> {
+        let mut roots = RootCertStore::empty();
+        for f in files {
+            match read_cas(f) {
+                Ok(certs) if !certs.is_empty() => {
+                    for c in certs {
+                        if let Err(e) = roots.add(c) {
+                            warn!(file = %f.display(), error = %e, "client CA certificate not usable — skipped");
+                        }
+                    }
+                }
+                Ok(_) => warn!(file = %f.display(), "client CA file holds no certificate — skipped"),
+                Err(e) => warn!(file = %f.display(), error = %e, "client CA file unreadable — skipped"),
+            }
+        }
+        if roots.is_empty() {
+            warn!("no client CA readable — no client certificate is accepted");
+            return Arc::new(NoClientCerts(provider.clone()));
+        }
+        match WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider.clone())
+            .allow_unauthenticated()
+            .build()
+        {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(error = %e, "client CA verifier not built — no client certificate is accepted");
+                Arc::new(NoClientCerts(provider.clone()))
+            }
+        }
+    }
+
+    /// The verifier for the files as they are now: rebuilt when any changed.
+    fn get(&self) -> Arc<dyn ClientCertVerifier> {
+        let stamps: Vec<Stamp> = self.files.iter().map(|f| stamp(f)).collect();
+        let mut cur = self.current.lock().unwrap_or_else(|e| e.into_inner());
+        if cur.0 != stamps {
+            cur.0 = stamps;
+            cur.1 = Self::build(&self.files, &self.provider);
+            info!(files = ?self.files, "API client CAs reloaded");
+        }
+        cur.1.clone()
+    }
+}
+
+fn read_cas(path: &Path) -> anyhow::Result<Vec<CertificateDer<'static>>> {
+    Ok(CertificateDer::pem_file_iter(path)?.collect::<Result<Vec<_>, _>>()?)
+}
+
+impl ClientCertVerifier for ReloadingClientVerifier {
+    fn offer_client_auth(&self) -> bool {
+        true
+    }
+
+    fn client_auth_mandatory(&self) -> bool {
+        false
+    }
+
+    /// No hints: the set changes with the files, and clients send the
+    /// certificate they have anyway.
+    fn root_hint_subjects(&self) -> &[DistinguishedName] {
+        &[]
+    }
+
+    fn verify_client_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        now: UnixTime,
+    ) -> Result<TlsClientCertVerified, rustls::Error> {
+        self.get().verify_client_cert(end_entity, intermediates, now)
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+/// With no client CA readable: anonymous connections only.
+#[derive(Debug)]
+struct NoClientCerts(Arc<CryptoProvider>);
+
+impl ClientCertVerifier for NoClientCerts {
+    fn client_auth_mandatory(&self) -> bool {
+        false
+    }
+
+    fn root_hint_subjects(&self) -> &[DistinguishedName] {
+        &[]
+    }
+
+    fn verify_client_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _now: UnixTime,
+    ) -> Result<TlsClientCertVerified, rustls::Error> {
+        Err(rustls::Error::General("no client CA is readable".into()))
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
 /// The rustls server config for `[api]`, or None when TLS is not configured.
 pub fn server_config(api: &crate::config::ApiConfig) -> anyhow::Result<Option<Arc<ServerConfig>>> {
     let (Some(cert), Some(key)) = (&api.tls_cert_file, &api.tls_key_file) else {
@@ -115,25 +278,10 @@ pub fn server_config(api: &crate::config::ApiConfig) -> anyhow::Result<Option<Ar
     let resolver = Arc::new(ReloadingCert::load(cert.clone(), key.clone(), provider.clone())?);
     let builder = ServerConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()?;
-    let builder = match &api.client_ca_file {
-        Some(ca) => {
-            let mut roots = RootCertStore::empty();
-            for c in CertificateDer::pem_file_iter(ca)
-                .map_err(|e| anyhow::anyhow!("{}: {}", ca.display(), e))?
-            {
-                roots
-                    .add(c.map_err(|e| anyhow::anyhow!("{}: {}", ca.display(), e))?)
-                    .map_err(|e| anyhow::anyhow!("{}: {}", ca.display(), e))?;
-            }
-            if roots.is_empty() {
-                anyhow::bail!("{}: no CA certificate in the file", ca.display());
-            }
-            let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider)
-                .allow_unauthenticated()
-                .build()?;
-            builder.with_client_cert_verifier(verifier)
-        }
-        None => builder.with_no_client_auth(),
+    let builder = if api.client_ca_file.is_empty() {
+        builder.with_no_client_auth()
+    } else {
+        builder.with_client_cert_verifier(Arc::new(ReloadingClientVerifier::new(api.client_ca_file.clone(), provider)))
     };
     let mut config = builder.with_cert_resolver(resolver);
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
@@ -224,7 +372,7 @@ mod tests {
         api.tls_cert_file = Some(dir.join("server.crt"));
         api.tls_key_file = Some(dir.join("server.key"));
         if client_ca {
-            api.client_ca_file = Some(dir.join("ca.crt"));
+            api.client_ca_file = vec![dir.join("ca.crt")];
         }
         api
     }
@@ -344,5 +492,46 @@ mod tests {
         std::fs::write(d.0.join("server.key"), "garbage").unwrap();
         assert_eq!(resolver.get().cert[0], expected);
         healthy(&client(None)).await;
+    }
+
+    /// stormd#59: two CA files and a missing one. A certificate from either
+    /// CA is accepted; replacing one CA file takes effect at the next
+    /// handshake; with no CA readable, no client certificate is accepted.
+    #[tokio::test]
+    async fn a_list_of_client_cas_each_reloaded() {
+        let d = files(&[
+            ("server.crt", SERVER_CERT),
+            ("server.key", SERVER_KEY),
+            ("node-ca.crt", CA_CERT),
+            ("forge-ca.crt", CA2_CERT),
+        ]);
+        let mut api = api_config(&d.0, false);
+        api.client_ca_file = vec![d.0.join("node-ca.crt"), d.0.join("missing.crt"), d.0.join("forge-ca.crt")];
+        let url = start(&api).await;
+        let whoami = |c: reqwest::Client| {
+            let url = url.clone();
+            async move {
+                match c.get(format!("{}/whoami", url)).send().await {
+                    Ok(r) => r.text().await.unwrap_or_default(),
+                    Err(_) => "refused".to_string(),
+                }
+            }
+        };
+        let node = || client(Some((CLIENT_CERT, CLIENT_KEY)));
+        let forge = || client(Some((CLIENT2_CERT, CLIENT2_KEY)));
+        assert_eq!(whoami(node()).await, "client-cert", "the node CA's client");
+        assert_eq!(whoami(forge()).await, "client-cert", "forge's CA's client, past a missing file");
+        assert_eq!(whoami(client(None)).await, "anonymous");
+
+        // forge's CA replaced by another CA: its client is refused now.
+        std::fs::write(d.0.join("forge-ca.crt"), format!("{}\n", CA_CERT)).unwrap();
+        assert_eq!(whoami(forge()).await, "refused", "the replaced CA no longer admits");
+        assert_eq!(whoami(node()).await, "client-cert");
+
+        // None readable: no client certificate admits; anonymous still connects.
+        std::fs::remove_file(d.0.join("node-ca.crt")).unwrap();
+        std::fs::remove_file(d.0.join("forge-ca.crt")).unwrap();
+        assert_eq!(whoami(node()).await, "refused");
+        assert_eq!(whoami(client(None)).await, "anonymous");
     }
 }
