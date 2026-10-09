@@ -354,8 +354,7 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #29 — echo a failed run's last lines on stormd's stderr (2026-10-08),
-in progress.** stormlog keeps the last 20 lines per run (`tail`, reset at
+**Issue #29 — echo a failed run's last lines on stormd's stderr (2026-10-08) ✅ done.** stormlog keeps the last 20 lines per run (`tail`, reset at
 spawn_capture); `echo_tail` writes `name| line` to stderr after archive_run,
 before "process exited with error" (both exit paths). Test
 `stormlog::tail_tests`; live: a failing child's error in stormd's output.
