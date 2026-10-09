@@ -4,6 +4,11 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-08
+- **feat:** when a process exits with an error, stormd writes the last 20
+  lines of that run's output (stdout and stderr) to its own stderr as
+  `name| line`, just before `process exited with error` (#29). stormd's
+  output is all a node keeps of a container, so the cause (fastetcd's `DB
+  corrupted`) now reaches the console, stormpump.log and assets.json.
 - **perf:** a dependent starts the moment its dependency is ready or its
   one-shot has finished, instead of on the next 250 ms poll (#25). State and
   readiness changes wake the wait, with a 1 s poll as a backstop. A

@@ -585,6 +585,13 @@ are not used:
 - There is no restart limit, as upstream. An exit code in
   `no_restart_exit_codes` still holds the process.
 
+**A failed run's last words** (#29). When a process exits with an error,
+stormd writes the last 20 lines it printed in that run (stdout and stderr
+together) to its own stderr, prefixed `name| `, just before `process exited
+with error`. In a container stormd is PID 1, and its output is what the node
+keeps (stormpump's console, stormpump.log, `assets.json`). Without this, the
+cause of a crash sat only in a log file on the container's own volume.
+
 **Probes** (#48), per run, ending with the run (the #45 lesson):
 1. **Startup**, if any, runs first; liveness and readiness wait for it. It
    gets `failure_threshold × period_seconds` to succeed once. If it runs out,

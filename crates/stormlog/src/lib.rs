@@ -71,9 +71,32 @@ pub struct StormLog {
     run_ids: Mutex<HashMap<String, String>>,
     /// Reader task handles per process — awaited before archiving to ensure all output is captured.
     reader_tasks: Mutex<HashMap<String, Vec<JoinHandle<()>>>>,
+    /// The last [`TAIL_LINES`] lines each process's current run printed
+    /// (stdout and stderr together), for stormd to echo when it fails
+    /// (stormd#29).
+    tails: std::sync::Mutex<HashMap<String, std::collections::VecDeque<String>>>,
 }
 
+/// Lines kept per run for [`StormLog::tail`].
+pub const TAIL_LINES: usize = 20;
+
 impl StormLog {
+    fn remember(&self, process: &str, line: &str) {
+        let mut tails = self.tails.lock().unwrap_or_else(|e| e.into_inner());
+        let t = tails.entry(process.to_string()).or_default();
+        t.push_back(line.to_string());
+        while t.len() > TAIL_LINES {
+            t.pop_front();
+        }
+    }
+
+    /// The last lines the process's current (or just-ended) run printed,
+    /// oldest first.
+    pub fn tail(&self, process: &str) -> Vec<String> {
+        let tails = self.tails.lock().unwrap_or_else(|e| e.into_inner());
+        tails.get(process).map(|t| t.iter().cloned().collect()).unwrap_or_default()
+    }
+
     /// Create a new StormLog instance.
     pub fn new(config: StormLogConfig, container_name: impl Into<String>) -> Self {
         let terminal_manager = TerminalManager::new(config.terminal.rows, config.terminal.cols);
@@ -111,6 +134,7 @@ impl StormLog {
             ingest_tx,
             ingest_rx: Mutex::new(Some(ingest_rx)),
             run_ids: Mutex::new(HashMap::new()),
+            tails: std::sync::Mutex::new(HashMap::new()),
             reader_tasks: Mutex::new(HashMap::new()),
         }
     }
@@ -159,6 +183,8 @@ impl StormLog {
             let mut ids = self.run_ids.lock().await;
             ids.insert(process.clone(), run_id.clone());
         }
+        // A new run's tail starts empty.
+        self.tails.lock().unwrap_or_else(|e| e.into_inner()).insert(process.clone(), Default::default());
 
         // Emit a marker entry for the run start
         let marker = LogEntry::new(&process, LogStream::Stdout, "--- process started ---")
@@ -186,6 +212,7 @@ impl StormLog {
                             for line in text.lines() {
                                 if !line.is_empty() {
                                     let sev = detect_severity(line, Severity::Info);
+                                    this.remember(&name, line);
                                     let entry = LogEntry::new(&name, LogStream::Stdout, line)
                                         .with_severity(sev)
                                         .with_run_id(&rid);
@@ -230,6 +257,7 @@ impl StormLog {
                             for line in text.lines() {
                                 if !line.is_empty() {
                                     let sev = detect_severity(line, Severity::Warning);
+                                    this.remember(&name, line);
                                     let entry = LogEntry::new(&name, LogStream::Stderr, line)
                                         .with_severity(sev)
                                         .with_run_id(&rid);
@@ -430,5 +458,46 @@ mod group_tests {
         assert_eq!(mcast_group(None), Some("239.255.42.1:5514".parse().unwrap()));
         assert_eq!(mcast_group(Some("239.1.2.3:600")), Some("239.1.2.3:600".parse().unwrap()));
         assert_eq!(mcast_group(Some("not an address")), None);
+    }
+}
+
+#[cfg(test)]
+mod tail_tests {
+    use super::{StormLog, TAIL_LINES};
+    use std::sync::Arc;
+
+    /// stormd#29: the last lines of a run, stdout and stderr, are there to
+    /// echo once it has ended; a new run starts with an empty tail.
+    #[tokio::test]
+    async fn a_runs_last_lines_are_kept() {
+        let dir = std::env::temp_dir().join(format!("stormlog-tail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cfg = crate::types::StormLogConfig::default();
+        cfg.file.log_dir = dir.clone();
+        cfg.mcast.group = Some("off".into());
+        let log = Arc::new(StormLog::new(cfg, "t"));
+        let run = |script: &'static str| {
+            let log = log.clone();
+            async move {
+                let mut child = tokio::process::Command::new("/bin/sh")
+                    .args(["-c", script])
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                log.spawn_capture("fastetcd".into(), child.stdout.take(), child.stderr.take()).await;
+                child.wait().await.unwrap();
+                log.archive_run("fastetcd", true).await;
+            }
+        };
+        run("for i in $(seq 1 30); do echo line $i; done; echo 'Error: storage io: DB corrupted' >&2; exit 1").await;
+        let t = log.tail("fastetcd");
+        assert_eq!(t.len(), TAIL_LINES);
+        assert_eq!(t.last().map(String::as_str), Some("Error: storage io: DB corrupted"));
+        assert_eq!(t.first().map(String::as_str), Some("line 12"));
+        run("echo only").await;
+        assert_eq!(log.tail("fastetcd"), vec!["only".to_string()], "a new run starts empty");
+        assert!(log.tail("never").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1052,6 +1052,7 @@ impl Supervisor {
         // an exit the process itself says no restart will fix.
         if let Some(policy) = restart_policy.filter(|_| !no_restart) {
             if failed {
+                self.echo_tail(name);
                 warn!(process = %name, code = ?exit_code, "process exited with error");
             }
             self.restart_with_backoff(&proc_arc, name, policy, success, ran_secs).await;
@@ -1078,6 +1079,7 @@ impl Supervisor {
                 }
             }
         } else {
+            self.echo_tail(name);
             warn!(process = %name, code = ?exit_code, "process exited with error");
             let mut detail = HashMap::new();
             if let Some(code) = exit_code {
@@ -1527,6 +1529,22 @@ impl Supervisor {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         warn!(process = %name, "still not stopped after its stop timeout");
+    }
+
+    /// Write a failed run's last lines to stormd's own stderr, `name| line`
+    /// (stormd#29). In a container stormd is PID 1, and its output is all
+    /// the node keeps of it (stormpump quotes it on the console, in
+    /// stormpump.log and in assets.json): without this, a crash read only
+    /// "process exited with error", and its cause sat in a log file on the
+    /// container's own volume. Called after `archive_run`, so the output is
+    /// drained.
+    fn echo_tail(&self, name: &str) {
+        use std::io::Write;
+        let lines = self.stormlog.tail(name);
+        let mut err = std::io::stderr().lock();
+        for l in lines {
+            let _ = writeln!(err, "{name}| {l}");
+        }
     }
 
     /// Kubernetes' restart policy (stormd#48): `Always` restarts every exit,
