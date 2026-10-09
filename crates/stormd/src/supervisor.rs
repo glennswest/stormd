@@ -231,8 +231,12 @@ impl Supervisor {
                             p.ready_at = Some(Utc::now());
                         }
                         info!(process = %name, took_secs = spawned.elapsed().as_secs(), "startup probe succeeded");
+                        let became_ready = p.ready;
                         drop(p);
                         self.state_changed.notify_waiters();
+                        if became_ready {
+                            self.event_bus.emit_simple(EventKind::ProcessReady, Some(name.to_string())).await;
+                        }
                         break;
                     }
                     Some(false) => {
@@ -306,6 +310,7 @@ impl Supervisor {
                     if p.run != run {
                         return;
                     }
+                    let became_ready = ready && !p.ready;
                     if p.ready != ready {
                         p.ready = ready;
                         p.ready_at = ready.then(Utc::now);
@@ -317,6 +322,9 @@ impl Supervisor {
                     }
                     drop(p);
                     self.state_changed.notify_waiters();
+                    if became_ready {
+                        self.event_bus.emit_simple(EventKind::ProcessReady, Some(name.to_string())).await;
+                    }
                 }
                 tokio::time::sleep(Duration::from_secs(rp.period_seconds)).await;
             }
@@ -630,6 +638,7 @@ impl Supervisor {
                 }
                 drop(p);
                 self.state_changed.notify_waiters();
+                self.event_bus.emit_simple(EventKind::ProcessReady, Some(name.to_string())).await;
                 return;
             }
             tokio::time::sleep(Duration::from_secs(interval)).await;
@@ -811,8 +820,9 @@ impl Supervisor {
         let mut cmd = Command::new(&config.command);
         cmd.args(&args);
         cmd.stdin(std::process::Stdio::piped());
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
+        let stream = |capture: bool| if capture { std::process::Stdio::piped() } else { std::process::Stdio::null() };
+        cmd.stdout(stream(config.capture_stdout));
+        cmd.stderr(stream(config.capture_stderr));
 
         for (k, v) in process_env(
             &config.env,

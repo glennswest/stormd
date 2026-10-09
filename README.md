@@ -307,7 +307,9 @@ registries (updater).
 ## Configuration reference
 
 TOML, from `crates/stormd/src/config.rs` and `crates/stormlog/src/types.rs`.
-Unknown keys are ignored silently. `config/example.toml` shows every key and is
+An unknown key, including a removed one (`[log]`, `[general] pid_file`,
+`[debug] dynamic_log_level`, `[updater] registry`), is logged as one WARN
+each (`unknown config key — ignored`) and does not stop stormd (#7). `config/example.toml` shows every key and is
 parsed by a unit test.
 
 Validation at load: at least one `[[process]]` or `[[cron]]`; process names
@@ -322,10 +324,9 @@ unique name without `/`, exactly one of `golden`/`volume_id`, an absolute
 | Key | Default | |
 |---|---|---|
 | `name` | `"stormd"` | container name: UI, events, metrics `container` label |
-| `log_dir` | `"/var/log/stormd"` | per-process log files and `.cloudid`; created at start (exit 1 if it cannot be). **Overrides `[stormlog.file] log_dir`**. Put it on a volume: in a stormcos golden it is the component's `-logs` volume; a stormd run as a pod wants a PVC (on stormcos, the built-in stormblock PVC driver) — a container-local path is RAM on some hosts |
+| `log_dir` | `"/var/log/stormd"` | per-process log files and `.cloudid`; created at start (exit 1 if it cannot be). **Overrides `[stormlog.file] log_dir`** (a different value there is logged as overridden). Put it on a volume: in a stormcos golden it is the component's `-logs` volume; a stormd run as a pod wants a PVC (on stormcos, the built-in stormblock PVC driver) — a container-local path is RAM on some hosts |
 | `cloud_id` | — | see [Cloud ID](#cloud-id) |
 | `theme` | — | default web UI theme id (below); a viewer's own pick wins |
-| `pid_file` | `"/run/stormd.pid"` | **parsed, not used** — no PID file is written |
 
 Theme ids (from stormview): `storm`, `one`, `gruvbox`, `catppuccin`, `rose`,
 `midnight`, `nord`, `solar`, `phosphor` (dark); `light`, `frost`, `paper`
@@ -381,7 +382,7 @@ spawned.
 | `[process.liveness]` | — | **retired** (#48): parsed, logged as retired, never acted on |
 | `restart_policy` | — | `Always` \| `OnFailure` \| `Never` (Kubernetes): replaces `on_exit`/`on_failure`/`restart_delay_secs`/`max_restarts` — below |
 | `[process.ui]` | — | plugin tab, below |
-| `capture_stdout`, `capture_stderr` | `true` | **parsed, not used** — both are always captured |
+| `capture_stdout`, `capture_stderr` | `true` | `false`: that stream goes to /dev/null instead of the log (#7) |
 | `[[process.golden]]` | — | goldens presented to the process, below and [Goldens](#goldens) |
 | `[[process.api]]` | — | the process's APIs, probed for health — [API health](#api-health) |
 
@@ -473,7 +474,6 @@ it on demand.
 | `poll_interval_secs` | `60` | |
 | `data_dir` | `"/data/images"` | blob store |
 | `rootfs_dir` | `"/data/rootfs"` | `<name>`, `<name>.new`, `<name>.old` |
-| `registry` | `"registry.gt.lo"` | **parsed, not used** — the registry comes from each `image` reference |
 
 See [Image updater](#image-updater).
 
@@ -487,7 +487,7 @@ See [Image updater](#image-updater).
 | `password` | `"stormd"` | the cloud ID is also accepted |
 | `owner` | — | when set, public-key auth from CloudID is on |
 | `cloudid_url` | `"http://169.254.169.254"` | |
-| `authorized_keys` | — | **parsed, not used** |
+| `authorized_keys` | — | an OpenSSH `authorized_keys` file (lines `type base64 [comment]`, options allowed), read at every login, accepted alongside CloudID's keys (#7) |
 
 ### `[debug]`
 
@@ -496,7 +496,6 @@ See [Image updater](#image-updater).
 | `enabled` | `false` | adds `GET /api/v1/debug/info` and `/api/v1/debug/config` |
 | `allow_signal` | `false` | adds `POST /api/v1/debug/processes/{name}/signal` |
 | `allow_stdin` | `false` | adds `POST /api/v1/debug/processes/{name}/stdin` |
-| `dynamic_log_level` | `false` | **parsed, not used** |
 
 ### `[stormlog.file]`, `[stormlog.mcast]`, `[stormlog.terminal]`
 
@@ -510,11 +509,6 @@ See [Image updater](#image-updater).
 | `mcast.host` | this machine's hostname | syslog HOSTNAME field (the node, not the container) |
 | `terminal.rows` / `cols` | `24` / `80` | VT100 screen per process |
 | `terminal.scrollback` | `1000` | lines |
-
-### `[log]`
-
-`max_size_bytes`, `max_files`, `timestamps`, `json_format` — **parsed, not
-used.** Rotation is `[stormlog.file]`.
 
 ## Process supervision
 

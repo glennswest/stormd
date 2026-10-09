@@ -212,7 +212,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
     the node (decision pending in stormimds#9).
   - **#24** — the test container does not yet build the way stormcentral's
     runner expects.
-  - **#7** — config keys that do nothing, and unknown keys load silently.
 
 ---
 
@@ -221,7 +220,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 From the open issues. **None of this works today:**
 
 - The test container built as one image from the repo root (#24).
-- Warnings for unknown config keys, and dead keys removed or implemented (#7).
 - A real liveness counter and a cron timeout that kills (#10).
 
 ---

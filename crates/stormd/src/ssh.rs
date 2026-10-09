@@ -137,6 +137,42 @@ fn cv(data: &[u8]) -> CryptoVec {
 }
 
 #[async_trait]
+impl SshSession {
+    /// Whether public-key auth is on at all: CloudID keys or an
+    /// `authorized_keys` file.
+    fn has_keys(&self) -> bool {
+        self.cloudid_keys.is_some() || self.config.authorized_keys.is_some()
+    }
+
+    /// Whether `[ssh] authorized_keys` lists this key. Read on every call,
+    /// so an edited file takes effect at the next login (stormd#7).
+    fn in_authorized_keys(&self, key: &PublicKey) -> bool {
+        let Some(path) = &self.config.authorized_keys else { return false };
+        match std::fs::read_to_string(path) {
+            Ok(text) => authorized_keys_contains(&text, key),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "authorized_keys unreadable");
+                false
+            }
+        }
+    }
+}
+
+/// Whether an OpenSSH `authorized_keys` text lists `key`: lines `type
+/// base64 [comment]`; blank lines, comments and options-prefixed lines that
+/// do not parse are skipped.
+pub fn authorized_keys_contains(text: &str, key: &PublicKey) -> bool {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| {
+            let mut parts = l.split_whitespace();
+            // `type base64` — or `options type base64`: try each field.
+            parts.find_map(|p| russh_keys::parse_public_key_base64(p).ok())
+        })
+        .any(|k| &k == key)
+}
+
 impl Handler for SshSession {
     type Error = anyhow::Error;
 
@@ -148,7 +184,7 @@ impl Handler for SshSession {
         if password == self.config.password || password == self.app_state.cloud_id {
             Ok(Auth::Accept)
         } else {
-            let methods = if self.cloudid_keys.is_some() {
+            let methods = if self.has_keys() {
                 MethodSet::PUBLICKEY | MethodSet::PASSWORD
             } else {
                 MethodSet::PASSWORD
@@ -164,6 +200,9 @@ impl Handler for SshSession {
         _user: &str,
         public_key: &PublicKey,
     ) -> Result<Auth, Self::Error> {
+        if self.in_authorized_keys(public_key) {
+            return Ok(Auth::Accept);
+        }
         if let Some(ref store) = self.cloudid_keys {
             let keys = store.read().await;
             if keys.contains(public_key) {
@@ -180,6 +219,10 @@ impl Handler for SshSession {
         user: &str,
         public_key: &PublicKey,
     ) -> Result<Auth, Self::Error> {
+        if self.in_authorized_keys(public_key) {
+            info!(user = user, "SSH public key auth accepted (authorized_keys)");
+            return Ok(Auth::Accept);
+        }
         if let Some(ref store) = self.cloudid_keys {
             let keys = store.read().await;
             if keys.contains(public_key) {
@@ -195,7 +238,7 @@ impl Handler for SshSession {
     }
 
     async fn auth_none(&mut self, _user: &str) -> Result<Auth, Self::Error> {
-        let methods = if self.cloudid_keys.is_some() {
+        let methods = if self.has_keys() {
             MethodSet::PUBLICKEY | MethodSet::PASSWORD
         } else {
             MethodSet::PASSWORD
@@ -410,5 +453,24 @@ impl Handler for SshSession {
     ) -> Result<(), Self::Error> {
         session.close(channel);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod authorized_keys_tests {
+    use super::authorized_keys_contains;
+    use russh_keys::PublicKeyBase64;
+
+    #[test]
+    fn lines_comments_and_options() {
+        let key = russh_keys::key::KeyPair::generate_ed25519().clone_public_key().unwrap();
+        let other = russh_keys::key::KeyPair::generate_ed25519().clone_public_key().unwrap();
+        let b64 = key.public_key_base64();
+        let text = format!("# admins\n\nssh-ed25519 {b64} ops@host\n");
+        assert!(authorized_keys_contains(&text, &key));
+        assert!(!authorized_keys_contains(&text, &other), "a key not listed");
+        let with_opts = format!("no-pty,from=\"10.0.0.0/8\" ssh-ed25519 {b64} x\n");
+        assert!(authorized_keys_contains(&with_opts, &key), "options before the key");
+        assert!(!authorized_keys_contains("# nothing\nnot a key\n", &key));
     }
 }

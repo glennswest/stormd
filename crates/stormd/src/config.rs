@@ -17,8 +17,6 @@ pub struct Config {
     #[serde(default)]
     pub backup: BackupConfig,
     #[serde(default)]
-    pub log: LogConfig,
-    #[serde(default)]
     pub api: ApiConfig,
     #[serde(default)]
     pub debug: DebugConfig,
@@ -157,8 +155,6 @@ pub struct GeneralConfig {
     pub name: String,
     #[serde(default = "default_log_dir")]
     pub log_dir: PathBuf,
-    #[serde(default = "default_pid_file")]
-    pub pid_file: PathBuf,
     #[serde(default)]
     pub cloud_id: Option<String>,
     /// Default web UI theme ("storm", "midnight", "catppuccin", "rose",
@@ -173,7 +169,6 @@ impl Default for GeneralConfig {
         Self {
             name: default_name(),
             log_dir: default_log_dir(),
-            pid_file: default_pid_file(),
             cloud_id: None,
             theme: None,
         }
@@ -299,6 +294,7 @@ pub struct ProcessConfig {
     pub ready_probe: Option<ReadyProbe>,
     #[serde(default)]
     pub liveness: Option<LivenessProbe>,
+    /// `false`: that stream goes to /dev/null instead of the log (stormd#7).
     #[serde(default = "default_true")]
     pub capture_stdout: bool,
     #[serde(default = "default_true")]
@@ -462,28 +458,6 @@ impl Default for BackupConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct LogConfig {
-    #[serde(default = "default_max_size_bytes")]
-    pub max_size_bytes: u64,
-    #[serde(default = "default_max_files")]
-    pub max_files: u32,
-    #[serde(default = "default_true")]
-    pub timestamps: bool,
-    #[serde(default)]
-    pub json_format: bool,
-}
-
-impl Default for LogConfig {
-    fn default() -> Self {
-        Self {
-            max_size_bytes: default_max_size_bytes(),
-            max_files: default_max_files(),
-            timestamps: true,
-            json_format: false,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ApiConfig {
@@ -552,8 +526,6 @@ pub struct DebugConfig {
     pub allow_signal: bool,
     #[serde(default)]
     pub allow_stdin: bool,
-    #[serde(default)]
-    pub dynamic_log_level: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -566,6 +538,9 @@ pub struct SshConfig {
     pub host_key: PathBuf,
     #[serde(default = "default_ssh_password")]
     pub password: String,
+    /// An OpenSSH `authorized_keys` file, read on every login, accepted
+    /// alongside CloudID's keys (stormd#7).
+    #[serde(default)]
     pub authorized_keys: Option<PathBuf>,
     /// CloudID metadata endpoint URL for SSH public key auth.
     /// Defaults to the EC2-compatible metadata IP (169.254.169.254).
@@ -596,8 +571,6 @@ impl Default for SshConfig {
 pub struct UpdaterConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default = "default_updater_registry")]
-    pub registry: String,
     #[serde(default = "default_updater_poll_interval")]
     pub poll_interval_secs: u64,
     #[serde(default = "default_updater_data_dir")]
@@ -610,7 +583,6 @@ impl Default for UpdaterConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            registry: default_updater_registry(),
             poll_interval_secs: default_updater_poll_interval(),
             data_dir: default_updater_data_dir(),
             rootfs_dir: default_updater_rootfs_dir(),
@@ -618,14 +590,12 @@ impl Default for UpdaterConfig {
     }
 }
 
-fn default_updater_registry() -> String { "registry.gt.lo".to_string() }
 fn default_updater_poll_interval() -> u64 { 60 }
 fn default_updater_data_dir() -> PathBuf { PathBuf::from("/data/images") }
 fn default_updater_rootfs_dir() -> PathBuf { PathBuf::from("/data/rootfs") }
 
 fn default_name() -> String { "stormd".to_string() }
 fn default_log_dir() -> PathBuf { PathBuf::from("/var/log/stormd") }
-fn default_pid_file() -> PathBuf { PathBuf::from("/run/stormd.pid") }
 fn default_on_failure() -> FailureAction { FailureAction::Restart }
 fn default_on_exit() -> ExitAction { ExitAction::Restart }
 fn default_restart_delay_secs() -> u64 { 1 }
@@ -634,8 +604,6 @@ fn default_max_restarts() -> u32 { 10 }
 fn default_restart_window_secs() -> u64 { 3600 }
 fn default_startup_delay_secs() -> u64 { 0 }
 fn default_cron_timeout_secs() -> u64 { 300 }
-fn default_max_size_bytes() -> u64 { 100 * 1024 * 1024 }
-fn default_max_files() -> u32 { 10 }
 fn default_api_bind() -> String { "0.0.0.0:9080".to_string() }
 fn default_ssh_bind() -> String { "0.0.0.0:22".to_string() }
 fn default_ssh_host_key() -> PathBuf { PathBuf::from("/etc/stormd/host_key") }
@@ -650,9 +618,23 @@ fn default_true() -> bool { true }
 impl Config {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&content)?;
+        let (config, unknown) = Self::parse(&content)?;
+        // Warned, never refused, so a config that booted before still boots
+        // (stormd#7): a removed or misspelt key used to load silently,
+        // indistinguishable from one that was set.
+        for key in &unknown {
+            tracing::warn!(key = %key, file = %path.display(), "unknown config key — ignored");
+        }
         config.validate()?;
         Ok(config)
+    }
+
+    /// Parse a config, returning the keys it does not know.
+    pub fn parse(content: &str) -> anyhow::Result<(Self, Vec<String>)> {
+        let mut unknown = Vec::new();
+        let de = toml::Deserializer::new(content);
+        let config: Config = serde_ignored::deserialize(de, |path| unknown.push(path.to_string()))?;
+        Ok((config, unknown))
     }
 
     fn validate(&self) -> anyhow::Result<()> {
@@ -760,6 +742,25 @@ mod tests {
         assert!(c.process.iter().any(|p| !p.wait_for_files.is_empty()));
         assert!(c.process.iter().any(|p| p.golden.len() == 2));
         assert!(c.process.iter().any(|p| !p.api.is_empty()));
+    }
+
+    /// stormd#7: unknown keys — removed ones included — are reported, and
+    /// the config still loads.
+    #[test]
+    fn unknown_keys_are_reported_not_refused() {
+        let (c, unknown) = Config::parse(
+            "[general]\nname = \"t\"\npid_file = \"/run/x.pid\"\n\
+             [log]\njson_format = true\n\
+             [events]\ntransport = \"none\"\nnats_url = \"nats://x\"\n\
+             [[process]]\nname = \"p\"\ncommand = \"/bin/true\"\nrestart_dely_secs = 3\n",
+        )
+        .unwrap();
+        assert_eq!(c.process[0].restart_delay_secs, 1, "the typo is not the key");
+        for k in ["general.pid_file", "log", "events.nats_url", "process.0.restart_dely_secs"] {
+            assert!(unknown.iter().any(|u| u == k), "{k} not reported in {unknown:?}");
+        }
+        let (_, none) = Config::parse(include_str!("../../../config/example.toml")).unwrap();
+        assert!(none.is_empty(), "example.toml has unknown keys: {none:?}");
     }
 
     #[test]

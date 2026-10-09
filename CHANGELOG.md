@@ -3,6 +3,19 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-10-09
+- **feat:** unknown config keys are logged, one WARN each, at load (#7).
+  The config still loads, so an existing one keeps booting. Before, a
+  removed or misspelt key was silent.
+- **BREAKING (warn-only):** keys that parsed and did nothing are removed,
+  and now warn as unknown: `[log]`, `[general] pid_file`, `[debug]
+  dynamic_log_level`, `[updater] registry` (#7).
+- **feat:** `[ssh] authorized_keys`, an OpenSSH file read on every login and
+  accepted alongside CloudID's keys; `capture_stdout`/`capture_stderr =
+  false` send that stream to /dev/null; the `process_ready` event is emitted
+  when a process becomes ready (#7). `[stormlog.file] log_dir` set apart
+  from `[general] log_dir` is logged as overridden.
+
 ### 2026-10-08
 - **feat:** when a process exits with an error, stormd writes the last 20
   lines of that run's output (stdout and stderr) to its own stderr as

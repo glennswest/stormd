@@ -207,6 +207,16 @@ async fn main() {
 
     // Initialize StormLog — sync file logger's log_dir with general.log_dir
     let mut stormlog_config = config.stormlog.clone();
+    // `[stormlog.file] log_dir` set to something else is overridden: say so
+    // (stormd#7) rather than leave it looking set.
+    let default_file_dir = stormlog::types::FileConfig::default().log_dir;
+    if stormlog_config.file.log_dir != default_file_dir && stormlog_config.file.log_dir != config.general.log_dir {
+        warn!(
+            ignored = %stormlog_config.file.log_dir.display(),
+            using = %config.general.log_dir.display(),
+            "[stormlog.file] log_dir is overridden by [general] log_dir"
+        );
+    }
     stormlog_config.file.log_dir = config.general.log_dir.clone();
     let stormlog = Arc::new(StormLog::new(
         stormlog_config,
