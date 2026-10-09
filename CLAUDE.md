@@ -354,7 +354,7 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #25 — dependents woken on a state change (2026-10-08), in progress.**
+**Issue #25 — dependents woken on a state change (2026-10-08) ✅ done.**
 `tokio::sync::Notify` signalled on spawn, exit handling and every ready
 change; the wait registers before it checks, 1 s backstop poll. Test
 `dependency_wake_tests` (6 chained one-shots < 600 ms; was ≥ 1.25 s).
