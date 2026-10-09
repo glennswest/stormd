@@ -369,7 +369,8 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #52 — `[api_health] state_file` for PID 1 (2026-10-09), in progress.**
+**Issue #52 — `[api_health] state_file` for PID 1 (2026-10-09) ✅ done.** rustc
+warnings cleared in the same change; clippy + deny-warnings is #58.
 To stormpump#127's reader (c0c9e24): after every probe (and once at start,
 empty) write `{"updated", "items":[ApiHealth + interval_secs]}` to
 `<file>.tmp`, rename into place; left in place on stop. Also: zero build
