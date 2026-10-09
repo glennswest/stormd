@@ -208,14 +208,11 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
   - **#32** — done in stormd (TLS, client certificates, token file,
     `/metrics` behind auth); it protects a node once stormcos wires the
     stormcert pair, node CA and token into each container's config.
-  - **#29** — a failed process's error is in its log file, never in stormd's
-    own output, so a node console shows only "exited with error".
   - **#30** — on a node, CloudID's address is stormimds, which does not know
     the node (decision pending in stormimds#9).
   - **#24** — the test container does not yet build the way stormcentral's
     runner expects.
-  - **#7, #10** — config keys that do nothing, cron timeouts that don't kill,
-    the liveness counter resetting.
+  - **#7** — config keys that do nothing, and unknown keys load silently.
 
 ---
 
@@ -223,8 +220,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 
 From the open issues. **None of this works today:**
 
-- The last stderr lines of a failed process echoed to stormd's own output
-  (#29).
 - The test container built as one image from the repo root (#24).
 - Warnings for unknown config keys, and dead keys removed or implemented (#7).
 - A real liveness counter and a cron timeout that kills (#10).
