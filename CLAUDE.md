@@ -477,7 +477,7 @@ specifies (stormcos#458). Decisions from the code, not asked:
       refused→down, one log line each, web server stopped → down; medium 18
 - [x] golden recorded; told stormcos#458
 
-**Issue #24 — test image per the updated standard (2026-10-07), in progress.**
+**Issue #24 — test image per the updated standard (2026-10-07) ✅ done (verified 2026-10-09).**
 Standard (stormcentral docs/test-standard.md, runner `BUILD_PUSH`): one image,
 `test/Containerfile` with the repo root as context, no container runtime
 (#121), `/test <suite>`, `test/build.sh` runs first with CARGO_TARGET_DIR set.
