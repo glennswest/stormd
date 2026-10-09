@@ -354,6 +354,11 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #10 — cron timeout kills, jobs side by side; liveness counter
+(2026-10-08) ✅ done.** Point 3 (proxy) was #34. `kill_on_drop` + a task per
+job (a job still running skips its next fire time); `liveness_failures_total`
+monotonic, consecutive count as a gauge. Tests `cron::run_tests`.
+
 **Issue #30 — CloudID refresh on a node reaches stormimds (2026-10-08): part
 done, rest waits on stormimds#9 (needs-owner).** Done now (the issue's
 "either way"): a 404 names the likely cause (`cloudid::refusal`, test). The
