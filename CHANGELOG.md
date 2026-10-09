@@ -4,6 +4,17 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-09
+- **docs:** refreshed from the code for everything since 2026-10-02 (v0.8.0
+  and what followed on main). README: version and versions line, PID 1
+  shutdown deadline, new modules in the workspace map, the full validation
+  list (probes, `[[process.api]]`, TLS pair), `[stormlog.file] log_dir`
+  warned, `crashloopbackoff` state in metrics, #29 last words on stderr (the
+  old "not why" paragraph removed), `process_ready` now emitted, restart-wait
+  answers carry `process`, service goldens still on the retired
+  `[process.liveness]` get no liveness. Presentation: v0.8.0, Kubernetes
+  probes/restart policy/events, API health, goldens, status and planned
+  slides from today's open issues. plugin-ui.md: v0.8.0, #53. Filed #56
+  (shell/dashboard liveness read the retired key).
 - **feat:** unknown config keys are logged, one WARN each, at load (#7).
   The config still loads, so an existing one keeps booting. Before, a
   removed or misspelt key was silent.

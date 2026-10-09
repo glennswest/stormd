@@ -8,7 +8,7 @@ In stormcos, stormd is PID 1 of every supervised component container —
 fastetcd, the rustkube control plane, the kubelet, stormdrive, stormstorage,
 stormconsole, cadvisor, stormlb and the rest (see [How it ships](#how-it-ships)).
 
-This README is written from the code at v0.7.4 (refreshed 2026-09-27). Where something is parsed but
+This README is written from the code at v0.8.0 (refreshed 2026-10-09). Where something is parsed but
 does nothing, or does something other than it says, it says so and names the issue.
 
 A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
@@ -57,7 +57,8 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
 - **OCI image updater** — processes with an `image` are pulled, unpacked into a
   rootfs directory, and swapped when the registry digest changes.
 - **PID 1 duties** — reaps zombies, shuts down on SIGTERM/SIGINT (bounded:
-  it exits within 30 s whatever stalls), writes a few network sysctls, and has
+  dependents first, each SIGTERM then SIGKILL, and a deadline it exits by
+  whatever stalls — see [Running](#running)), writes a few network sysctls, and has
   a `--healthcheck` mode for Docker `HEALTHCHECK`.
 
 ## Workspace
@@ -75,6 +76,11 @@ crates/stormd/    the init/supervisor daemon (binary + lib)
   src/web.rs          embedded SPA
   src/ssh.rs sftp.rs  SSH server, SFTP subsystem
   src/shell/          SSH shell and busybox applets
+  src/probes.rs       startup/liveness/readiness probes (Kubernetes-shaped)
+  src/k8sevents.rs    Kubernetes-shaped events, /api/v1/events
+  src/apihealth.rs    [[process.api]] health probes
+  src/goldens.rs      [[process.golden]]: attach, present, swap, release
+  src/tls.rs          API TLS, client certificates, file rotation
   src/cron.rs events.rs backup.rs updater.rs cloudid.rs stats.rs debug.rs
 crates/stormlog/  logging: rotated files, multicast emit, VT100, streams
 crates/stormsh/   TUI client (ratatui)
@@ -85,7 +91,7 @@ docs/             plugin UI guide, design notes
 vendor/           vendored russh-sftp
 ```
 
-Versions: stormd 0.7.4, stormsh 0.4.0, stormlog 0.3.0 (each crate's
+Versions: stormd 0.8.0, stormsh 0.5.0, stormlog 0.4.0 (each crate's
 `Cargo.toml`).
 
 ## Building
@@ -219,7 +225,10 @@ Every stormd on a node shares the host network, so each has its own port:
 | `kind = "service"` goldens (stormdrive, stormstorage, stormconsole, cadvisor, stormlb, …) | the service's port + 100 (stormdrive 9192, stormstorage 9193, stormconsole 9194) |
 
 A service golden's config also sets `no_restart_exit_codes = [78]` and an HTTP
-liveness probe on the service's health path.
+liveness probe on the service's health path. A config that still writes that
+probe as the old `[process.liveness]` gets no liveness at all since #48 (the
+key is retired: parsed, warned, never acted on); stormcos moves its goldens to
+`[process.liveness_probe]` / `startup_probe` (stormcos#186).
 
 ### Standalone container image
 
@@ -312,12 +321,21 @@ An unknown key, including a removed one (`[log]`, `[general] pid_file`,
 each (`unknown config key — ignored`) and does not stop stormd (#7). `config/example.toml` shows every key and is
 parsed by a unit test.
 
-Validation at load: at least one `[[process]]` or `[[cron]]`; process names
-unique; each process has `command` or `image`; every `depends_on` names a
-process; `[events]` with `transport = "webhook"` needs `webhook_url`;
-`[backup] enabled` needs `destination_url`; a `[[process.golden]]` has a
-unique name without `/`, exactly one of `golden`/`volume_id`, an absolute
-`path` if any, and `owner` as `uid:gid`.
+Validation at load (any failure: exit 1, nothing started): at least one
+`[[process]]` or `[[cron]]`; process names unique; each process has `command`
+or `image`; every `depends_on` names a process; `wait_for_files` entries are
+absolute; each startup/liveness/readiness probe has exactly one action,
+`period_seconds`, `timeout_seconds` and both thresholds ≥ 1,
+`success_threshold = 1` unless it is a readiness probe, a non-empty
+`exec.command` and an `http_get.scheme` of HTTP or HTTPS; a
+`[[process.api]]` has a unique non-empty name, an `http://`/`https://` url,
+`interval_secs`/`timeout_secs` ≥ 1, `client_cert_file` and
+`client_key_file` together, and `restart_after_stalled_secs` ≥ 1 if set; a
+`[[process.golden]]` has a unique name without `/`, exactly one of
+`golden`/`volume_id`, an absolute `path` if any, and `owner` as `uid:gid`;
+`[events]` enabled with `transport = "webhook"` needs `webhook_url`;
+`[backup] enabled` needs `destination_url`; `[api] tls_cert_file` and
+`tls_key_file` go together, and `client_ca_file` needs them.
 
 ### `[general]`
 
@@ -504,7 +522,7 @@ See [Image updater](#image-updater).
 | `file.max_size_bytes` | `104857600` (100 MiB) | rotate `<process>.log` at this size |
 | `file.max_files` | `10` | rotated generations kept per process |
 | `file.max_runs` | `10` | finished runs kept per process |
-| `file.log_dir` | — | **ignored**: always `[general] log_dir` |
+| `file.log_dir` | — | **ignored**: always `[general] log_dir`; a different value is logged as a WARN at start |
 | `mcast.group` | `239.255.42.1:5514` | `host:port`, or `"off"` / `""` to send nothing (#27). An address that does not parse sends nothing, with a WARN |
 | `mcast.host` | this machine's hostname | syslog HOSTNAME field (the node, not the container) |
 | `terminal.rows` / `cols` | `24` / `80` | VT100 screen per process |
@@ -676,11 +694,11 @@ no level is info on stdout and warning on stderr. A crash adds
 from outside.
 
 **stormd's own output** (stderr) carries stormd's log lines, not its
-children's. A process that exits non-zero shows there only as
-`WARN process exited with error process=<p> code=Some(N)`; the error it printed
-is in its run file and on the multicast group, not in stormd's output. So a
-host supervisor that keeps only stormd's output (stormpump, on a node console)
-sees that it failed but not why (#29).
+children's — except when a run fails: then the last 20 lines that run printed
+are echoed there, prefixed `name| `, just before `process exited with error`
+(#29, see [A failed run's last words](#process-supervision)). So a host
+supervisor that keeps only stormd's output (stormpump, on a node console)
+sees why it failed, not only that it did.
 
 ## Events
 
@@ -689,7 +707,12 @@ Kinds: `container_starting`, `container_stopping`, `container_failing`,
 `liveness_check_failed`, `cron_executed`, `cron_failed`, `backup_started`,
 `backup_completed`, `backup_failed`, `update_check_started`,
 `update_available`, `update_pulling`, `update_pivoting`, `update_completed`,
-`update_failed`. (`process_ready` exists in the type and is never emitted.)
+`update_failed`, `process_ready`. `process_ready` is emitted when a process
+becomes ready (a passing readiness or `ready_probe`, or a startup probe with
+neither) (#7); `liveness_check_failed` when a `liveness_probe` reaches its
+`failure_threshold` and the run is killed. These are stormd's own events;
+the Kubernetes-shaped ones (`Unhealthy`, `Killing`, …) are separate, at
+`GET /api/v1/events` (see [Process supervision](#process-supervision)).
 
 Each is logged as `event=<kind> process=<p> container=<c> key=value…` —
 critical for `container_failing`; error for crashes and failed
@@ -771,7 +794,7 @@ Label `container` is `[general] name`; `process` is the supervised process.
 | `process_start_time_seconds` | gauge | stormd's start time |
 | `process_resident_memory_bytes`, `process_virtual_memory_bytes` | gauge | stormd's own memory |
 | `stormd_uptime_seconds` | gauge | |
-| `stormd_process_state{state}` | gauge | 1 for the current state of `running`, `stopped`, `failed`, `starting`, `restarting` |
+| `stormd_process_state{state}` | gauge | 1 for the current state of `running`, `stopped`, `failed`, `starting`, `restarting`, `crashloopbackoff` |
 | `stormd_process_restarts_total` | counter | |
 | `stormd_process_crashes_total` | counter | non-zero exits |
 | `stormd_process_resident_memory_bytes` | gauge | the running process's RSS (`/proc/<pid>/status` VmRSS) |
@@ -886,7 +909,7 @@ OpenSSH's default (SFTP-based) `scp` work; legacy `scp -O` does not.
 The shell, in addition to every applet below:
 
 ```
-ps / top            processes with state and liveness
+ps / top            processes with state and liveness (*)
 start|stop|restart <name>
 attach <name>       the process's VT100 screen
 logs [-f] [name]    recent / follow
@@ -900,6 +923,10 @@ systemctl start|stop|restart|status|list-units [name]
 xargs               runs the shell's own commands
 help, exit
 ```
+
+(*) The liveness column, `liveness` and the `status` summary still read the
+retired `[process.liveness]`, so a process with only a `liveness_probe`
+shows none there; `/metrics` has its counts (#56).
 
 Tab completion (commands, process names, paths), history, `|` pipes, and
 `>` / `>>` redirection.
@@ -985,6 +1012,8 @@ With none of those, it is healthy after 3 s of running.
 | 200 `{"status":"healthy","run":N,"waited":ms}` | healthy |
 | 504 `{"status":"timeout","run":N,"waiting_on":[…]}` | `timeout` passed first; the process is **left running** for the caller to decide |
 | 502 `{"status":"exited","run":N,"exit_code":…,"state":…}` | the run ended while it was waited for |
+
+Each answer also carries `"process"`.
 
 `GET /api/v1/processes/{name}` reports `run`, `ready` / `ready_at`,
 `liveness_passed_at` and `liveness_passed_run`, and `healthy`. A caller that

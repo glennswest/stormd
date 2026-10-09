@@ -336,6 +336,15 @@ Sixth mining pass (2026-10-09, 40 issues updated since 10-06, 47 comments): file
 rustkube-node#218 (kubelet can't read a TLS/auth stormd, P2) and #55 (group-signal
 exit unlogged at shutdown, P3); everything else already filed.
 
+**Docs refresh, third round (2026-10-09) ✅ done.** README, presentation and
+plugin-ui.md re-derived from the code for everything since 2026-10-02 (v0.8.0
++ #48 #49 #44 #31 #10 #29 #7 on main): versions, shutdown deadline, module
+map, full validation list, `process_ready` emitted, #29 paragraph, metrics
+states, retired `[process.liveness]` on service goldens; presentation status
+and planned slides from today's open issues. Filed #56 (P3): shell `ps`/
+`liveness`/`status` and the component card read `has_liveness` from the
+retired `[process.liveness]`, not `liveness_probe`.
+
 **Issue #32 — API over TLS, no anonymous access (2026-10-06) ✅ done.**
 Decisions (from the issue and code, not asked): auth stays "on when any
 credential is configured" (stormcos wires the flags per container, and an
@@ -953,6 +962,11 @@ crates/stormd/     — the init/supervisor daemon
   src/web.rs         — embedded SPA serving
   src/config.rs      — TOML config types (config/example.toml is parse-tested)
   src/nodevars.rs    — ${NODE_IP} / ${NODE_NAME} expansion at spawn
+  src/probes.rs      — Kubernetes-style startup/liveness/readiness probes
+  src/k8sevents.rs   — Kubernetes-shaped events (/api/v1/events)
+  src/apihealth.rs   — [[process.api]] health probes
+  src/goldens.rs     — [[process.golden]] attach/present/swap
+  src/tls.rs         — API TLS, client certs, rotation
   src/shell/         — busybox-style applets
 crates/stormlog/   — log store, VT100 terminals, stormcast wire
 crates/stormsh/    — TUI client (ratatui)

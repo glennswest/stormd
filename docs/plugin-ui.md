@@ -3,7 +3,7 @@
 A supervised process that serves its own web UI can appear as a tab in
 stormd's web console, and can put its own numbers on its dashboard card,
 without any change to stormd. Written from `api.rs` (`proxy_plugin`),
-`components.rs` and `main.rs` at v0.7.0.
+`components.rs` and `main.rs` at v0.8.0 (refreshed 2026-10-09).
 
 ## Configuration
 
@@ -51,7 +51,7 @@ What the proxy does, exactly:
   `Set-Cookie` for `stormd_session`, which is dropped. Redirects are not
   followed; the browser gets the `Location`. An absolute `Location` (`/login`)
   is not rewritten to the `/ui/proxy/{name}/` prefix, so use relative ones.
-- No WebSocket upgrade.
+- No WebSocket upgrade (#53, with the `Location` and body-limit gaps above).
 - A plugin that cannot be reached answers 500 with `{"error": "proxy: ..."}`.
 - With stormd auth on, `/ui/proxy/*` requires a session (the browser's
   session cookie rides along with the iframe's requests) or stormd's bearer.

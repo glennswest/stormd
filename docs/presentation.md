@@ -3,19 +3,19 @@ marp: true
 theme: default
 paginate: true
 title: stormd — the init inside every stormcos component
-description: Purpose and functionality of stormd v0.7.4, from the code
+description: Purpose and functionality of stormd v0.8.0, from the code
 ---
 
 <!-- Render: npx @marp-team/marp-cli docs/presentation.md          (HTML)
              npx @marp-team/marp-cli --pdf docs/presentation.md    (PDF)
-     Written 2026-09-24 against stormd v0.7.0; refreshed 2026-09-27 for v0.7.4. Every claim is checkable in
+     Written 2026-09-24 against stormd v0.7.0; refreshed 2026-10-09 for v0.8.0. Every claim is checkable in
      the source; README.md has the full reference. -->
 
 # stormd
 
 ### The init inside every stormcos component container
 
-v0.7.4 · github.com/glennswest/stormd
+v0.8.0 · github.com/glennswest/stormd
 
 ---
 
@@ -98,8 +98,23 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 - **Non-retryable exits.** `no_restart_exit_codes = [78]` marks the process
   failed and does not restart it. By default it leaves the container
   running (`on_no_restart = "hold"`).
-- **Liveness.** An HTTP or TCP probe. After `failure_threshold` misses,
-  SIGUSR1, then 5 s, then SIGKILL.
+- **Probes, the Kubernetes way (#48).** `startup_probe`, `liveness_probe`,
+  `readiness_probe` with `http_get`/`tcp_socket`/`exec`/`grpc` and
+  Kubernetes' fields and defaults. Startup gates the others; liveness kills
+  the run (SIGTERM, then SIGKILL); readiness only marks not ready. Per run,
+  ending with it (#45). The old `[process.liveness]` is retired.
+- **`restart_policy`** `Always`/`OnFailure`/`Never`: back-off 10 s doubling
+  to 5 min, `CrashLoopBackOff`, reset after 10 min of running.
+- **Events.** `Created`/`Started`/`Unhealthy`/`Killing`/`BackOff`, deduped
+  as the kubelet does, at `GET /api/v1/events` for rustkube-node's mirror pod.
+- **API health (#49).** `[[process.api]]`: a real read timed against p50/p99
+  budgets → `healthy`/`slow`/`stalled`/`down`, each change logged once;
+  restart on a long stall only when asked.
+- **Restart that waits** — `restart?wait=healthy` answers when the new run
+  has passed its checks (#44).
+- **Goldens (#36).** `[[process.golden]]`: stormblock goldens attached
+  read-only over ublk and mounted (or placed as a device node) before start;
+  swapped at runtime by `PUT`.
 - **`${NODE_IP}` / `${NODE_NAME}`** in args and env are filled in at every
   spawn, so a control plane advertises an address other nodes can reach.
 - **`env_default`** — set only when stormd did not inherit the key, so a
@@ -110,6 +125,8 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
   order, stands restarts down, and stops every process, dependents first:
   SIGTERM, `stop_timeout_secs` (default 10), then SIGKILL (#9). Bounded
   whatever stalls. Each exit is handled on its own task.
+- **A failed run's last 20 lines** are echoed on stormd's own stderr, so the
+  node's console shows why it failed (#29).
 
 ---
 
@@ -158,12 +175,12 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 
 | | |
 |---|---|
-| **Config** | `/etc/stormd/config.toml` (`--config`): `[general] [api] [[process]] [[cron]] [events] [backup] [updater] [ssh] [debug] [stormlog.*]` |
-| **REST** | `:9080/api/v1/…`: status, processes (start/stop/restart), logs, terminal, cron, updates, backup, plugins, `shutdown` |
+| **Config** | `/etc/stormd/config.toml` (`--config`): `[general] [api] [[process]] [[cron]] [events] [backup] [updater] [ssh] [debug] [goldens] [stormlog.*]`; an unknown key is one WARN, never a refusal (#7) |
+| **REST** | `:9080/api/v1/…`: status, processes (start/stop/restart, `?wait=healthy`), events, `health/apis`, goldens, logs, terminal, cron, updates, backup, plugins, `shutdown` |
 | **WebSocket** | `/ws/console/{p}`, `/ws/logs`, `/ws/components` (full snapshot every 2 s) |
 | **Health** | `GET /api/v1/health` / `/healthz` → `{"status":"ok"}`, open, answered whenever the API is up. `stormd --healthcheck` calls it |
 | **Auth/TLS** | `[api] tls_cert_file`/`tls_key_file` (re-read on rotation), `client_ca_file` (client certs), `token_file` (bearer); with any credential, nothing but health is anonymous (#32) |
-| **Metrics** | `GET /metrics`, Prometheus, behind the same auth: `stormd_up`, `stormd_process_state`, `_restarts_total`, `_crashes_total`, `_uptime_seconds`, `process_resident_memory_bytes`, … |
+| **Metrics** | `GET /metrics`, Prometheus, behind the same auth: `stormd_up`, `stormd_process_state`, `_restarts_total`, `_crashes_total`, `_uptime_seconds`, `_liveness_failures_total`, each process's RSS/CPU/fds (#33), … |
 | **Out** | UDP `239.255.42.1:5514` (logs), a webhook, a backup URL, CloudID, registries |
 | **Ports on a node** | fastetcd 9081 · rustkube 9082–9085 · service goldens: the service's port + 100 |
 
@@ -193,25 +210,27 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 
 ---
 
-## Status — v0.7.4
+## Status — v0.8.0
 
-- **Shipped.** Supervision with ready and liveness probes, the component feed
-  and both dashboards, login, themes, the stormview UI system, stormcast log
-  wire, and non-retryable exit codes (#2).
-- **Since v0.7.0:** one-shot dependencies wait for the exit (#16); SIGTERM
-  always stops stormd, bounded at 30 s (#17); cron jobs run at all (#21);
-  one restart delay no longer holds up other exits (#22); CloudID keys over
-  IMDSv2 (#19); a short/medium/long test container (#15).
-- **Docs** were rewritten from the code (#5) and refreshed for v0.7.4.
-  `config/example.toml` is covered by a test.
+- **Shipped.** Supervision with probes, the component feed and both
+  dashboards, login, themes, the stormview UI system, stormcast log wire,
+  non-retryable exit codes (#2).
+- **v0.8.0 (2026-10-07):** API over TLS, no anonymous access (#32);
+  SIGTERM-first stop, dependents first (#9); `env_default` (#37);
+  `wait_for_files` (#38); goldens (#36); per-process metrics (#33); limiter
+  on the group (#12); API bound before anything starts (#23); no unexpanded
+  `${NODE_IP}` (#3); updater starts from an existing rootfs (#8).
+- **Since v0.8.0 (on main, in the input golden):** Kubernetes probes,
+  restart policy and events (#48); API health (#49); restart that waits for
+  health (#44); applet exit codes and `test` (#31); cron timeout kills (#10);
+  last words on stderr (#29); unknown config keys warned (#7).
+- **Docs** refreshed from the code 2026-10-09. `config/example.toml` is
+  covered by a test.
 - **Open issues that matter:**
-  - **#32** — done in stormd (TLS, client certificates, token file,
-    `/metrics` behind auth); it protects a node once stormcos wires the
-    stormcert pair, node CA and token into each container's config.
+  - **#50** (P0) — pin the git dependencies to a rev.
+  - **#52** — API health to a state file for PID 1.
   - **#30** — on a node, CloudID's address is stormimds, which does not know
     the node (decision pending in stormimds#9).
-  - **#24** — the test container does not yet build the way stormcentral's
-    runner expects.
 
 ---
 
@@ -219,8 +238,12 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 
 From the open issues. **None of this works today:**
 
-- The test container built as one image from the repo root (#24).
-- A real liveness counter and a cron timeout that kills (#10).
+- Git dependencies pinned to a rev (#50).
+- API health written to a state file (#52), and what was in flight on a
+  stall (#54).
+- Plugin proxy: WebSocket, absolute `Location` rewrite, body limit (#53).
+- Shell/dashboard liveness from `liveness_probe`, not the retired key (#56).
+- An exit under a group signal always logged before stormd exits (#55).
 
 ---
 
