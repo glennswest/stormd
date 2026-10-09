@@ -332,6 +332,9 @@ validated or started. Next: pick up by priority.
 Fifth mining pass (2026-10-09, 37 issues updated since 09-29, 45 comments): filed
 #53 (proxy: WebSocket/Location/2 MB, P3) and #54 (API health in-flight capture, P3);
 #41/#42 noted as stale (same ad-hoc #34 run as #39/#40); everything else already filed.
+Sixth mining pass (2026-10-09, 40 issues updated since 10-06, 47 comments): filed
+rustkube-node#218 (kubelet can't read a TLS/auth stormd, P2) and #55 (group-signal
+exit unlogged at shutdown, P3); everything else already filed.
 
 **Issue #32 — API over TLS, no anonymous access (2026-10-06) ✅ done.**
 Decisions (from the issue and code, not asked): auth stays "on when any
