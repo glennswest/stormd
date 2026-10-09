@@ -329,6 +329,9 @@ stormcos#64 told its stormd scrape jobs need TLS + bearer once #32 lands. Fourth
 (the proxy drops `Authorization`, which breaks stormstorage UI writes) split out as
 #34 (P2); stormcos#64 told that stormd exports no per-process RSS/CPU/fds (#33). Newer open issues #23–#30 are not yet
 validated or started. Next: pick up by priority.
+Fifth mining pass (2026-10-09, 37 issues updated since 09-29, 45 comments): filed
+#53 (proxy: WebSocket/Location/2 MB, P3) and #54 (API health in-flight capture, P3);
+#41/#42 noted as stale (same ad-hoc #34 run as #39/#40); everything else already filed.
 
 **Issue #32 — API over TLS, no anonymous access (2026-10-06) ✅ done.**
 Decisions (from the issue and code, not asked): auth stays "on when any
