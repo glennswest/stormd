@@ -326,12 +326,23 @@ async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         }
     }
 
-    let _ = writeln!(o, "# HELP stormd_process_liveness_failures_total Liveness probe failures.");
+    // A real counter (stormd#10): it used to export the consecutive count,
+    // which a passing probe resets, so rate() over it was wrong.
+    let _ = writeln!(o, "# HELP stormd_process_liveness_failures_total Liveness probe failures since stormd started.");
     let _ = writeln!(o, "# TYPE stormd_process_liveness_failures_total counter");
     for p in &statuses {
         let _ = writeln!(
             o,
             "stormd_process_liveness_failures_total{{container=\"{c}\",process=\"{}\"}} {}",
+            p.name, p.liveness_failures_total
+        );
+    }
+    let _ = writeln!(o, "# HELP stormd_process_liveness_consecutive_failures Liveness failures in a row now (0 after a pass).");
+    let _ = writeln!(o, "# TYPE stormd_process_liveness_consecutive_failures gauge");
+    for p in &statuses {
+        let _ = writeln!(
+            o,
+            "stormd_process_liveness_consecutive_failures{{container=\"{c}\",process=\"{}\"}} {}",
             p.name, p.liveness_failures
         );
     }

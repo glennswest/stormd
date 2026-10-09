@@ -172,7 +172,7 @@ schedule = "0 0 * * * *"       # every hour (sec min hour dom month dow)
 command = "/app/cleanup"
 args = []
 # env = { KEY = "value" }
-timeout_secs = 60              # default 300; recorded as failed after this (not killed)
+timeout_secs = 60              # default 300; killed and recorded as failed after this
 capture_output = true          # output logged as process "cron.cleanup" when the job ends
 
 # --- Events ---

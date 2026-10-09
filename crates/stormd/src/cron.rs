@@ -32,6 +32,8 @@ struct CronJobState {
     last_exit_code: Option<i32>,
     run_count: u64,
     fail_count: u64,
+    /// A run of it is in progress (stormd#10).
+    running: bool,
 }
 
 pub struct CronScheduler {
@@ -70,6 +72,7 @@ impl CronScheduler {
                     last_exit_code: None,
                     run_count: 0,
                     fail_count: 0,
+                    running: false,
                 },
             );
         }
@@ -107,8 +110,28 @@ impl CronScheduler {
                 }
             }
 
+            // Each job on its own task (stormd#10): a long job used to hold up
+            // every other job for up to its timeout, since they ran one after
+            // another inside this loop. A job whose last run is still going
+            // skips this fire time rather than piling up runs.
             for name in jobs_to_run {
-                self.execute_job(&name).await;
+                let busy = {
+                    let mut jobs = self.jobs.write().await;
+                    match jobs.get_mut(&name) {
+                        Some(s) if s.running => true,
+                        Some(s) => {
+                            s.running = true;
+                            false
+                        }
+                        None => continue,
+                    }
+                };
+                if busy {
+                    warn!(job = %name, "cron job still running from its last fire time — skipping this one");
+                    continue;
+                }
+                let this = Arc::clone(&self);
+                tokio::spawn(async move { this.execute_job(&name).await });
             }
 
             let sleep_dur = next_wake
@@ -141,6 +164,9 @@ impl CronScheduler {
         info!(job = %name, command = %config.command, "executing cron job");
 
         let mut cmd = Command::new(&config.command);
+        // A timeout drops the child: kill it then, rather than leave it
+        // running unsupervised (stormd#10).
+        cmd.kill_on_drop(true);
         cmd.args(&config.args);
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
@@ -176,7 +202,9 @@ impl CronScheduler {
                         None
                     }
                     Err(_) => {
-                        warn!(job = %name, timeout_secs = timeout, "cron job timed out");
+                        // Dropping the wait dropped the child, and kill_on_drop
+                        // has sent it SIGKILL.
+                        warn!(job = %name, timeout_secs = timeout, "cron job timed out — killed");
                         None
                     }
                 }
@@ -194,6 +222,7 @@ impl CronScheduler {
                 state.last_run = Some(Utc::now());
                 state.last_exit_code = result;
                 state.run_count += 1;
+                state.running = false;
                 if !success {
                     state.fail_count += 1;
                 }
@@ -256,5 +285,73 @@ mod tests {
         let after = s.after(&now).next().unwrap();
         assert!(after > now);
         assert_eq!(after, now + chrono::Duration::seconds(1));
+    }
+}
+
+#[cfg(test)]
+mod run_tests {
+    use super::CronScheduler;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn scheduler(dir: &std::path::Path) -> Arc<CronScheduler> {
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.to_path_buf();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        Arc::new(CronScheduler::new(log, bus))
+    }
+
+    /// stormd#10: a timed-out job is killed, not left running.
+    #[tokio::test]
+    async fn a_timeout_kills_the_job() {
+        let dir = std::env::temp_dir().join(format!("stormd-cron-kill-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("survived");
+        let sched = scheduler(&dir);
+        let job: crate::config::CronJobConfig = toml::from_str(&format!(
+            "name = \"slow\"\nschedule = \"0 0 0 1 1 *\"\ncommand = \"/bin/sh\"\n\
+             args = [\"-c\", \"sleep 3; touch {}\"]\ntimeout_secs = 1\n",
+            marker.display()
+        ))
+        .unwrap();
+        sched.register_jobs(&[job]).await.unwrap();
+        sched.execute_job("slow").await;
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        let survived = marker.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!survived, "the job ran on past its timeout");
+    }
+
+    /// Jobs run side by side: a long one does not hold up a short one.
+    #[tokio::test]
+    async fn jobs_do_not_wait_for_each_other() {
+        let dir = std::env::temp_dir().join(format!("stormd-cron-par-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let quick = dir.join("quick");
+        let sched = scheduler(&dir);
+        let jobs: Vec<crate::config::CronJobConfig> = vec![
+            toml::from_str("name = \"a-long\"\nschedule = \"* * * * * *\"\ncommand = \"/bin/sleep\"\nargs = [\"5\"]\ntimeout_secs = 10\n").unwrap(),
+            toml::from_str(&format!(
+                "name = \"b-quick\"\nschedule = \"* * * * * *\"\ncommand = \"/bin/sh\"\nargs = [\"-c\", \"echo x >> {}\"]\n",
+                quick.display()
+            ))
+            .unwrap(),
+        ];
+        sched.register_jobs(&jobs).await.unwrap();
+        let s = sched.clone();
+        let h = tokio::spawn(async move { s.run().await });
+        tokio::time::sleep(Duration::from_millis(3500)).await;
+        h.abort();
+        let runs = std::fs::read_to_string(&quick).map(|t| t.lines().count()).unwrap_or(0);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(runs >= 2, "the quick job ran {runs} times in 3.5 s beside a 5 s job");
     }
 }

@@ -432,14 +432,13 @@ summary). See [docs/plugin-ui.md](docs/plugin-ui.md).
 | `command` | required | |
 | `args` | `[]` | |
 | `env` | `{}` | |
-| `timeout_secs` | `300` | after this the run is recorded as failed; **the job is not killed** |
+| `timeout_secs` | `300` | after this the job is killed (SIGKILL) and the run recorded as failed |
 | `capture_output` | `true` | once the job ends, its stdout/stderr are logged as process `cron.<name>` (stderr as warnings) |
 
 Each job keeps its next fire time and runs when it comes (`GET /api/v1/cron`
-shows it as `next_run`). Jobs run **one at a time**, inside the scheduler's
-loop: a job that runs long delays every other job, for up to its
-`timeout_secs`, and a fire time that passes meanwhile is run once, when the
-loop comes round — not once per missed time.
+shows it as `next_run`). Each run is on its own task, so a long job does not
+hold up the others (#10). A job whose previous run is still going skips a
+fire time, with a WARN, rather than piling up runs.
 
 ### `[events]`
 
@@ -778,7 +777,8 @@ Label `container` is `[general] name`; `process` is the supervised process.
 | `stormd_process_virtual_memory_bytes` | gauge | its VmSize |
 | `stormd_process_cpu_seconds_total` | counter | its user + system CPU (`/proc/<pid>/stat`), per run: it starts over when the process restarts |
 | `stormd_process_open_fds` | gauge | entries in `/proc/<pid>/fd` |
-| `stormd_process_liveness_failures_total` | counter | **current consecutive failures** — reset to 0 by a passing probe, so not monotonic despite the type |
+| `stormd_process_liveness_failures_total` | counter | every liveness probe failure since stormd started (#10) |
+| `stormd_process_liveness_consecutive_failures` | gauge | failures in a row now; 0 after a pass (what `failure_threshold` counts) |
 | `stormd_process_uptime_seconds` | gauge | absent when not running |
 
 ### Component feed

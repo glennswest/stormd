@@ -4,6 +4,13 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-08
+- **fix:** a cron job that passes its `timeout_secs` is killed, not left
+  running (#10). Each job runs on its own task, so a long one no longer
+  holds up the others, and a job still running skips its next fire time
+  with a WARN.
+- **fix:** `stormd_process_liveness_failures_total` is a real counter (every
+  failure since start); the consecutive count is the new gauge
+  `stormd_process_liveness_consecutive_failures` (#10).
 - **fix:** `[stormlog.mcast] group = "off"` (or `""`) sends nothing (#27).
   It used to be replaced by the fleet's default group, so a container
   configured to be quiet emitted anyway. A group that does not parse sends

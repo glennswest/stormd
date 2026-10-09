@@ -40,6 +40,10 @@ pub struct ProcessStatus {
     pub restart_timestamps: Vec<DateTime<Utc>>,
     pub uptime_secs: Option<i64>,
     pub liveness_failures: u32,
+    /// Every liveness probe failure since stormd started, never reset: the
+    /// Prometheus counter (stormd#10). `liveness_failures` is the run of
+    /// consecutive failures the threshold counts.
+    pub liveness_failures_total: u64,
     pub has_liveness: bool,
     pub liveness_config: Option<crate::config::LivenessProbe>,
     /// Which run this is (bumped at every spawn).
@@ -67,6 +71,7 @@ struct ManagedProcess {
     kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
     stdin_tx: Option<tokio::sync::mpsc::Sender<String>>,
     liveness_failures: u32,
+    liveness_failures_total: u64,
     /// Which run this is: bumped at every spawn. A liveness task belongs to
     /// one run and acts only while it is still the current one (stormd#45).
     run: u64,
@@ -119,6 +124,7 @@ impl ManagedProcess {
             restart_timestamps: self.restart_timestamps.clone(),
             uptime_secs: uptime,
             liveness_failures: self.liveness_failures,
+            liveness_failures_total: self.liveness_failures_total,
             has_liveness: self.config.liveness.is_some(),
             liveness_config: self.config.liveness.clone(),
             run: self.run,
@@ -259,6 +265,7 @@ impl Supervisor {
                         p.liveness_passed_run = Some(run);
                     } else {
                         p.liveness_failures += 1;
+                        p.liveness_failures_total += 1;
                     }
                 }
                 if let Err(m) = &r {
@@ -536,6 +543,7 @@ impl Supervisor {
                 kill_tx: None,
                 stdin_tx: None,
                 liveness_failures: 0,
+                liveness_failures_total: 0,
                 run: 0,
                 liveness_tasks: Arc::new(AtomicUsize::new(0)),
                 ready: !ManagedProcess::starts_unready(cfg),
@@ -1606,6 +1614,7 @@ impl Supervisor {
             kill_tx: None,
             stdin_tx: None,
             liveness_failures: 0,
+            liveness_failures_total: 0,
             run: 0,
             liveness_tasks: Arc::new(AtomicUsize::new(0)),
             ready: !ManagedProcess::starts_unready(&config),
