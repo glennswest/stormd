@@ -201,6 +201,11 @@ poll_interval_secs = 60
 data_dir = "/data/images"
 rootfs_dir = "/data/rootfs"
 
+# --- API health published for the node (stormd#52) ---
+
+# [api_health]
+# state_file = "/run/stormpump/health.d/app.json"   # rewritten after every probe
+
 # --- Goldens (stormblock) ---
 
 [goldens]

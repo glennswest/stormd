@@ -90,6 +90,8 @@ pub struct ApiHealth {
     pub last_error: Option<String>,
     pub last_check: Option<DateTime<Utc>>,
     pub checks: u64,
+    /// The probe's interval: PID 1 ages the state file by it (stormd#52).
+    pub interval_secs: u64,
     #[serde(skip)]
     window: VecDeque<u64>,
 }
@@ -97,6 +99,8 @@ pub struct ApiHealth {
 /// Every API's health, kept across process restarts.
 pub struct ApiHealthStore {
     map: Mutex<HashMap<(String, String), ApiHealth>>,
+    /// Rewritten after every probe, when set (stormd#52).
+    state_file: std::sync::OnceLock<PathBuf>,
     /// `<dir>/<process>.jsonl` gets each change, when `<dir>`'s parent exists.
     history_dir: PathBuf,
 }
@@ -109,7 +113,31 @@ impl Default for ApiHealthStore {
 
 impl ApiHealthStore {
     pub fn new(history_dir: PathBuf) -> Self {
-        Self { map: Mutex::new(HashMap::new()), history_dir }
+        Self { map: Mutex::new(HashMap::new()), state_file: std::sync::OnceLock::new(), history_dir }
+    }
+
+    /// Publish the state to `path` from now on, starting with an empty list
+    /// written at once (stormd#52).
+    pub fn set_state_file(&self, path: PathBuf) {
+        if self.state_file.set(path).is_ok() {
+            self.publish();
+        }
+    }
+
+    /// Write the current state for PID 1: `{"updated", "items"}`, to
+    /// `<file>.tmp` then renamed, so a reader never sees half a file. PID 1
+    /// ages it by modification time, so this runs after every probe, changed
+    /// or not. A failure is a debug line: the probes go on.
+    fn publish(&self) {
+        let Some(path) = self.state_file.get() else { return };
+        let body = serde_json::json!({ "updated": Utc::now(), "items": self.list() });
+        let mut tmp = path.clone().into_os_string();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        let r = std::fs::write(&tmp, body.to_string()).and_then(|_| std::fs::rename(&tmp, path));
+        if let Err(e) = r {
+            tracing::debug!(path = %path.display(), error = %e, "API health state file not written");
+        }
     }
 
     /// Record a probe. Returns the API's state now, and since when.
@@ -129,6 +157,7 @@ impl ApiHealthStore {
             last_error: None,
             last_check: None,
             checks: 0,
+            interval_secs: api.interval_secs,
             window: VecDeque::new(),
         });
         h.checks += 1;
@@ -161,7 +190,10 @@ impl ApiHealthStore {
             self.say(h, was, lasted);
             self.keep(h, was, lasted);
         }
-        (h.state, h.since)
+        let out = (h.state, h.since);
+        drop(map);
+        self.publish();
+        out
     }
 
     /// Log a change once, loudly in proportion.
@@ -362,5 +394,41 @@ mod tests {
         assert!(t.elapsed() < Duration::from_secs(3));
         let a = mk(closed);
         assert!(matches!(probe(&client(&a).unwrap(), &a).await, Probe::Error(_)));
+    }
+}
+
+#[cfg(test)]
+mod state_file_tests {
+    use super::*;
+
+    /// stormd#52: the file PID 1 reads — written at once (empty), rewritten
+    /// after every probe, renamed into place, with `updated` and each API's
+    /// `interval_secs`.
+    #[test]
+    fn the_state_file_is_what_pid1_reads() {
+        let dir = std::env::temp_dir().join(format!("stormd-statefile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("stormblock.json");
+        let store = ApiHealthStore::new(dir.join("no-history/api"));
+        store.set_state_file(file.clone());
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(v["items"].as_array().map(|a| a.len()), Some(0), "written at once, empty");
+        assert!(v["updated"].is_string());
+
+        let api: ApiProbe = toml::from_str("name = \"volumes\"\nurl = \"http://x/\"\ninterval_secs = 7\n").unwrap();
+        store.record("engine", &api, Probe::Answered { ms: 4, status: 200 }, Utc::now());
+        let m1 = std::fs::metadata(&file).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        store.record("engine", &api, Probe::Answered { ms: 5, status: 200 }, Utc::now());
+        let m2 = std::fs::metadata(&file).unwrap().modified().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        let tmp_left = dir.join("stormblock.json.tmp").exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(m2 > m1, "rewritten after a probe even with no change");
+        let it = &v["items"][0];
+        assert_eq!((it["api"].as_str(), it["state"].as_str(), it["interval_secs"].as_u64()), (Some("volumes"), Some("healthy"), Some(7)));
+        assert_eq!(it["checks"].as_u64(), Some(2));
+        assert!(!tmp_left, "the temp file is renamed, not left");
     }
 }

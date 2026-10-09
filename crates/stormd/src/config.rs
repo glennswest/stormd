@@ -28,6 +28,19 @@ pub struct Config {
     pub updater: UpdaterConfig,
     #[serde(default)]
     pub goldens: GoldensConfig,
+    #[serde(default)]
+    pub api_health: ApiHealthConfig,
+}
+
+/// Where the API health state is published for the node (stormd#52).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ApiHealthConfig {
+    /// After every probe, the current state of every declared API is written
+    /// here (temp file + rename), for PID 1 to merge into the node's health
+    /// without TLS: on stormcos, `/run/stormpump/health.d/<container>.json`.
+    /// Unset: no file.
+    #[serde(default)]
+    pub state_file: Option<PathBuf>,
 }
 
 /// One API a process serves, probed for health (`[[process.api]]`,

@@ -369,6 +369,12 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #52 — `[api_health] state_file` for PID 1 (2026-10-09), in progress.**
+To stormpump#127's reader (c0c9e24): after every probe (and once at start,
+empty) write `{"updated", "items":[ApiHealth + interval_secs]}` to
+`<file>.tmp`, rename into place; left in place on stop. Also: zero build
+warnings (new cross-project rule) — the ones in stormd/stormsh fixed here.
+
 **Issue #7 — dead config keys; unknown keys warned (2026-10-09) ✅ done.**
 As the issue proposes (no owner decision needed):
 - unknown keys: one WARN per key at load (serde_ignored), never rejected;

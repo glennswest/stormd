@@ -4,6 +4,12 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-10-09
+- **feat:** `[api_health] state_file` (#52, stormpump#127). After every API
+  probe stormd writes the current state of every declared API (the
+  `/api/v1/health/apis` body, plus `updated` and each API's
+  `interval_secs`) to that file, as temp file plus rename. It is written
+  empty at start and left in place on stop, for PID 1 to merge into the
+  node's health without TLS.
 - **docs:** refreshed from the code for everything since 2026-10-02 (v0.8.0
   and what followed on main). README: version and versions line, PID 1
   shutdown deadline, new modules in the workspace map, the full validation

@@ -234,6 +234,10 @@ async fn main() {
     }
 
     let supervisor = Arc::new(Supervisor::new(stormlog.clone(), event_bus.clone()));
+    // API health published for PID 1 (stormd#52).
+    if let Some(path) = &config.api_health.state_file {
+        supervisor.api_health().set_state_file(path.clone());
+    }
     // Goldens processes name, attached read-only and presented (stormd#36).
     let goldens = config.process.iter().any(|p| !p.golden.is_empty()).then(|| {
         Arc::new(stormd::goldens::Goldens::new(

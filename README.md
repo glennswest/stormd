@@ -1067,6 +1067,17 @@ appended to `/system-data/history/api/<process>.jsonl` when
 `/system-data/history` exists (stormcos#456). `GET /api/v1/health/apis`
 serves the current state of every API.
 
+**Published for the node** (#52). With `[api_health] state_file = "…"`
+(on stormcos `/run/stormpump/health.d/<container>.json`, a directory PID 1
+makes and stormcos binds in), stormd writes the current state to that file
+after every probe, changed or not. The file holds the
+`/api/v1/health/apis` body plus a top-level `updated` and each API's
+`interval_secs`. It is written to `<file>.tmp` and renamed, written empty at
+start, and left in place on stop. PID 1 merges it into the node's health
+without TLS (stormpump#127). It ages the file by its modification time: one
+older than 3 × the largest `interval_secs` counts as stalled, so a hung
+stormd cannot look healthy.
+
 **Acting** is opt-in, per API. With `restart_after_stalled_secs = N`, an API
 stalled for N seconds is logged as such, and the process is sent SIGTERM
 (SIGKILL after its `stop_timeout_secs`). Its exit then goes through the
