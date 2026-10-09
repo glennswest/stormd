@@ -136,7 +136,6 @@ fn cv(data: &[u8]) -> CryptoVec {
     CryptoVec::from(data.to_vec())
 }
 
-#[async_trait]
 impl SshSession {
     /// Whether public-key auth is on at all: CloudID keys or an
     /// `authorized_keys` file.
@@ -173,6 +172,7 @@ pub fn authorized_keys_contains(text: &str, key: &PublicKey) -> bool {
         .any(|k| &k == key)
 }
 
+#[async_trait]
 impl Handler for SshSession {
     type Error = anyhow::Error;
 
