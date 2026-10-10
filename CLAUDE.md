@@ -335,6 +335,9 @@ Fifth mining pass (2026-10-09, 37 issues updated since 09-29, 45 comments): file
 Sixth mining pass (2026-10-09, 40 issues updated since 10-06, 47 comments): filed
 rustkube-node#218 (kubelet can't read a TLS/auth stormd, P2) and #55 (group-signal
 exit unlogged at shutdown, P3); everything else already filed.
+Seventh mining pass (2026-10-10, 19 issues updated since 10-09, 13 comments): nothing
+new to file; stormcos#458 told that #52 is done and that each container also needs
+`[api_health] state_file` set (off by default), not only the health.d bind.
 
 **Docs refresh, third round (2026-10-09) ✅ done.** README, presentation and
 plugin-ui.md re-derived from the code for everything since 2026-10-02 (v0.8.0
