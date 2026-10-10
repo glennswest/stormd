@@ -3,6 +3,13 @@
 ## [Unreleased]
 <!-- New unreleased changes go here -->
 
+### 2026-10-10
+- **fix:** the process status, the shell's `ps`/`status`/`liveness` and
+  the dashboard's "liveness fails" metric read the Kubernetes-style
+  `liveness_probe`, not the retired `[process.liveness]` (#56). The status
+  adds `startup_probe` and `readiness_probe`, and `liveness` prints all
+  three probes with their action, timing and status.
+
 ### 2026-10-09
 - **feat:** `[api] client_ca_file` takes a list as well as one path (#59,
   stormcos#371): the node CA and forge's CA. A client certificate from any

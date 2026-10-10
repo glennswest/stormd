@@ -910,13 +910,13 @@ OpenSSH's default (SFTP-based) `scp` work; legacy `scp -O` does not.
 The shell, in addition to every applet below:
 
 ```
-ps / top            processes with state and liveness (*)
+ps / top            processes with state and liveness
 start|stop|restart <name>
 attach <name>       the process's VT100 screen
 logs [-f] [name]    recent / follow
 dmesg [-f]          all processes
 grep <pat> [file]   logs, or a file
-liveness [name]     probe config and status
+liveness [name]     startup / liveness / readiness probes: action, timing, status
 cron                jobs
 status              everything, with a liveness summary
 uptime
@@ -924,10 +924,6 @@ systemctl start|stop|restart|status|list-units [name]
 xargs               runs the shell's own commands
 help, exit
 ```
-
-(*) The liveness column, `liveness` and the `status` summary still read the
-retired `[process.liveness]`, so a process with only a `liveness_probe`
-shows none there; `/metrics` has its counts (#56).
 
 Tab completion (commands, process names, paths), history, `|` pipes, and
 `>` / `>>` redirection.

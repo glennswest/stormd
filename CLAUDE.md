@@ -372,6 +372,10 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #56 — status/shell/dashboard liveness from liveness_probe (2026-10-10) ✅ done.** `has_liveness`/`liveness_config` from `liveness_probe`; status
+adds `startup_probe`/`readiness_probe`; `liveness` shell command prints all
+three (`Probe::describe`). No consumer outside stormd reads these fields.
+
 **Issue #59 — `[api] client_ca_file` list (2026-10-09) ✅ done.** String
 or list; a reloading `ClientCertVerifier` (WebPki over every readable file,
 rebuilt on any file change; none readable → `NoClientCerts`, anonymous still

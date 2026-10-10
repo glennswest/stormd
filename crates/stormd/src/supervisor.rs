@@ -44,8 +44,12 @@ pub struct ProcessStatus {
     /// Prometheus counter (stormd#10). `liveness_failures` is the run of
     /// consecutive failures the threshold counts.
     pub liveness_failures_total: u64,
+    /// It has a `liveness_probe` (stormd#48/#56; the retired
+    /// `[process.liveness]` does not count).
     pub has_liveness: bool,
-    pub liveness_config: Option<crate::config::LivenessProbe>,
+    pub liveness_config: Option<crate::probes::Probe>,
+    pub startup_probe: Option<crate::probes::Probe>,
+    pub readiness_probe: Option<crate::probes::Probe>,
     /// Which run this is (bumped at every spawn).
     pub run: u64,
     /// Its ready_probe has passed for this run (true when it has none).
@@ -123,8 +127,10 @@ impl ManagedProcess {
             uptime_secs: uptime,
             liveness_failures: self.liveness_failures,
             liveness_failures_total: self.liveness_failures_total,
-            has_liveness: self.config.liveness.is_some(),
-            liveness_config: self.config.liveness.clone(),
+            has_liveness: self.config.liveness_probe.is_some(),
+            liveness_config: self.config.liveness_probe.clone(),
+            startup_probe: self.config.startup_probe.clone(),
+            readiness_probe: self.config.readiness_probe.clone(),
             run: self.run,
             ready: self.ready,
             ready_at: self.ready_at,
@@ -3165,5 +3171,38 @@ mod dependency_wake_tests {
         let _ = std::fs::remove_dir_all(&dir);
         // Five waits: at 250 ms polls that was ≥ 1.25 s.
         assert!(took < Duration::from_millis(600), "6 chained one-shots took {took:?}");
+    }
+}
+
+#[cfg(test)]
+mod status_probe_tests {
+    use super::Supervisor;
+    use std::sync::Arc;
+
+    /// stormd#56: the status reports the Kubernetes-style probes, not the
+    /// retired `[process.liveness]`.
+    #[tokio::test]
+    async fn status_reports_the_new_probes() {
+        let cfg: crate::config::Config =
+            toml::from_str("[general]\nname = \"t\"\nlog_dir = \"/nonexistent/stormd-56\"\n[stormlog.mcast]\ngroup = \"off\"\n").unwrap();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(cfg.stormlog.clone(), "t"));
+        let sup = Supervisor::new(log, bus);
+        let new: crate::config::ProcessConfig = toml::from_str(
+            "name = \"new\"\ncommand = \"/bin/true\"\n\
+             [liveness_probe]\ntcp_socket = { port = 1 }\n[startup_probe]\ntcp_socket = { port = 1 }\n",
+        )
+        .unwrap();
+        let old: crate::config::ProcessConfig = toml::from_str(
+            "name = \"old\"\ncommand = \"/bin/true\"\n[liveness]\ntype = \"tcp\"\nport = 1\n",
+        )
+        .unwrap();
+        sup.register_process(new).await;
+        sup.register_process(old).await;
+        let n = sup.get_status("new").await.unwrap();
+        let o = sup.get_status("old").await.unwrap();
+        assert!(n.has_liveness && n.liveness_config.is_some() && n.startup_probe.is_some());
+        assert!(n.readiness_probe.is_none());
+        assert!(!o.has_liveness && o.liveness_config.is_none(), "the retired table counts for nothing");
     }
 }

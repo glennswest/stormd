@@ -123,6 +123,37 @@ impl Probe {
         Ok(())
     }
 
+    /// What it checks, for people: `http GET http://127.0.0.1:6443/healthz`.
+    pub fn describe(&self) -> String {
+        if let Some(h) = &self.http_get {
+            let scheme = if h.scheme.eq_ignore_ascii_case("https") { "https" } else { "http" };
+            format!("http GET {scheme}://{}:{}{}", h.host, h.port, h.path)
+        } else if let Some(t) = &self.tcp_socket {
+            format!("tcp {}:{}", t.host, t.port)
+        } else if let Some(x) = &self.exec {
+            format!("exec {}", x.command.join(" "))
+        } else if let Some(g) = &self.grpc {
+            match &g.service {
+                Some(s) => format!("grpc 127.0.0.1:{} service {s}", g.port),
+                None => format!("grpc 127.0.0.1:{}", g.port),
+            }
+        } else {
+            "no action".into()
+        }
+    }
+
+    /// Its timing, for people: `every 10s, timeout 1s, failures 3, delay 0s`.
+    pub fn timing(&self) -> String {
+        let mut t = format!(
+            "every {}s, timeout {}s, failures {}, delay {}s",
+            self.period_seconds, self.timeout_seconds, self.failure_threshold, self.initial_delay_seconds
+        );
+        if self.success_threshold != 1 {
+            t.push_str(&format!(", successes {}", self.success_threshold));
+        }
+        t
+    }
+
     /// One try. `Err` carries the message Kubernetes would put in an
     /// `Unhealthy` event.
     pub async fn run(&self) -> Result<(), String> {
@@ -357,6 +388,16 @@ mod tests {
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let e = p(&format!("grpc = {{ port = {closed} }}\n")).run().await.unwrap_err();
         assert!(e.contains("failed to connect service"), "{e}");
+    }
+
+    #[test]
+    fn described_for_people() {
+        let h = p("http_get = { path = \"/healthz\", port = 6443, scheme = \"HTTPS\" }\nperiod_seconds = 2\nfailure_threshold = 150\n");
+        assert_eq!(h.describe(), "http GET https://127.0.0.1:6443/healthz");
+        assert_eq!(h.timing(), "every 2s, timeout 1s, failures 150, delay 0s");
+        assert_eq!(p("grpc = { port = 2379 }\n").describe(), "grpc 127.0.0.1:2379");
+        assert_eq!(p("exec = { command = [\"/bin/test\", \"-e\", \"/x\"] }\n").describe(), "exec /bin/test -e /x");
+        assert!(p("tcp_socket = { port = 1 }\nsuccess_threshold = 2\n").timing().ends_with("successes 2"));
     }
 
     #[test]

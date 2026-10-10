@@ -1,6 +1,6 @@
 use super::ShellOutput;
 use crate::api::AppState;
-use crate::supervisor::ProcessState;
+use crate::supervisor::{ProcessState, ProcessStatus};
 use chrono::Utc;
 use std::sync::Arc;
 
@@ -159,8 +159,6 @@ pub async fn cmd_status(state: &Arc<AppState>, container_name: &str) -> ShellOut
 }
 
 pub async fn cmd_liveness(state: &Arc<AppState>, args: &[&str]) -> ShellOutput {
-    use crate::config::ProbeType;
-
     let statuses = state.supervisor.get_all_statuses().await;
 
     // Filter to specific process if arg provided
@@ -177,36 +175,32 @@ pub async fn cmd_liveness(state: &Arc<AppState>, args: &[&str]) -> ShellOutput {
         return ShellOutput::text("No processes configured\r\n");
     }
 
-    let any_has_liveness = filtered.iter().any(|s| s.has_liveness);
-    if !any_has_liveness {
-        return ShellOutput::text("No liveness probes configured\r\n");
+    // stormd#56: the Kubernetes-style probes (#48), not the retired
+    // `[process.liveness]`.
+    let has_any = |s: &ProcessStatus| s.startup_probe.is_some() || s.liveness_config.is_some() || s.readiness_probe.is_some();
+    if !filtered.iter().any(|s| has_any(s)) {
+        return ShellOutput::text("No startup, liveness or readiness probes configured\r\n");
     }
 
     let mut out = String::new();
-    for s in &filtered {
-        if let Some(ref lc) = s.liveness_config {
-            let probe_desc = match &lc.probe {
-                ProbeType::Http { url } => format!("http  {}", url),
-                ProbeType::Tcp { port } => format!("tcp   127.0.0.1:{}", port),
-            };
+    for s in filtered.iter().filter(|s| has_any(s)) {
+        out.push_str(&format!("\x1b[1m{}\x1b[0m\r\n", s.name));
+        if let Some(p) = &s.startup_probe {
+            out.push_str(&format!("  Startup:   {}  ({})\r\n", p.describe(), p.timing()));
+        }
+        if let Some(p) = &s.liveness_config {
             let status_str = if s.state != ProcessState::Running {
                 "\x1b[33minactive\x1b[0m".to_string()
             } else if s.liveness_failures == 0 {
                 "\x1b[32mhealthy\x1b[0m".to_string()
             } else {
-                format!(
-                    "\x1b[31mfailing ({}/{})\x1b[0m",
-                    s.liveness_failures, lc.failure_threshold
-                )
+                format!("\x1b[31mfailing ({}/{})\x1b[0m", s.liveness_failures, p.failure_threshold)
             };
-
-            out.push_str(&format!("\x1b[1m{}\x1b[0m\r\n", s.name));
-            out.push_str(&format!("  Probe:     {}\r\n", probe_desc));
-            out.push_str(&format!("  Status:    {}\r\n", status_str));
-            out.push_str(&format!(
-                "  Interval:  {}s  Timeout: {}s  Threshold: {}  Delay: {}s\r\n",
-                lc.interval_secs, lc.timeout_secs, lc.failure_threshold, lc.initial_delay_secs
-            ));
+            out.push_str(&format!("  Liveness:  {}  ({})  {}\r\n", p.describe(), p.timing(), status_str));
+        }
+        if let Some(p) = &s.readiness_probe {
+            let ready = if s.ready { "\x1b[32mready\x1b[0m" } else { "\x1b[33mnot ready\x1b[0m" };
+            out.push_str(&format!("  Readiness: {}  ({})  {}\r\n", p.describe(), p.timing(), ready));
         }
     }
     ShellOutput::text(out)
