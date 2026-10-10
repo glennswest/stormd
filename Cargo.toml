@@ -39,8 +39,8 @@ russh-keys = "0.46"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 async-trait = "0.1"
-stormpull = { git = "ssh://git@github.com/glennswest/stormbase" }
-stormview = { git = "https://github.com/glennswest/stormview", branch = "main" }
+stormpull = { git = "ssh://git@github.com/glennswest/stormbase", rev = "fc431c11baa5a15306222202a4b607f4083b5237" }
+stormview = { git = "https://github.com/glennswest/stormview", rev = "e7a285b6f0e7f40379e5c716201bd06080d77458" }
 oci-spec = "0.7"
 sha2 = "0.10"
 hex = "0.4"

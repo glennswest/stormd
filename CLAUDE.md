@@ -377,7 +377,8 @@ compliance gate refuses a git source without `rev=` (stormcentral#571). Pin
 each to the commit `Cargo.lock` holds now: stormcast 3cec734, stormpull
 (stormbase) fc431c1, stormview e7a285b; lock sources rewritten to
 `?rev=<sha>#<sha>` by hand (no cargo here), confirmed by a `--locked` build.
-- [ ] manifests + lock; README "how it ships" note; changelog
+- [x] manifests + lock; web/package.json stormview #main → its locked
+      commit 83492d4; README, changelog
 - [ ] sc-build `--locked`; golden; close
 
 **Issue #56 — status/shell/dashboard liveness from liveness_probe (2026-10-10) ✅ done.** `has_liveness`/`liveness_config` from `liveness_probe`; status
@@ -1032,7 +1033,9 @@ Authority: stormcos `docs/goldens.md`. Nothing rebuilds it on its own, so
 2026-10-07, #43 — this replaces the 2026-09-26 "stormd never requests
 goldens"). The goldens built on it pick it up; stormcos composes as usual.
 Main must still always build. Sibling crates (stormcast, stormview,
-stormpull) are pinned by `Cargo.lock`; a fix there needs `cargo update -p`.
+stormpull) are pinned by `rev = "<sha>"` in the manifests (#50: the
+compliance gate refuses an unpinned git source); a fix there means moving
+the `rev` and committing the lock with it.
 stormd's API port per container: fastetcd 9081, rustkube 9082–9085, service
 goldens port+100.
 

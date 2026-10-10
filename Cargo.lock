@@ -3466,7 +3466,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "stormcast"
 version = "0.1.1"
-source = "git+https://github.com/glennswest/stormcast?branch=main#3cec734ee0239604e9ce6e203cda403ab49aba75"
+source = "git+https://github.com/glennswest/stormcast?rev=3cec734ee0239604e9ce6e203cda403ab49aba75#3cec734ee0239604e9ce6e203cda403ab49aba75"
 
 [[package]]
 name = "stormd"
@@ -3542,7 +3542,7 @@ dependencies = [
 [[package]]
 name = "stormpull"
 version = "0.3.0"
-source = "git+ssh://git@github.com/glennswest/stormbase#fc431c11baa5a15306222202a4b607f4083b5237"
+source = "git+ssh://git@github.com/glennswest/stormbase?rev=fc431c11baa5a15306222202a4b607f4083b5237#fc431c11baa5a15306222202a4b607f4083b5237"
 dependencies = [
  "anyhow",
  "flate2",
@@ -3580,7 +3580,7 @@ dependencies = [
 [[package]]
 name = "stormview"
 version = "0.1.0"
-source = "git+https://github.com/glennswest/stormview?branch=main#e7a285b6f0e7f40379e5c716201bd06080d77458"
+source = "git+https://github.com/glennswest/stormview?rev=e7a285b6f0e7f40379e5c716201bd06080d77458#e7a285b6f0e7f40379e5c716201bd06080d77458"
 dependencies = [
  "serde",
 ]

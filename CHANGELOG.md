@@ -1,9 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+
 <!-- New unreleased changes go here -->
 
 ### 2026-10-10
+- **build:** git dependencies pinned to a commit instead of following a branch
+  (#50, compliance `git_dep_unpinned`, stormcentral#571): stormcast 3cec734,
+  stormpull (stormbase) fc431c1, stormview e7a285b — the commits the lock
+  already held, so nothing changes in what is built. The web UI's stormview npm
+  dependency pinned to 83492d4 (its locked commit) the same way.
 - **fix:** the process status, the shell's `ps`/`status`/`liveness` and
   the dashboard's "liveness fails" metric read the Kubernetes-style
   `liveness_probe`, not the retired `[process.liveness]` (#56). The status

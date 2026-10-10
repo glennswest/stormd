@@ -8,7 +8,7 @@ description = "A container's logging: a rotated file, the fleet's multicast grou
 [dependencies]
 # The wire format, shared with stormpump. See the crate's own README for why
 # this is not written out again here.
-stormcast = { git = "https://github.com/glennswest/stormcast", branch = "main" }
+stormcast = { git = "https://github.com/glennswest/stormcast", rev = "3cec734ee0239604e9ce6e203cda403ab49aba75" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

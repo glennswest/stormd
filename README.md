@@ -124,10 +124,14 @@ binary, so a cargo-only build needs no node. The UI system (themes,
 Rust contract types come from the same repo as a git dependency. To develop
 against a running stormd: `cd web && STORMD_URL=http://host:9080 npm run dev`.
 
-Sibling dependencies are git dependencies pinned in `Cargo.lock`: stormcast
-(log wire), stormview (UI contract), stormpull (from the stormbase repo, for
-the updater). A fix in one of them does not arrive here until `cargo update -p
-<name>` and a commit of the lock file.
+Sibling dependencies are git dependencies pinned to a commit (`rev = "<sha>"`
+in the manifest, so `Cargo.lock` carries `?rev=`; the compliance gate refuses
+an unpinned git source, stormcentral#571): stormcast (log wire, in
+`crates/stormlog/Cargo.toml`), stormview (UI contract) and stormpull (from the
+stormbase repo, for the updater), both in the root `Cargo.toml`. A fix in one
+of them arrives here only by moving its `rev` to the new commit and committing
+the lock file with it. The web UI's stormview npm package is pinned the same
+way (`#<sha>` in `web/package.json`).
 
 ## Tests
 
