@@ -372,6 +372,17 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #61 — a finished one-shot recorded `code=None` (2026-10-13): in progress.**
+Cause: the PID 1 reaper (`main.rs reap_zombies`) ran `waitpid(-1)` every
+second and could reap a child stormd itself waits on; `child.wait()` then
+fails (ECHILD) and the exit is recorded as `None` → failed. Fix:
+- [ ] `reaper.rs`: scan `/proc` for zombie children of stormd, reap one only
+      after it has stayed unreaped 5 s (stormd's own waiters reap in ms);
+      no `/proc` → old behaviour, one WARN
+- [ ] exit event carries the signal (named in the log) and a lost status
+      (`exit status lost: <err>`) instead of a bare `code=None`
+- [ ] unit tests; README, changelog; sc-build; golden
+
 **Issue #50 (P0) — pin git dependencies to a rev (2026-10-10) ✅ done.** The
 compliance gate refuses a git source without `rev=` (stormcentral#571). Pin
 each to the commit `Cargo.lock` holds now: stormcast 3cec734, stormpull
