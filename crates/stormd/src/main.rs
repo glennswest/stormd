@@ -478,9 +478,7 @@ async fn main() {
 
     // PID 1 zombie reaper (Linux only)
     #[cfg(target_os = "linux")]
-    tokio::spawn(async {
-        reap_zombies().await;
-    });
+    tokio::spawn(stormd::reaper::run());
 
     // Network init — set sysctls for container networking (Linux only)
     #[cfg(target_os = "linux")]
@@ -582,25 +580,6 @@ const SHUTDOWN_DEADLINE_SECS: u64 = 30;
 /// Added to the processes' own stop budget for the rest of shutdown (log
 /// flush, a failure backup).
 const SHUTDOWN_MARGIN_SECS: u64 = 20;
-
-/// PID 1 zombie reaper — required when running as init in a container.
-#[cfg(target_os = "linux")]
-async fn reap_zombies() {
-    use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-    use nix::unistd::Pid;
-
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        loop {
-            match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
-                Ok(WaitStatus::StillAlive) | Err(_) => break,
-                Ok(status) => {
-                    tracing::trace!(?status, "reaped zombie process");
-                }
-            }
-        }
-    }
-}
 
 /// Set network sysctls for container networking.
 ///

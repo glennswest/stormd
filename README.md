@@ -56,7 +56,9 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
   container fails, or on demand.
 - **OCI image updater** — processes with an `image` are pulled, unpacked into a
   rootfs directory, and swapped when the registry digest changes.
-- **PID 1 duties** — reaps zombies, shuts down on SIGTERM/SIGINT (bounded:
+- **PID 1 duties** — reaps orphaned zombies (only a zombie left unreaped for
+  5 s, found in `/proc`, so a supervised process's exit status is never taken
+  from the supervisor — #61), shuts down on SIGTERM/SIGINT (bounded:
   dependents first, each SIGTERM then SIGKILL, and a deadline it exits by
   whatever stalls — see [Running](#running)), writes a few network sysctls, and has
   a `--healthcheck` mode for Docker `HEALTHCHECK`.
@@ -66,6 +68,7 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
 ```
 crates/stormd/    the init/supervisor daemon (binary + lib)
   src/main.rs         startup, CLI, PID 1 duties, shutdown
+  src/reaper.rs       PID 1 zombie reaper (orphans only)
   src/config.rs       every config key and its default
   src/supervisor.rs   process lifecycle, restart policy, probes
   src/nodevars.rs     ${NODE_IP} / ${NODE_NAME}
@@ -703,7 +706,9 @@ children's — except when a run fails: then the last 20 lines that run printed
 are echoed there, prefixed `name| `, just before `process exited with error`
 (#29, see [A failed run's last words](#process-supervision)). So a host
 supervisor that keeps only stormd's output (stormpump, on a node console)
-sees why it failed, not only that it did.
+sees why it failed, not only that it did. The line says how the run ended
+in `exit=`: `exit code N`, `killed by SIGKILL` (the signal by name), or
+`exit status lost: <error>` if no status could be read (#61).
 
 ## Events
 

@@ -154,6 +154,27 @@ struct ExitEvent {
     exit_code: Option<i32>,
     /// The signal it died of, if it did.
     signal: Option<i32>,
+    /// Why no status could be read, if none could (stormd#61).
+    lost: Option<String>,
+}
+
+/// How an exit reads in the log: the code, else the signal by name, else
+/// why the status was lost. Never a bare `code=None` (stormd#61).
+fn describe_exit(code: Option<i32>, signal: Option<i32>, lost: Option<&str>) -> String {
+    if let Some(c) = code {
+        return format!("exit code {c}");
+    }
+    if let Some(sig) = signal {
+        #[cfg(target_os = "linux")]
+        if let Ok(s) = nix::sys::signal::Signal::try_from(sig) {
+            return format!("killed by {}", s.as_str());
+        }
+        return format!("killed by signal {sig}");
+    }
+    match lost {
+        Some(e) => format!("exit status lost: {e}"),
+        None => "no exit status".to_string(),
+    }
 }
 
 pub struct Supervisor {
@@ -543,7 +564,8 @@ impl Supervisor {
             let this = Arc::clone(self);
             tokio::spawn(async move {
                 this.settle_group_signal(evt.signal).await;
-                this.handle_exit(&evt.name, evt.exit_code).await;
+                let how = describe_exit(evt.exit_code, evt.signal, evt.lost.as_deref());
+                this.handle_exit(&evt.name, evt.exit_code, &how).await;
                 this.state_changed.notify_waiters();
             });
         }
@@ -951,7 +973,8 @@ impl Supervisor {
                     let signal = status.as_ref().ok().and_then(std::os::unix::process::ExitStatusExt::signal);
                     #[cfg(not(unix))]
                     let signal = None;
-                    let _ = exit_tx.send(ExitEvent { name: name_owned, exit_code, signal }).await;
+                    let lost = status.as_ref().err().map(|e| e.to_string());
+                    let _ = exit_tx.send(ExitEvent { name: name_owned, exit_code, signal, lost }).await;
                 }
                 _ = &mut kill_rx => {
                     let exit_code = stop_child(&mut child, pid, stop_timeout, &name_owned).await;
@@ -989,7 +1012,7 @@ impl Supervisor {
         true
     }
 
-    async fn handle_exit(self: &Arc<Self>, name: &str, exit_code: Option<i32>) {
+    async fn handle_exit(self: &Arc<Self>, name: &str, exit_code: Option<i32>, how: &str) {
         let procs = self.processes.read().await;
         let proc_arc = match procs.get(name) {
             Some(p) => p.clone(),
@@ -1041,7 +1064,7 @@ impl Supervisor {
         if self.is_shutting_down() {
             proc_arc.lock().await.state = ProcessState::Stopped;
             self.stormlog.archive_run(name, false).await;
-            info!(process = %name, code = ?exit_code, "process exited during shutdown");
+            info!(process = %name, code = ?exit_code, exit = %how, "process exited during shutdown");
             return;
         }
 
@@ -1065,7 +1088,7 @@ impl Supervisor {
         if let Some(policy) = restart_policy.filter(|_| !no_restart) {
             if failed {
                 self.echo_tail(name);
-                warn!(process = %name, code = ?exit_code, "process exited with error");
+                warn!(process = %name, code = ?exit_code, exit = %how, "process exited with error");
             }
             self.restart_with_backoff(&proc_arc, name, policy, success, ran_secs).await;
             return;
@@ -1092,7 +1115,7 @@ impl Supervisor {
             }
         } else {
             self.echo_tail(name);
-            warn!(process = %name, code = ?exit_code, "process exited with error");
+            warn!(process = %name, code = ?exit_code, exit = %how, "process exited with error");
             let mut detail = HashMap::new();
             if let Some(code) = exit_code {
                 detail.insert("code".to_string(), code.into());
@@ -3204,5 +3227,23 @@ mod status_probe_tests {
         assert!(n.has_liveness && n.liveness_config.is_some() && n.startup_probe.is_some());
         assert!(n.readiness_probe.is_none());
         assert!(!o.has_liveness && o.liveness_config.is_none(), "the retired table counts for nothing");
+    }
+}
+
+#[cfg(test)]
+mod describe_exit_tests {
+    use super::describe_exit;
+
+    #[test]
+    fn code_then_signal_then_lost() {
+        assert_eq!(describe_exit(Some(0), None, None), "exit code 0");
+        assert_eq!(describe_exit(Some(3), None, None), "exit code 3");
+        assert_eq!(describe_exit(None, Some(9), None), "killed by SIGKILL");
+        assert_eq!(describe_exit(None, Some(15), None), "killed by SIGTERM");
+        assert_eq!(
+            describe_exit(None, None, Some("No child processes (os error 10)")),
+            "exit status lost: No child processes (os error 10)"
+        );
+        assert_eq!(describe_exit(None, None, None), "no exit status");
     }
 }

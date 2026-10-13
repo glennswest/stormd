@@ -12,6 +12,8 @@ pub mod goldens;
 pub mod k8sevents;
 pub mod nodevars;
 pub mod probes;
+#[cfg(target_os = "linux")]
+pub mod reaper;
 pub mod sftp;
 pub mod shell;
 pub mod ssh;

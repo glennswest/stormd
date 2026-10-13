@@ -4,6 +4,19 @@
 
 <!-- New unreleased changes go here -->
 
+### 2026-10-13
+- **fix:** a supervised process's exit status could be taken by stormd's own
+  PID 1 zombie reaper (#61): it ran `waitpid(-1)` every second, and when it
+  won the race the supervisor's wait failed and the run was recorded `exited
+  with error code=None` — a one-shot that had finished cleanly counted as
+  failed (pvetest2, `stormcert-sa-stormoptions`). The reaper (`reaper.rs`) now
+  scans `/proc` for stormd's zombie children and reaps one only after it has
+  stayed unreaped 5 s; stormd's own waiters (supervisor, cron, probes) reap
+  theirs within milliseconds. Without `/proc` it falls back to the old
+  behaviour with one WARN. `process exited with error` (and `exited during
+  shutdown`) now carry `exit=`: the code, the signal by name, or `exit status
+  lost: <error>` — never a bare `code=None`.
+
 ### 2026-10-10
 - **build:** git dependencies pinned to a commit instead of following a branch
   (#50, compliance `git_dep_unpinned`, stormcentral#571): stormcast 3cec734,
