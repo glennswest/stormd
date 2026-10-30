@@ -953,6 +953,11 @@ Tab completion (commands, process names, paths), history, `|` pipes, and
 this at every start for `/bin`, `/usr/bin`, `/sbin` and `/usr/sbin`. Piped
 stdin works (`ls /app | grep server`).
 
+**`sleep` is capped at 60 s** (`shell/sys.rs`, "to prevent hung sessions") —
+also when it runs as a process's `command` through the applet link, so a
+`sleep 2147483647` gate exits and is restarted every minute (#67, stormcos#582).
+The issue asks for no cap as a supervised process, or a `wait_for_tcp`.
+
 **Exit status** (#31), as in coreutils and busybox: 0 on success, 1 on
 failure, 2 on bad usage (a missing argument). Some examples:
 - `stat /missing`, `cat /missing` and `ls /missing` exit 1. So does a `cat`

@@ -4,6 +4,12 @@
 
 <!-- New unreleased changes go here -->
 
+### 2026-10-30
+- **docs:** refresh from the code (no code change since #61): README notes the
+  applet `sleep` 60 s cap that breaks a supervised `sleep` gate (#67, verified
+  in `shell/sys.rs`); presentation status and planned slides now list the
+  open issues (#60, #62–#67) and drop #50/#52/#56, which are done.
+
 ### 2026-10-13
 - **fix:** a supervised process's exit status could be taken by stormd's own
   PID 1 zombie reaper (#61): it ran `waitpid(-1)` every second, and when it

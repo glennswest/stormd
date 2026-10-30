@@ -224,11 +224,16 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
   restart policy and events (#48); API health (#49); restart that waits for
   health (#44); applet exit codes and `test` (#31); cron timeout kills (#10);
   last words on stderr (#29); unknown config keys warned (#7).
-- **Docs** refreshed from the code 2026-10-09. `config/example.toml` is
+- **Docs** refreshed from the code 2026-10-30 (no code change since #61, 2026-10-13). `config/example.toml` is
   covered by a test.
 - **Open issues that matter:**
-  - **#50** (P0) — pin the git dependencies to a rev.
-  - **#52** — API health to a state file for PID 1.
+  - **#63** (P1) — russh 0.46 → ≥ 0.62.5 (SSH server advisories); **#62** —
+    rustls 0.23.37 → 0.23.45 (RUSTSEC-2026-0285, API listener).
+  - **#66** (P1) — a failed start names no process or path and stops every
+    later start; **#64** (P1) — the first API-health probe of a starting
+    process logs an ERROR `DOWN was=Unknown`.
+  - **#60** (P1) — remove stormd's own liveness checks (the kubelet's job).
+  - **#67** — `sleep` is capped at 60 s even as a supervised process.
   - **#30** — on a node, CloudID's address is stormimds, which does not know
     the node (decision pending in stormimds#9).
 
@@ -238,12 +243,15 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 
 From the open issues. **None of this works today:**
 
-- Git dependencies pinned to a rev (#50).
-- API health written to a state file (#52), and what was in flight on a
-  stall (#54).
-- Plugin proxy: WebSocket, absolute `Location` rewrite, body limit (#53).
-- Shell/dashboard liveness from `liveness_probe`, not the retired key (#56).
-- An exit under a group signal always logged before stormd exits (#55).
+- Remove stormd's own liveness checks (#60), TLS/SSH dependency bumps
+  (#62, #63).
+- Log capture that never splits a line under a burst (#65); a start failure
+  that names the process (#66); no ERROR for the first probe of a starting
+  process (#64).
+- Sleep without the 60 s cap, or `wait_for_tcp` (#67).
+- What was in flight on an API stall (#54); plugin proxy WebSocket, absolute
+  `Location` rewrite, body limit (#53); an exit under a group signal always
+  logged before stormd exits (#55).
 
 ---
 
