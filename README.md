@@ -1083,8 +1083,9 @@ serves the current state of every API.
 makes and stormcos binds in), stormd writes the current state to that file
 after every probe, changed or not. The file holds the
 `/api/v1/health/apis` body plus a top-level `updated` and each API's
-`interval_secs`. It is written to `<file>.tmp` and renamed, written empty at
-start, and left in place on stop. PID 1 merges it into the node's health
+`interval_secs`. It is written to `<file>.tmp` and renamed, one write at a
+time (probes that answer at once no longer race on the one `.tmp`, #69), so
+the file left last holds the newest state; it is written empty at start, and left in place on stop. PID 1 merges it into the node's health
 without TLS (stormpump#127). It ages the file by its modification time: one
 older than 3 × the largest `interval_secs` counts as stalled, so a hung
 stormd cannot look healthy.

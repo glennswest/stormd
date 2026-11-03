@@ -101,6 +101,12 @@ pub struct ApiHealthStore {
     map: Mutex<HashMap<(String, String), ApiHealth>>,
     /// Rewritten after every probe, when set (stormd#52).
     state_file: std::sync::OnceLock<PathBuf>,
+    /// Held across a whole state-file write: probes record concurrently, and
+    /// two writers of the one `<file>.tmp` race — the second rename finds
+    /// it gone (ENOENT, stormd#69).
+    publish_lock: Mutex<()>,
+    /// State-file writes that failed (for the tests; the log has a line each).
+    publish_failures: std::sync::atomic::AtomicU64,
     /// `<dir>/<process>.jsonl` gets each change, when `<dir>`'s parent exists.
     history_dir: PathBuf,
 }
@@ -113,7 +119,11 @@ impl Default for ApiHealthStore {
 
 impl ApiHealthStore {
     pub fn new(history_dir: PathBuf) -> Self {
-        Self { map: Mutex::new(HashMap::new()), state_file: std::sync::OnceLock::new(), history_dir }
+        Self { map: Mutex::new(HashMap::new()), state_file: std::sync::OnceLock::new(),
+            publish_lock: Mutex::new(()),
+            publish_failures: std::sync::atomic::AtomicU64::new(0),
+            history_dir,
+        }
     }
 
     /// Publish the state to `path` from now on, starting with an empty list
@@ -127,15 +137,19 @@ impl ApiHealthStore {
     /// Write the current state for PID 1: `{"updated", "items"}`, to
     /// `<file>.tmp` then renamed, so a reader never sees half a file. PID 1
     /// ages it by modification time, so this runs after every probe, changed
-    /// or not. A failure is a debug line: the probes go on.
+    /// or not. One writer at a time (stormd#69), and the state is read
+    /// under that lock, so the file left last holds the newest state. A
+    /// failure is a debug line: the probes go on.
     fn publish(&self) {
         let Some(path) = self.state_file.get() else { return };
+        let _one_writer = self.publish_lock.lock().unwrap_or_else(|e| e.into_inner());
         let body = serde_json::json!({ "updated": Utc::now(), "items": self.list() });
         let mut tmp = path.clone().into_os_string();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
         let r = std::fs::write(&tmp, body.to_string()).and_then(|_| std::fs::rename(&tmp, path));
         if let Err(e) = r {
+            self.publish_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::debug!(path = %path.display(), error = %e, "API health state file not written");
         }
     }
@@ -430,5 +444,43 @@ mod state_file_tests {
         assert_eq!((it["api"].as_str(), it["state"].as_str(), it["interval_secs"].as_u64()), (Some("volumes"), Some("healthy"), Some(7)));
         assert_eq!(it["checks"].as_u64(), Some(2));
         assert!(!tmp_left, "the temp file is renamed, not left");
+    }
+
+    /// stormd#69: probes that record at the same instant (stormcert's five)
+    /// used to share one `<file>.tmp`; the second rename failed ENOENT.
+    #[test]
+    fn concurrent_records_never_fail_a_write() {
+        let dir = std::env::temp_dir().join(format!("stormd-statefile-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("stormcert.json");
+        let store = std::sync::Arc::new(ApiHealthStore::new(dir.join("no-history/api")));
+        store.set_state_file(file.clone());
+        let (threads, rounds) = (8, 50);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(threads));
+        let handles: Vec<_> = (0..threads)
+            .map(|i| {
+                let (store, barrier) = (store.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let api: ApiProbe = toml::from_str(&format!("name = \"api{i}\"\nurl = \"http://x/\"\n")).unwrap();
+                    barrier.wait();
+                    for _ in 0..rounds {
+                        store.record("stormcert", &api, Probe::Answered { ms: 1, status: 200 }, Utc::now());
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let failures = store.publish_failures.load(std::sync::atomic::Ordering::Relaxed);
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        let tmp_left = dir.join("stormcert.json.tmp").exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(failures, 0, "no state-file write failed");
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), threads, "every API in the last file");
+        assert!(items.iter().all(|it| it["checks"].as_u64() == Some(rounds)), "the last file holds the final state");
+        assert!(!tmp_left);
     }
 }

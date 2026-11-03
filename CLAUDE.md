@@ -372,6 +372,14 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #69 (P0) — state file writes race on one `.tmp` (2026-11-03).**
+Concurrent `record()`s each `publish()`ed to `<file>.tmp` + rename → second
+rename ENOENT. Fix: `publish_lock` held across the write (state read inside
+it, so the last file is the newest); failure counter for the test.
+- [x] apihealth.rs fix + test `concurrent_records_never_fail_a_write`;
+      README, changelog
+- [ ] sc-build; golden; close
+
 **Issue #61 — a finished one-shot recorded `code=None` (2026-10-13) ✅ done.**
 Cause: the PID 1 reaper (`main.rs reap_zombies`) ran `waitpid(-1)` every
 second and could reap a child stormd itself waits on; `child.wait()` then

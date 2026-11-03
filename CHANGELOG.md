@@ -4,6 +4,16 @@
 
 <!-- New unreleased changes go here -->
 
+### 2026-11-03
+- **fix:** `[api_health] state_file`: probes that record at the same instant
+  (stormcert's five) each wrote the one `<file>.tmp` and renamed it, so the
+  second rename failed `No such file or directory` and that probe's state was
+  late until the next one (3× per boot on stormcert, #69). The write is now
+  serialized under a lock and reads the state inside it, so the file left
+  last holds the newest state. Test
+  `state_file_tests::concurrent_records_never_fail_a_write` (8 threads × 50
+  records, no failed write, final file holds every final count).
+
 ### 2026-10-30
 - **docs:** refresh from the code (no code change since #61): README notes the
   applet `sleep` 60 s cap that breaks a supervised `sleep` gate (#67, verified
