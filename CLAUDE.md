@@ -372,6 +372,21 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #71 — a missing `[api]` TLS pair must not stop stormd (2026-11-06) in progress.**
+The mint of the pair (stormcert-serving-stormd) runs under a stormd, so exit 1
+on no pair is a first-boot deadlock (stormcos#371). Decisions (the issue left
+the bad-pair case to us):
+- absent, unreadable, half-written or mismatched at start: all the same. One
+  WARN, processes start, port binds, handshakes fail until the pair loads, then
+  it is served with no restart. Never plain HTTP. Not exit on a bad pair: stormcert
+  writes the key first, and an exit there would kill the mint that repairs it.
+- with no pair held, every handshake retries the load (a chmod does not change
+  the stamp); logging stays once per change. A pair already served is kept
+  when a new one fails to load, as before.
+- [ ] tls.rs + main.rs; unit tests; integration test on the real binary
+      (`crates/stormd/tests/tls_no_pair.rs`); README, changelog
+- [ ] sc-build + negative control; golden; close; tell stormcos#371
+
 **Issue #69 (P0) — state file writes race on one `.tmp` (2026-11-03) ✅ done.**
 Concurrent `record()`s each `publish()`ed to `<file>.tmp` + rename → second
 rename ENOENT. Fix: `publish_lock` held across the write (state read inside
