@@ -5,6 +5,11 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-06
+- **docs:** fastetcd, controller-manager and scheduler are static pods with no
+  stormd: README, presentation and CLAUDE.md no longer list ports 9081/9083/9084
+  or call stormd their PID 1 (#68). README notes the `/system-data` history
+  default is not where stormblock mounts it (#57). Docs re-checked against the
+  code since 2026-10-30 (#69, #71 already documented with their changes).
 - **fix:** `[api]` TLS: a pair that does not load no longer stops stormd (#71,
   stormcos#371). The one-shot that mints a node's pair runs under a stormd, so
   exit 1 on no pair was a first-boot deadlock for stormcert's stormd and a

@@ -372,6 +372,12 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Docs refresh, fourth round (2026-11-06) ✅ done.** Code since 2026-10-30 is #69
+and #71 only (both documented in their commits). Fixed #68 (static pods: ports
+9081/9083/9084 and "PID 1 of fastetcd/control plane" removed) and the #57 doc
+halves (system-data mount path, sc-build on build VMs). Nothing the docs promise
+is missing from the code; open issues #53–#67 already cover the gaps.
+
 **Issue #71 — a missing `[api]` TLS pair must not stop stormd (2026-11-06) ✅ done.**
 The mint of the pair (stormcert-serving-stormd) runs under a stormd, so exit 1
 on no pair is a first-boot deadlock (stormcos#371). Decisions (the issue left
@@ -856,7 +862,7 @@ Decisions (from the code, not asked):
   print markers). stormd's job is supervising processes in a container, so
   that is what runs; it needs no hardware (`requires: []`) and no cluster
   API (`automountServiceAccountToken: false`).
-- The node's own stormds (control-plane ports 9081–9085, `/api/v1/health`
+- The node's own stormds (control-plane ports 9081–9085, those with no stormd skipped, `/api/v1/health`
   is public) are probed read-only; none answering is a **skip**.
 - Packaging: stormd needs `stormpull` over `ssh://` (private), so no
   in-container cargo build. `test/build.sh` builds static musl binaries on
@@ -1057,8 +1063,8 @@ vendor/            — vendored russh-sftp
 ### Build & Test Commands
 ```bash
 # Rust — push first, then from the checkout. Builds the pushed commit on
-# dev.g8.lo as an unprivileged user in a scratch dir; never build here, never
-# as root, and there is no checkout on dev.
+# a fresh build VM as the unprivileged stormbuild user (dev.g8.lo is retired);
+# never build here, never as root.
 sc-build                          # cargo build && cargo test
 sc-build 'cargo test -p stormd'   # any command
 sc-build 'cargo clippy'
@@ -1083,7 +1089,7 @@ Main must still always build. Sibling crates (stormcast, stormview,
 stormpull) are pinned by `rev = "<sha>"` in the manifests (#50: the
 compliance gate refuses an unpinned git source); a fix there means moving
 the `rev` and committing the lock with it.
-stormd's API port per container: fastetcd 9081, rustkube 9082–9085, service
+stormd's API port per container: stormcert unit 9082, rustkube-node 9085 (fastetcd 9081 and 9083/9084 are static pods now, no stormd; #68), service
 goldens port+100.
 
 ### Version Locations

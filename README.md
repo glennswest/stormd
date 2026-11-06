@@ -5,8 +5,10 @@ supervises one or more processes, keeps their logs, and answers questions
 about them over a REST API, a web console, SSH and a TUI client.
 
 In stormcos, stormd is PID 1 of every supervised component container —
-fastetcd, the rustkube control plane, the kubelet, stormdrive, stormstorage,
-stormconsole, cadvisor, stormlb and the rest (see [How it ships](#how-it-ships)).
+the kubelet, the stormcert unit, stormdrive, stormstorage, stormconsole,
+cadvisor, stormlb and the rest. (fastetcd and the rustkube apiserver,
+controller-manager and scheduler are kubelet static pods whose command is the
+binary itself, so they run without stormd; stormcos#559, #68) (see [How it ships](#how-it-ships)).
 
 This README is written from the code at v0.8.0 (refreshed 2026-10-09). Where something is parsed but
 does nothing, or does something other than it says, it says so and names the issue.
@@ -162,7 +164,7 @@ dies in the pod.
 
 | suite | budget | covers |
 |---|---|---|
-| `short` | < 2 min | API up; a dependent waits for a tcp ready probe and for a one-shot to finish; a crash is restarted; stdout and stderr reach the logs API; SIGTERM exits 0 with no process left behind; the node's own stormds (ports 9081–9085) answer `/api/v1/health` — a skip where none do |
+| `short` | < 2 min | API up; a dependent waits for a tcp ready probe and for a one-shot to finish; a crash is restarted; stdout and stderr reach the logs API; SIGTERM exits 0 with no process left behind; the node's own stormds (ports 9081–9085; those with no stormd are skipped) answer `/api/v1/health` — a skip where none do |
 | `medium` | < 30 min | a failed one-shot holds its dependents, and SIGTERM still stops stormd; `no_restart_exit_codes` hold and fail; `on_failure = "fail"`; `max_restarts`; `on_exit = "restart"`; a liveness probe that keeps failing restarts; API stop/start/restart and shutdown with an exit code; bearer-token auth; `/metrics` (with the worker's own RSS, CPU and fds); the component feed; cron; a config that does not parse exits 1; run as `ps` (not an applet), exits 127 and spawns nothing; `wait_for_files` holds the start until the file exists; a taken API port exits 1 with nothing started; `restart?wait=healthy` answers 200 only after the new run's probe and 504 naming what it waits on |
 | `long` | the night window | waves of processes sized from the pod's own CPU, memory and pid limits (mostly long-running, some crash-once, one-shots with dependents), started, settled and stopped with SIGTERM; one resident stormd has its processes restarted through the API every wave. Per wave: settle time, stop time, leftover processes, the resident's RSS and fds. A wave twice as slow as the first of its size, a leftover, or growing residue fails |
 
@@ -222,12 +224,13 @@ every golden still carried stormd@8edb89c (09-29).
 
 ### stormd's API port on a node
 
-Every stormd on a node shares the host network, so each has its own port:
+Every stormd on a node shares the host network, so each has its own port.
+9081 (fastetcd), 9083 and 9084 (controller-manager, scheduler) are gone: those
+are static pods now, with no stormd (#68):
 
 | Container | stormd API |
 |---|---|
-| fastetcd | 9081 |
-| rustkube-apiserver / controller-manager / scheduler | 9082 / 9083 / 9084 |
+| stormcert unit (the `rustkube-*` stormcert image) | 9082 |
 | rustkube-node (kubelet, kube-proxy) | 9085 |
 | `kind = "service"` goldens (stormdrive, stormstorage, stormconsole, cadvisor, stormlb, …) | the service's port + 100 (stormdrive 9192, stormstorage 9193, stormconsole 9194) |
 
@@ -1083,7 +1086,9 @@ token_file = "/run/stormblock/engine/api_token"
 `stalled`/`down` ERROR. The line names the process, the API, the URL, the
 latency or error, the state before and how long it lasted. Each change is
 appended to `/system-data/history/api/<process>.jsonl` when
-`/system-data/history` exists (stormcos#456). `GET /api/v1/health/apis`
+`/system-data/history` exists (stormcos#456). stormblock mounts system-data
+at `/run/stormblock/system-data`, so on a node the default directory does not
+exist and no history is kept until that path is configured or bound (#57). `GET /api/v1/health/apis`
 serves the current state of every API.
 
 **Published for the node** (#52). With `[api_health] state_file = "…"`

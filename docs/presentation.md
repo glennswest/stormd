@@ -51,8 +51,9 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 ```
 
 - **Also pinned at build time:** stormpull (image pulling, from the stormbase repo).
-- **Also runs under stormd, with no edge in the graph (stormcentral#24):** fastetcd,
-  rustkube-node and cadvisor. Their goldens are stormdbase goldens too.
+- **Also runs under stormd, with no edge in the graph (stormcentral#24):** rustkube-node
+  and cadvisor (fastetcd and the apiserver, controller-manager and scheduler are
+  kubelet static pods now, with no stormd). Their goldens are stormdbase goldens too.
 - **Not under stormd:** stormpump (the host PID 1), stormblock and the
   registry binary, which run bare.
 
@@ -182,7 +183,7 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 | **Auth/TLS** | `[api] tls_cert_file`/`tls_key_file` (re-read on rotation), `client_ca_file` (client certs), `token_file` (bearer); with any credential, nothing but health is anonymous (#32) |
 | **Metrics** | `GET /metrics`, Prometheus, behind the same auth: `stormd_up`, `stormd_process_state`, `_restarts_total`, `_crashes_total`, `_uptime_seconds`, `_liveness_failures_total`, each process's RSS/CPU/fds (#33), … |
 | **Out** | UDP `239.255.42.1:5514` (logs), a webhook, a backup URL, CloudID, registries |
-| **Ports on a node** | fastetcd 9081 · rustkube 9082–9085 · service goldens: the service's port + 100 |
+| **Ports on a node** | stormcert 9082 · kubelet 9085 (9081/9083/9084 gone with the static pods) · service goldens: the service's port + 100 |
 
 ---
 
