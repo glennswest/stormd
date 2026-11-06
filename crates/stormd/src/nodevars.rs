@@ -60,8 +60,10 @@ pub fn vars() -> HashMap<String, String> {
     v
 }
 
-/// The names stormd fills in. Any other `${…}` is left for whoever reads it
-/// (a shell script's own `${HOME}`, say).
+/// The names stormd knows for every process. In `args`, a process's own `env`
+/// and `env_default` keys are filled in too (`supervisor::args_vars`, stormd#72).
+/// Any other `${…}` is left for whoever reads it (a shell script's own
+/// `${HOME}`, say).
 pub const NAMES: [&str; 2] = ["NODE_IP", "NODE_NAME"];
 
 /// stormd's names still written as `${NAME}` in an expanded string — the

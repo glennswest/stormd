@@ -28,7 +28,8 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
   The startup probe gates the others, liveness restarts, readiness only
   marks not ready (#48).
 - **Fills in node values** — `${NODE_IP}` and `${NODE_NAME}` in a process's
-  `args` and `env` values are expanded each time it is spawned.
+  `args` and `env` values are expanded each time it is spawned, as are the
+  process's own `env`/`env_default` keys in its `args`.
 - **Node-overridable defaults** — `env_default` entries apply only when stormd
   did not inherit the key, so a node's env.d can override them.
 - **API health** — a process declares its real APIs; stormd times them
@@ -397,7 +398,7 @@ file does not stop it either: it is skipped, and taken up when it appears.
 |---|---|---|
 | `name` | required | unique |
 | `command` | `""` | binary path; required unless `image` is set |
-| `args` | `[]` | `${NODE_IP}` / `${NODE_NAME}` expanded at spawn |
+| `args` | `[]` | `${NODE_IP}` / `${NODE_NAME}` and the process's own `env` / `env_default` keys expanded at spawn |
 | `env` | `{}` | added to stormd's own environment, over what it inherited; values expanded like `args` |
 | `env_default` | `{}` | each entry set only when its key is **not** in stormd's own environment (an inherited empty value counts as set), so the node can override it — stormpump's `env.d/<spec>` reaches stormd as its environment. `env` wins over both. Values expanded like `args` |
 | `working_dir` | stormd's | |
@@ -661,8 +662,31 @@ node) — waiting, not starting it`, and waits, re-resolving every second. It
 starts the process when the value appears (DHCP coming good), or gives up when
 shutdown begins. This applies at the first start and before every restart.
 Waiting counts nothing extra toward `max_restarts`. An API start is refused
-with the same message. Any other `${…}`, such as a shell script's own
-`${HOME}`, is passed through untouched.
+with the same message.
+
+**A process's own keys in its `args` (#72).** `${X}` in an argument is also
+replaced at every spawn when the process declares `X` in `env` or `env_default`,
+with the value the process would get: `env`, then what stormd inherited (the
+node's `env.d/<spec>`), then `env_default`. So one golden can take a per-node
+value in an argument:
+
+```toml
+args = ["--ip", "10.96.0.1,${NODE_IP},127.0.0.1,${CLUSTER_VIP}"]
+env_default = { CLUSTER_VIP = "" }
+```
+
+An empty value is a value: it expands to nothing, an argument that is only
+`${X}` stays an empty argument, and the spawn is not held. A value is put in as
+it is and not read again for more `${…}`. `${NODE_IP}` and `${NODE_NAME}` are
+always the node's, even if a process declares those keys. This is `args` only:
+an `env` value can use the two node names but not another key, and `command` is
+never expanded. A process's arguments are readable in `/proc/<pid>/cmdline`, so
+do not put a secret's key in them. Because stormd replaces a declared `${X}`
+before the process runs, a shell script in `args` that assigns its own `X` must
+not declare `X` too.
+
+Any other `${…}`, such as a shell script's own `${HOME}`, is passed through
+untouched, even when stormd inherited that name.
 
 ## Logging
 

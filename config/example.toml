@@ -67,7 +67,8 @@ password = "stormd"                 # the cloud_id is accepted as well
 [[process]]
 name = "db"
 command = "/app/db"
-args = ["--data-dir", "/data/db", "--listen", "${NODE_IP}:5432"]  # ${NODE_IP}/${NODE_NAME} filled at spawn
+# ${NODE_IP}/${NODE_NAME} and this process's own env/env_default keys filled at spawn
+args = ["--data-dir", "/data/db", "--listen", "${NODE_IP}:5432"]
 on_failure = "restart"
 restart_delay_secs = 3
 max_restarts = 10

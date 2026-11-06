@@ -5,6 +5,12 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-06
+- **feat:** `${X}` in a process's `args` is replaced when the process declares
+  `X` in `env` or `env_default`, with the value it would get: `env`, then what
+  stormd inherited (`env.d`), then the default (#72, stormcos#362). An empty
+  value expands to nothing and does not hold the spawn. An undeclared `${…}` is
+  left alone, and `${NODE_IP}`/`${NODE_NAME}` stay the node's. New medium test
+  `args-expand-declared` and helper mode `args-to`.
 - **docs:** fastetcd, controller-manager and scheduler are static pods with no
   stormd: README, presentation and CLAUDE.md no longer list ports 9081/9083/9084
   or call stormd their PID 1 (#68). README notes the `/system-data` history

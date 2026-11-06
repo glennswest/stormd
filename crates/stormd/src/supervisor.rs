@@ -839,8 +839,14 @@ impl Supervisor {
         // At spawn rather than at load, so a node that changes address picks
         // the new one up on the next restart rather than at the next boot.
         let vars = crate::nodevars::vars();
+        let arg_values = args_vars(
+            &config.env,
+            &config.env_default,
+            |k| std::env::var_os(k).map(|v| v.to_string_lossy().into_owned()),
+            &vars,
+        );
         let args: Vec<String> =
-            config.args.iter().map(|a| crate::nodevars::expand(a, &vars)).collect();
+            config.args.iter().map(|a| crate::nodevars::expand(a, &arg_values)).collect();
 
         let mut cmd = Command::new(&config.command);
         cmd.args(&args);
@@ -2031,6 +2037,96 @@ fn process_env(
     out
 }
 
+/// What `${NAME}` means in a process's `args` (stormd#72): the node's values,
+/// and every key the process declares in `env` or `env_default`, with the value
+/// the process would get: `env`, then what stormd inherited, then the default.
+/// An empty value is a value. An undeclared name is not here, so a shell
+/// script's `${HOME}` is left for the shell.
+///
+/// `${NODE_IP}` and `${NODE_NAME}` stay the node's even if a process declares
+/// the same key, so what they mean in an argument does not depend on the
+/// process, and `node_vars_missing` holds a process whose node has no value.
+fn args_vars(
+    env: &HashMap<String, String>,
+    env_default: &HashMap<String, String>,
+    inherited: impl Fn(&str) -> Option<String>,
+    vars: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = env_default
+        .keys()
+        .filter_map(|k| inherited(k).map(|v| (k.clone(), v)))
+        .collect();
+    out.extend(process_env(env, env_default, |k| inherited(k).is_some(), vars));
+    out.extend(vars.iter().map(|(k, v)| (k.clone(), v.clone())));
+    out
+}
+
+#[cfg(test)]
+mod args_vars_tests {
+    use super::args_vars;
+    use crate::nodevars::expand;
+    use std::collections::HashMap;
+
+    fn m(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    /// `arg` as the process would see it, on a node at 10.0.0.7.
+    fn arg(arg: &str, env: &[(&str, &str)], def: &[(&str, &str)], inherited: &[(&str, &str)]) -> String {
+        let inherited = m(inherited);
+        let values = args_vars(&m(env), &m(def), |k| inherited.get(k).cloned(), &m(&[("NODE_IP", "10.0.0.7")]));
+        expand(arg, &values)
+    }
+
+    /// stormcos#362: the list stormcert-init is given, on a node with no VIP.
+    #[test]
+    fn an_empty_default_gives_an_empty_string() {
+        let got = arg("10.96.0.1,${NODE_IP},127.0.0.1,${CLUSTER_VIP}", &[], &[("CLUSTER_VIP", "")], &[]);
+        assert_eq!(got, "10.96.0.1,10.0.0.7,127.0.0.1,");
+    }
+
+    #[test]
+    fn an_inherited_value_beats_the_default() {
+        let got = arg("${CLUSTER_VIP}", &[], &[("CLUSTER_VIP", "")], &[("CLUSTER_VIP", "192.168.8.9")]);
+        assert_eq!(got, "192.168.8.9");
+    }
+
+    #[test]
+    fn an_inherited_empty_value_beats_the_default() {
+        assert_eq!(arg("[${X}]", &[], &[("X", "default")], &[("X", "")]), "[]");
+    }
+
+    #[test]
+    fn env_beats_inherited_and_default() {
+        assert_eq!(arg("${X}", &[("X", "env")], &[("X", "default")], &[("X", "inherited")]), "env");
+    }
+
+    #[test]
+    fn an_undeclared_name_is_left_alone_even_when_inherited() {
+        let got = arg("echo ${Y} ${HOME}", &[("X", "1")], &[("Z", "2")], &[("HOME", "/root"), ("Y", "y")]);
+        assert_eq!(got, "echo ${Y} ${HOME}");
+    }
+
+    #[test]
+    fn a_default_is_expanded_as_the_process_gets_it() {
+        assert_eq!(arg("${PEER}", &[], &[("PEER", "${NODE_IP}:7000")], &[]), "10.0.0.7:7000");
+        assert_eq!(arg("${PEER}", &[("PEER", "https://${NODE_IP}")], &[], &[]), "https://10.0.0.7");
+    }
+
+    /// One pass: what a value says is the value, not more variables.
+    #[test]
+    fn a_value_is_not_expanded_again() {
+        assert_eq!(arg("${X}", &[], &[("X", "")], &[("X", "${NODE_IP}")]), "${NODE_IP}");
+        assert_eq!(arg("${X}", &[("X", "${Y}")], &[("Y", "y")], &[]), "${Y}");
+    }
+
+    #[test]
+    fn the_node_values_stay_the_node_s() {
+        assert_eq!(arg("${NODE_IP}", &[("NODE_IP", "1.1.1.1")], &[], &[]), "10.0.0.7");
+        assert_eq!(arg("${NODE_IP}", &[], &[("NODE_IP", "1.1.1.1")], &[("NODE_IP", "2.2.2.2")]), "10.0.0.7");
+    }
+}
+
 #[cfg(test)]
 mod env_tests {
     use super::process_env;
@@ -2759,6 +2855,18 @@ mod node_vars_tests {
     fn other_names_are_the_process_own() {
         let c = cfg("args = [\"-c\", \"echo ${HOME} $NODE_IP ${NODE_IPV6}\"]\nenv = { X = \"${PATH}\" }\n");
         assert_eq!(node_vars_missing(&c, &no_ip()), None);
+    }
+
+    /// stormd#72: a declared key in `args` is not a node value. Empty does not
+    /// hold the spawn; a default that needs the address does, through its value.
+    #[test]
+    fn a_declared_key_in_args_holds_the_spawn_only_through_its_value() {
+        let c = cfg("args = [\"--ip\", \"${NODE_NAME},${CLUSTER_VIP}\"]\nenv_default = { CLUSTER_VIP = \"\" }\n");
+        assert_eq!(node_vars_missing(&c, &no_ip()), None);
+
+        let c = cfg("args = [\"${STORMD_TEST_72_NOT_INHERITED}\"]\nenv_default = { STORMD_TEST_72_NOT_INHERITED = \"${NODE_IP}\" }\n");
+        assert!(node_vars_missing(&c, &no_ip()).is_some());
+        assert_eq!(node_vars_missing(&c, &with_ip()), None);
     }
 
     #[test]

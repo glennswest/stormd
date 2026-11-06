@@ -119,7 +119,8 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 - **`${NODE_IP}` / `${NODE_NAME}`** in args and env are filled in at every
   spawn, so a control plane advertises an address other nodes can reach.
 - **`env_default`** — set only when stormd did not inherit the key, so a
-  node's env.d overrides the golden's default; `env` wins over both.
+  node's env.d overrides the golden's default; `env` wins over both. A
+  declared key is also filled in the process's `args` (#72).
 - **`wait_for_files`** — first start only once named files exist (a minted
   cert pair), no restart or cool-off counted (#38).
 - **Shutdown** (SIGTERM, SIGINT, API, container failure) stops the start

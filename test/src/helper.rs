@@ -37,6 +37,15 @@ pub fn run(args: &[String]) -> i32 {
             record_pid();
             forever();
         }
+        // Write the arguments after `path` to it, one per line, and exit 0: what
+        // stormd really passed (stormd#72).
+        "args-to" => match std::fs::write(arg(1), args[2.min(args.len())..].join("\n")) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("cannot write {}: {e}", arg(1));
+                1
+            }
+        },
         // A one-shot's work: wait `ms`, create `path`, exit 0.
         "touch-after" => {
             std::thread::sleep(Duration::from_millis(arg(1).parse().unwrap_or(0)));

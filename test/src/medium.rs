@@ -27,6 +27,7 @@ pub fn run(env: &Env, r: &mut Report) {
     r.run("bad-config-refused", || bad_config(env));
     r.run("unknown-argv0-refused", || unknown_argv0(env));
     r.run("wait-for-files", || wait_for_files(env));
+    r.run("args-expand-declared", || args_expand_declared(env));
     r.run("api-port-taken", || api_port_taken(env));
     r.run("restart-wait-healthy", || restart_wait_healthy(env));
     r.run("node-stormd", || crate::short::node_stormd(env));
@@ -443,6 +444,32 @@ fn wait_for_files(env: &Env) -> Outcome {
             Ok(p) if p["restarts"] == 0 => Outcome::Pass("pending 1 s without the file, running once it appeared, 0 restarts".into()),
             Ok(p) => Outcome::Fail(format!("running, but restarts = {}", p["restarts"])),
             Err(e) => Outcome::Fail(e),
+        }
+    })
+}
+
+/// `${X}` in `args`: an empty default gives an empty string, an inherited value
+/// beats the default (the harness starts stormd with `RUST_LOG=info`), `env`
+/// wins, and an undeclared name is left alone (stormd#72).
+fn args_expand_declared(env: &Env) -> Outcome {
+    let body = proc(
+        "p",
+        "\"args-to\", \"{dir}/args\", \"[${EMPTY}]\", \"${RUST_LOG}\", \"${SET}\", \"${HOME_NOT_DECLARED}\"",
+        "on_exit = \"stop\"\nenv = { SET = \"from-env\" }\nenv_default = { EMPTY = \"\", RUST_LOG = \"default\", SET = \"default\" }",
+    );
+    with(env, "args", &body, Opts::default(), |sd| {
+        if let Err(e) = sd.wait_state("p", "stopped", S(10)) {
+            return Outcome::Fail(e);
+        }
+        let got = match std::fs::read_to_string(sd.dir.join("args")) {
+            Ok(s) => s,
+            Err(e) => return Outcome::Fail(format!("no args file: {e}")),
+        };
+        let want = "[]\ninfo\nfrom-env\n${HOME_NOT_DECLARED}";
+        if got == want {
+            Outcome::Pass("empty default, inherited, env and undeclared all as asked".into())
+        } else {
+            Outcome::Fail(format!("process got {got:?}, wanted {want:?}"))
         }
     })
 }
