@@ -372,7 +372,7 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #72 — a process's own `env`/`env_default` keys expanded in its `args` (2026-11-06), in progress.**
+**Issue #72 — a process's own `env`/`env_default` keys expanded in its `args` (2026-11-06) ✅ done.**
 For stormcos#362 (`${CLUSTER_VIP}` from env.d). Decisions (from the issue and code, not asked):
 - value = what the process would get: `env` > inherited > `env_default` (expanded
   as today); args only, not `env` values or `command`
@@ -381,8 +381,13 @@ For stormcos#362 (`${CLUSTER_VIP}` from env.d). Decisions (from the issue and co
 - one pass: a value's own `${…}` is not expanded again (so an inherited literal
   `${NODE_IP}` neither expands nor blocks the spawn)
 - stormcos has no shell script in `args` that a declared key would change
-- [ ] supervisor + unit tests; medium `args-expand-declared`; README, example.toml,
-      presentation, changelog; sc-build; golden; tell stormcos#362
+- [x] supervisor + unit tests; medium `args-expand-declared`; README, example.toml,
+      presentation, changelog
+- [x] sc-build on 5cfd412: 124 stormd tests, medium 20 pass + 1 skip (no node
+      stormd), short passes. Negative control (spawn with node values only):
+      `args-expand-declared` fails. Live: real stormd, `/bin/sh` shows the list
+      with VIP empty and with CLUSTER_VIP inherited; `${Y}` untouched
+- [x] golden requested; closed; told stormcos#362
 
 **Docs refresh, fourth round (2026-11-06) ✅ done.** Code since 2026-10-30 is #69
 and #71 only (both documented in their commits). Fixed #68 (static pods: ports
