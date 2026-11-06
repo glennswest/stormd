@@ -108,6 +108,17 @@ impl Instance {
         assert_eq!(r.status(), 200);
     }
 
+    /// `stormd --healthcheck` against this instance: did it say healthy?
+    fn healthcheck(&self) -> bool {
+        Command::new(env!("CARGO_BIN_EXE_stormd"))
+            .args(["--healthcheck", "--healthcheck-port", &self.port.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    }
+
     /// The process's run count and state, over the API.
     async fn process(&self, name: &str) -> serde_json::Value {
         self.https(&format!("/api/v1/processes/{}", name)).await.unwrap().json().await.unwrap()
@@ -161,6 +172,7 @@ async fn the_stormd_that_mints_the_pair_starts_and_then_serves_it() {
 
     sd.assert_handshake_fails("with the key alone").await;
     sd.assert_no_plain_http("with the key alone");
+    assert!(!sd.healthcheck(), "--healthcheck passed with no pair");
     sd.assert_alive("with the key alone");
     assert!(sd.output().contains("API TLS pair not loaded yet"), "no WARN:\n{}", sd.output());
 
@@ -177,6 +189,7 @@ async fn the_stormd_that_mints_the_pair_starts_and_then_serves_it() {
     }
     sd.assert_https_ok().await;
     sd.assert_no_plain_http("with the pair");
+    assert!(sd.healthcheck(), "--healthcheck failed with the pair");
 
     sd.assert_alive("after the pair");
     assert_eq!(sd.child.id(), pid);
