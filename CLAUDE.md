@@ -372,6 +372,18 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #72 — a process's own `env`/`env_default` keys expanded in its `args` (2026-11-06), in progress.**
+For stormcos#362 (`${CLUSTER_VIP}` from env.d). Decisions (from the issue and code, not asked):
+- value = what the process would get: `env` > inherited > `env_default` (expanded
+  as today); args only, not `env` values or `command`
+- `${NODE_IP}`/`${NODE_NAME}` stay the node's even if a process declares that
+  name: every config today keeps its meaning, and the #3 check is unchanged
+- one pass: a value's own `${…}` is not expanded again (so an inherited literal
+  `${NODE_IP}` neither expands nor blocks the spawn)
+- stormcos has no shell script in `args` that a declared key would change
+- [ ] supervisor + unit tests; medium `args-expand-declared`; README, example.toml,
+      presentation, changelog; sc-build; golden; tell stormcos#362
+
 **Docs refresh, fourth round (2026-11-06) ✅ done.** Code since 2026-10-30 is #69
 and #71 only (both documented in their commits). Fixed #68 (static pods: ports
 9081/9083/9084 and "PID 1 of fastetcd/control plane" removed) and the #57 doc
