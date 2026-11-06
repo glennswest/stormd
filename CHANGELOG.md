@@ -4,6 +4,19 @@
 
 <!-- New unreleased changes go here -->
 
+### 2026-11-06
+- **fix:** `[api]` TLS: a pair that does not load no longer stops stormd (#71,
+  stormcos#371). The one-shot that mints a node's pair runs under a stormd, so
+  exit 1 on no pair was a first-boot deadlock for stormcert's stormd and a
+  restart loop for the others. Absent, unreadable, half-written or mismatched
+  at start now all mean the same: one WARN, processes start, the port binds,
+  handshakes fail until the pair loads, and it is then served with no restart.
+  Nothing is ever answered in the clear. Until then `--healthcheck` and https
+  probes of that stormd fail. New test `crates/stormd/tests/tls_no_pair.rs`
+  runs the real binary through it.
+- **docs:** README: the client CA is re-read when it changes (#59), not read at
+  start.
+
 ### 2026-11-03
 - **fix:** `[api_health] state_file`: probes that record at the same instant
   (stormcert's five) each wrote the one `<file>.tmp` and renamed it, so the

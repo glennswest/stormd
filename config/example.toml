@@ -17,6 +17,7 @@ log_dir = "/var/log/stormd"     # per-process log files + .cloudid; put it on a 
 [api]
 bind = "0.0.0.0:9080"           # REST API, WebSockets, /metrics and the web UI
 # TLS: both or neither. Re-read when either file changes (stormcert rotation).
+# Not there yet at start: processes run, handshakes fail until the pair loads.
 # tls_cert_file = "/data/stormcert/serving.crt"
 # tls_key_file = "/data/stormcert/serving.key"
 # Any credential below turns authentication on; only /api/v1/health, /healthz,

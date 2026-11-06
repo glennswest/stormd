@@ -159,8 +159,9 @@ async fn main() {
         }
     };
 
-    // API TLS (stormd#32) — loaded before anything is spawned, so a missing or
-    // mismatched pair stops stormd here instead of leaving processes behind.
+    // API TLS (stormd#32). A pair that does not load does not stop stormd: its
+    // handshakes fail until it does (stormd#71), because the one-shot minting
+    // the pair may be one of this stormd's own processes.
     let api_tls = match stormd::tls::server_config(&config.api) {
         Ok(t) => t,
         Err(e) => {

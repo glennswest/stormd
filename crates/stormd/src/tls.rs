@@ -8,8 +8,13 @@
 //! HTTP/1.1 only (WebSocket upgrades included). The certificate and key are
 //! re-read when either file changes, so a pair stormcert rotates is served
 //! from the next handshake without restarting stormd; a pair that fails to
-//! load keeps the previous one and logs once per change. The client CA is
-//! read at startup.
+//! load keeps the previous one and logs once per change. The client CAs are
+//! re-read the same way (stormd#59).
+//!
+//! A pair that does not load at start is "not yet", never fatal (stormd#71):
+//! the one-shot that mints it runs under a stormd, so an exit here is a
+//! deadlock. The port still speaks only TLS: handshakes fail until the pair
+//! loads, and nothing is ever answered in the clear.
 
 use crate::auth::ClientCertVerified;
 use rustls::crypto::CryptoProvider;
@@ -61,42 +66,53 @@ fn load_certified_key(
     Ok(ck)
 }
 
-/// Serves the configured pair, reloading it when either file changes.
+/// Serves the configured pair, reloading it when either file changes. Holds
+/// no pair until one has loaded: the handshake then fails (stormd#71).
 #[derive(Debug)]
 struct ReloadingCert {
     cert: PathBuf,
     key: PathBuf,
     provider: Arc<CryptoProvider>,
-    current: Mutex<((Stamp, Stamp), Arc<CertifiedKey>)>,
+    current: Mutex<((Stamp, Stamp), Option<Arc<CertifiedKey>>)>,
 }
 
 impl ReloadingCert {
-    fn load(cert: PathBuf, key: PathBuf, provider: Arc<CryptoProvider>) -> anyhow::Result<Self> {
+    fn new(cert: PathBuf, key: PathBuf, provider: Arc<CryptoProvider>) -> Self {
         let stamps = (stamp(&cert), stamp(&key));
-        let ck = load_certified_key(&cert, &key, &provider)?;
-        Ok(Self {
+        let ck = match load_certified_key(&cert, &key, &provider) {
+            Ok(ck) => Some(Arc::new(ck)),
+            Err(e) => {
+                warn!(error = %e, "API TLS pair not loaded yet — processes start as usual; handshakes fail until it loads, and nothing is served in the clear");
+                None
+            }
+        };
+        Self {
             cert,
             key,
             provider,
-            current: Mutex::new((stamps, Arc::new(ck))),
-        })
+            current: Mutex::new((stamps, ck)),
+        }
     }
 
-    fn get(&self) -> Arc<CertifiedKey> {
+    fn get(&self) -> Option<Arc<CertifiedKey>> {
         let stamps = (stamp(&self.cert), stamp(&self.key));
         let mut current = self.current.lock().unwrap_or_else(|e| e.into_inner());
-        if current.0 != stamps {
-            // Record the stamps either way: a failed load is logged once per
-            // change, not on every handshake.
+        let changed = current.0 != stamps;
+        // Nothing to serve: try on every handshake, since a repair need not
+        // change the stamps (a chmod, a directory made readable). Logging
+        // stays once per change.
+        if changed || current.1.is_none() {
             current.0 = stamps;
             match load_certified_key(&self.cert, &self.key, &self.provider) {
                 Ok(ck) => {
-                    info!(cert = %self.cert.display(), "API TLS certificate reloaded");
-                    current.1 = Arc::new(ck);
+                    info!(cert = %self.cert.display(), "API TLS certificate loaded");
+                    current.1 = Some(Arc::new(ck));
                 }
-                Err(e) => {
-                    warn!(error = %e, "API TLS certificate changed but does not load — still serving the previous one")
-                }
+                Err(e) if changed => match current.1 {
+                    Some(_) => warn!(error = %e, "API TLS certificate changed but does not load — still serving the previous one"),
+                    None => warn!(error = %e, "API TLS pair still does not load — handshakes fail until it does"),
+                },
+                Err(_) => {}
             }
         }
         current.1.clone()
@@ -105,7 +121,7 @@ impl ReloadingCert {
 
 impl ResolvesServerCert for ReloadingCert {
     fn resolve(&self, _hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
-        Some(self.get())
+        self.get()
     }
 }
 
@@ -270,12 +286,13 @@ impl ClientCertVerifier for NoClientCerts {
 }
 
 /// The rustls server config for `[api]`, or None when TLS is not configured.
+/// A pair that does not load is not an error here (stormd#71).
 pub fn server_config(api: &crate::config::ApiConfig) -> anyhow::Result<Option<Arc<ServerConfig>>> {
     let (Some(cert), Some(key)) = (&api.tls_cert_file, &api.tls_key_file) else {
         return Ok(None);
     };
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let resolver = Arc::new(ReloadingCert::load(cert.clone(), key.clone(), provider.clone())?);
+    let resolver = Arc::new(ReloadingCert::new(cert.clone(), key.clone(), provider.clone()));
     let builder = ServerConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()?;
     let builder = if api.client_ca_file.is_empty() {
@@ -419,11 +436,85 @@ mod tests {
         assert!(server_config(&crate::config::ApiConfig::default()).unwrap().is_none());
     }
 
+    fn resolver(d: &Dir) -> ReloadingCert {
+        ReloadingCert::new(
+            d.0.join("server.crt"),
+            d.0.join("server.key"),
+            Arc::new(rustls::crypto::ring::default_provider()),
+        )
+    }
+
+    fn first_cert(pem: &str) -> CertificateDer<'static> {
+        CertificateDer::pem_slice_iter(pem.as_bytes()).next().unwrap().unwrap()
+    }
+
+    /// stormd#71: every state a pair can be in while stormcert mints it (key
+    /// first) is "not yet", and the finished pair is taken up from there.
     #[test]
-    fn a_key_that_is_not_the_certificates_is_refused() {
-        let d = files(&[("server.crt", SERVER_CERT), ("server.key", SERVER2_KEY)]);
-        let err = server_config(&api_config(&d.0, false)).unwrap_err();
-        assert!(err.to_string().contains("does not match"), "{}", err);
+    fn a_pair_that_does_not_load_is_not_yet() {
+        let d = files(&[]);
+        let r = resolver(&d);
+        assert!(server_config(&api_config(&d.0, false)).unwrap().is_some(), "absent is not an error");
+        assert!(r.get().is_none(), "nothing there");
+
+        std::fs::write(d.0.join("server.key"), SERVER_KEY).unwrap();
+        assert!(r.get().is_none(), "the key alone");
+
+        std::fs::write(d.0.join("server.crt"), &SERVER_CERT[..40]).unwrap();
+        assert!(r.get().is_none(), "half a certificate");
+
+        std::fs::write(d.0.join("server.crt"), SERVER2_CERT).unwrap();
+        assert!(r.get().is_none(), "the certificate of another key");
+
+        std::fs::write(d.0.join("server.crt"), SERVER_CERT).unwrap();
+        assert_eq!(r.get().unwrap().cert[0], first_cert(SERVER_CERT), "the finished pair");
+    }
+
+    /// With no pair held, a repair that changes no stamp is still taken up:
+    /// the file was there all along, and only became readable.
+    #[test]
+    fn with_no_pair_each_handshake_tries_again() {
+        let d = files(&[("server.crt", SERVER_CERT), ("server.key", SERVER_KEY)]);
+        let r = resolver(&d);
+        let held = {
+            let mut cur = r.current.lock().unwrap();
+            cur.1 = None;
+            cur.0
+        };
+        assert_eq!(held, (stamp(&d.0.join("server.crt")), stamp(&d.0.join("server.key"))), "stamps unchanged");
+        assert!(r.get().is_some());
+    }
+
+    /// A pair once served is kept while a new one does not load, and is
+    /// dropped by nothing short of a pair that does.
+    #[test]
+    fn a_served_pair_survives_its_files_going_away() {
+        let d = server_files();
+        let r = resolver(&d);
+        std::fs::remove_file(d.0.join("server.key")).unwrap();
+        assert_eq!(r.get().unwrap().cert[0], first_cert(SERVER_CERT));
+    }
+
+    /// stormd#71: no pair yet is a failed handshake, then https, on the one
+    /// listener. Plain HTTP never gets an HTTP answer in either state.
+    #[tokio::test]
+    async fn no_pair_fails_the_handshake_until_it_appears() {
+        let d = files(&[]);
+        let url = start(&api_config(&d.0, false)).await;
+        let plain = url.replace("https://", "http://");
+        let r = client(None).get(format!("{}/healthz", url)).send().await;
+        assert!(r.is_err(), "https without a pair: {:?}", r);
+        let r = reqwest::Client::new().get(format!("{}/healthz", plain)).send().await;
+        assert!(r.is_err(), "plain http without a pair: {:?}", r);
+
+        std::fs::write(d.0.join("server.key"), SERVER_KEY).unwrap();
+        assert!(client(None).get(format!("{}/healthz", url)).send().await.is_err(), "the key alone");
+
+        std::fs::write(d.0.join("server.crt"), SERVER_CERT).unwrap();
+        let r = client(None).get(format!("{}/healthz", url)).send().await.unwrap();
+        assert_eq!(r.text().await.unwrap(), "ok");
+        let r = reqwest::Client::new().get(format!("{}/healthz", plain)).send().await;
+        assert!(r.is_err(), "plain http with the pair: {:?}", r);
     }
 
     #[tokio::test]
@@ -475,22 +566,14 @@ mod tests {
         std::fs::write(d.0.join("server.key"), format!("{}\n", SERVER2_KEY)).unwrap();
         // Both pairs are from the same CA, so the client cannot tell them
         // apart; check the reload itself on a resolver over the same files.
-        let resolver = ReloadingCert::load(
-            d.0.join("server.crt"),
-            d.0.join("server.key"),
-            Arc::new(rustls::crypto::ring::default_provider()),
-        )
-        .unwrap();
-        let expected = CertificateDer::pem_slice_iter(SERVER2_CERT.as_bytes())
-            .next()
-            .unwrap()
-            .unwrap();
-        assert_eq!(resolver.get().cert[0], expected);
+        let resolver = resolver(&d);
+        let expected = first_cert(SERVER2_CERT);
+        assert_eq!(resolver.get().unwrap().cert[0], expected);
         healthy(&client(None)).await;
 
         // A half-written pair keeps the previous one.
         std::fs::write(d.0.join("server.key"), "garbage").unwrap();
-        assert_eq!(resolver.get().cert[0], expected);
+        assert_eq!(resolver.get().unwrap().cert[0], expected);
         healthy(&client(None)).await;
     }
 

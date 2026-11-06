@@ -273,8 +273,8 @@ anything (#11).
 Startup, in order: install applet symlinks into `/bin`, `/usr/bin`, `/sbin`,
 `/usr/sbin` (skipping names that exist; errors ignored) → load and validate the
 config (exit 1 on error) → resolve the cloud ID → start logging → load the
-API's TLS pair and bind the API (exit 1 on either, **before anything is
-started**, #23) → start cron and the updater → start processes → start the
+API's TLS pair (one that does not load is not fatal, #71) and bind the API
+(exit 1 if the port is taken, **before anything is started**, #23) → start cron and the updater → start processes → start the
 SSH server (in the background; a failed bind is logged and stormd carries
 on) → serve the API → reap zombies and set sysctls (Linux). A port already
 taken (another stormd, a stale process) therefore leaves nothing running.
@@ -362,7 +362,7 @@ Theme ids (from stormview): `storm`, `one`, `gruvbox`, `catppuccin`, `rose`,
 | Key | Default | |
 |---|---|---|
 | `bind` | `"0.0.0.0:9080"` | REST API, WS, metrics and UI |
-| `tls_cert_file`, `tls_key_file` | — | PEM certificate chain and key: serve the API over TLS (HTTP/1.1). Both or neither; re-read when either file changes |
+| `tls_cert_file`, `tls_key_file` | — | PEM certificate chain and key: serve the API over TLS (HTTP/1.1). Both or neither; re-read when either file changes. Not there yet: handshakes fail until they are, nothing is served in the clear (#71) |
 | `client_ca_file` | — | a PEM CA bundle or a **list** of them, e.g. the node CA and forge's CA (#59). Needs TLS. A client certificate that verifies against any of them authenticates the request; one that verifies against none fails the handshake. Each file is re-read when it changes; a missing or unreadable one is skipped with one WARN; with none readable no client certificate is accepted (clients without one still connect, anonymously) |
 | `token_file` | — | file holding the bearer token (whitespace trimmed), re-read when it changes; an unreadable or empty file accepts no token |
 | `auth_token` | — | bearer token for any request; also the `admin` login password |
@@ -377,9 +377,16 @@ auth on but no TLS it warns that credentials travel in the clear. On a
 stormcos node every container's stormd answers on the node's address, so a
 node's stormd should have all three: a stormcert serving pair, the node CA as
 `client_ca_file` (the node CA and, for stormcentral, forge's CA, #59), and a
-`token_file` (#32). A missing, unreadable or mismatched pair stops stormd at
-start (exit 1), before any process is spawned. A missing client CA file does
-not: it is skipped, and taken up when it appears.
+`token_file` (#32).
+
+A pair that does not load does not stop stormd, whether it is absent,
+unreadable, half-written or mismatched (#71): the one-shot that mints a node's
+pair runs under a stormd, so exiting would be a first-boot deadlock. stormd
+logs one WARN, starts its processes and binds the port. **Every handshake then
+fails until the pair loads**, and the pair is served from then on with no
+restart. A stormd configured for TLS never answers in the clear, so until then
+the API, `--healthcheck` and any https probe of it fail. A missing client CA
+file does not stop it either: it is skipped, and taken up when it appears.
 
 ### `[[process]]`
 
@@ -844,8 +851,9 @@ Credentials are compared in constant time. Open paths: `/api/v1/health` and
 `/healthz` (the probes), and what the login screen needs: `/`, `/ui/*` except
 `/ui/proxy/*` (the static SPA, no data) and `/api/v1/auth/*`. `/metrics` is
 not open (#32). The TLS certificate and key are re-read when either changes;
-a pair that fails to load keeps the previous one and logs a warning. The
-client CA is read at start. stormsh passes the token with `-t`/`--token`,
+a pair that fails to load keeps the previous one and logs a warning, and with
+no previous one handshakes fail until it loads (#71). Each client CA file is
+re-read when it changes (#59). stormsh passes the token with `-t`/`--token`,
 `--token-file` or `STORMD_TOKEN`, and speaks https with `--ca-file` (below).
 
 ## Web UI
