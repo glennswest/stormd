@@ -497,11 +497,21 @@ change; the wait registers before it checks, 1 s backstop poll. Test
 job (a job still running skips its next fire time); `liveness_failures_total`
 monotonic, consecutive count as a gauge. Tests `cron::run_tests`.
 
-**Issue #30 — CloudID refresh on a node reaches stormimds (2026-10-08): part
-done, rest waits on stormimds#9 (needs-owner).** Done now (the issue's
-"either way"): a 404 names the likely cause (`cloudid::refusal`, test). The
-real fix, refuse `[ssh] owner` on a node (master's recommendation) or point
-`cloudid_url` at cloudid, depends on stormimds#9; proposed after it.
+**Issue #30 — refuse `[ssh] owner` on a stormcos node (2026-11-07) — in progress.**
+stormimds#9 decided (owner, 2026-10-09): stormimds answers a node, its
+containers and host services; nobody logs in to a node over ssh; stormd
+refuses `[ssh] owner` on a node. Earlier part (2026-10-08): a 404 names the
+likely cause (`cloudid::refusal`). Decisions (from the code, not asked):
+- "on a node" = `/proc/cmdline` holds a `stormblock.*` / `rd.stormblock.*`
+  word: the stormblock initramfs is what puts 169.254.169.254 on `lo`, and
+  `/proc/cmdline` is the host's in every container, host or pod network.
+  stormcos has no other marker (no env, no os-release in a golden).
+- refused = the refresh never starts, one ERROR at start naming why;
+  stormd keeps running and password / `authorized_keys` logins are
+  unchanged (a container that booted must still boot, as #8/#71). Applies
+  whatever `cloudid_url` says. No `/proc/cmdline` → not a node.
+- [ ] cloudid::on_stormcos_node + main.rs; unit tests; README, changelog
+- [ ] sc-build; golden; close; tell cloudid#4
 
 **Issue #28 — stormcast 0.1.0 → 0.1.1 (2026-10-08) ✅ done.** Lock
 edited by hand (`3cec734`, no deps): the API stormd uses (send_at,
