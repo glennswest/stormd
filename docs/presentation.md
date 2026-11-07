@@ -163,8 +163,8 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
 - **stormsh.** A TUI that renders **the same** `/api/v1/components` feed.
 - **SSH.** A management shell with pipes, redirection and tab completion,
   plus SFTP. The password is the configured one or the cloud ID; public keys
-  come from CloudID over IMDSv2 (keys arrive once stormimds serves
-  `public-keys/`, stormimds#5).
+  come from CloudID over IMDSv2 off stormcos; on a stormcos node
+  `[ssh] owner` is refused (the address is stormimds, #30).
 - **65 busybox-style applets** through `argv[0]` (`ls`, `curl`, `ping`, …),
   so a scratch container can be looked around in.
 - **Also:** cron (6 fields), log backup (tar.gz POSTed on failure), an OCI
@@ -236,8 +236,6 @@ From stormcentral's relationships graph (`config/stormcentral.toml`):
     process logs an ERROR `DOWN was=Unknown`.
   - **#60** (P1) — remove stormd's own liveness checks (the kubelet's job).
   - **#67** — `sleep` is capped at 60 s even as a supervised process.
-  - **#30** — on a node, CloudID's address is stormimds, which does not know
-    the node (decision pending in stormimds#9).
 
 ---
 

@@ -59,7 +59,7 @@ enabled = true
 bind = "0.0.0.0:22"
 host_key = "/etc/stormd/host_key"   # generated (ed25519) if missing
 password = "stormd"                 # the cloud_id is accepted as well
-# owner = "my-namespace"            # turns on public-key auth from CloudID
+# owner = "my-namespace"            # turns on public-key auth from CloudID (refused on a stormcos node, #30)
 # cloudid_url = "http://169.254.169.254"
 
 # --- Supervised Processes ---

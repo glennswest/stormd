@@ -4,6 +4,14 @@
 
 <!-- New unreleased changes go here -->
 
+### 2026-11-07
+- **fix:** `[ssh] owner` is refused on a stormcos node (#30, stormimds#9): the
+  link-local metadata address there is the node's stormimds, not cloudid, and
+  nobody logs in to a node over ssh. A node is a kernel command line with a
+  `stormblock.*` / `rd.stormblock.*` word (`/proc/cmdline`, the host's in any
+  container). The CloudID key refresh does not start; one ERROR says why;
+  stormd runs on, and password and `authorized_keys` logins are unchanged.
+
 ### 2026-11-06
 - **feat:** `${X}` in a process's `args` is replaced when the process declares
   `X` in `env` or `env_default`, with the value it would get: `env`, then what

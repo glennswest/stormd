@@ -342,8 +342,20 @@ async fn main() {
         }
     }
 
-    // Start CloudID key refresh if owner is configured
-    let cloudid_keys = if config.ssh.enabled && config.ssh.owner.is_some() {
+    // Start CloudID key refresh if owner is configured — never on a stormcos
+    // node, where the metadata address is stormimds (stormd#30)
+    let owner_refused = config.ssh.enabled
+        && config.ssh.owner.is_some()
+        && match stormd::cloudid::owner_refusal(
+            std::fs::read_to_string("/proc/cmdline").ok().as_deref(),
+        ) {
+            Some(why) => {
+                error!("{why}");
+                true
+            }
+            None => false,
+        };
+    let cloudid_keys = if config.ssh.enabled && config.ssh.owner.is_some() && !owner_refused {
         let url = config.ssh.cloudid_url.clone();
         info!(
             cloudid_url = %url,

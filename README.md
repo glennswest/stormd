@@ -522,7 +522,7 @@ See [Image updater](#image-updater).
 | `bind` | `"0.0.0.0:22"` | |
 | `host_key` | `"/etc/stormd/host_key"` | ed25519, generated and saved if missing |
 | `password` | `"stormd"` | the cloud ID is also accepted |
-| `owner` | — | when set, public-key auth from CloudID is on |
+| `owner` | — | when set, public-key auth from CloudID is on; refused on a stormcos node (#30, § SSH) |
 | `cloudid_url` | `"http://169.254.169.254"` | |
 | `authorized_keys` | — | an OpenSSH `authorized_keys` file (lines `type base64 [comment]`, options allowed), read at every login, accepted alongside CloudID's keys (#7) |
 
@@ -939,13 +939,16 @@ works, and a service that issues no token is asked without one. A non-2xx
 answer is a failed refresh, logged with its status once (and again only when
 it changes, or when it recovers).
 
-**On a stormcos node** the default `cloudid_url` does not reach cloudid: the
-node puts `169.254.169.254/32` on `lo` and stormimds answers it. stormimds
-knows only registered guests, so it answers a node's stormd 404, and it serves
-no `public-keys/` yet (stormimds#5). Which service should answer a node's own
-processes is undecided (stormimds#9); until then the refresh gets no keys
-there (#30). A 404 is logged once as a WARN that names that likely cause.
-No stormcos golden sets `[ssh] owner` today, so no node runs the refresh.
+**On a stormcos node `[ssh] owner` is refused** (#30, decided in
+stormimds#9): there `169.254.169.254/32` is on the node's `lo` and stormimds
+answers it, for the node, its containers and host services alike; it answers
+the node itself 404, and nobody logs in to a node over ssh. stormd counts as
+on a node when `/proc/cmdline` (the host's, inside any container) holds a
+`stormblock.*` or `rd.stormblock.*` word, the stormblock initramfs's. Then the
+key refresh never starts, whatever `cloudid_url` says: one ERROR at start
+says why, stormd runs on, and password and `authorized_keys` logins are
+unchanged. Off stormcos (no such word, or no `/proc/cmdline`) the refresh runs
+as above, and a 404 is logged once as a WARN naming the likely cause.
 
 A session is an interactive shell (a PTY is expected); `ssh host command`
 (exec requests) is not supported. The `sftp` subsystem is, so `sftp` and

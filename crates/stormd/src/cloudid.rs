@@ -245,6 +245,28 @@ pub async fn start_key_refresh(
     store
 }
 
+/// Whether this kernel was booted by stormcos: its command line carries a
+/// `stormblock.*` or `rd.stormblock.*` word. The stormblock initramfs is what
+/// puts 169.254.169.254 on the node's `lo` for stormimds, and `/proc/cmdline`
+/// is the host's in every container, host or pod network (stormd#30).
+pub fn on_stormcos_node(cmdline: &str) -> bool {
+    cmdline
+        .split_whitespace()
+        .any(|w| w.starts_with("stormblock.") || w.starts_with("rd.stormblock."))
+}
+
+/// Why `[ssh] owner` is refused here, or `None` when the refresh may run.
+/// On a stormcos node the metadata address is stormimds, which answers the
+/// node 404, and nobody logs in to a node over ssh (stormimds#9): the CloudID
+/// key refresh has nothing to do there.
+pub fn owner_refusal(cmdline: Option<&str>) -> Option<&'static str> {
+    on_stormcos_node(cmdline?).then_some(
+        "[ssh] owner is refused on a stormcos node: 169.254.169.254 there is the node's \
+         stormimds, not cloudid, and nobody logs in to a node over ssh (stormimds#9, stormd#30); \
+         CloudID key refresh not started — password and authorized_keys logins are unchanged",
+    )
+}
+
 /// The error for a refused request. A 404 says what it most likely means: on
 /// a stormcos node 169.254.169.254 is on the node's `lo` and answered by
 /// stormimds, which knows only its guests, not this host (stormd#30).
@@ -264,7 +286,7 @@ mod tests {
     //! Against a stand-in for stormimds: the same token endpoint, headers and
     //! security modes (stormimds `src/auth/middleware.rs`, `src/api/token.rs`).
 
-    use super::{fetch_keys, refusal, Imds};
+    use super::{fetch_keys, on_stormcos_node, owner_refusal, refusal, Imds};
     use axum::{
         extract::{Path, State},
         http::{HeaderMap, StatusCode},
@@ -446,5 +468,24 @@ mod tests {
         // And the new token is kept for the next refresh.
         assert_eq!(fetch_keys(&mut imds).await.map(|s| s.len()), Ok(2));
         assert_eq!(st.seen.lock().unwrap().tokens_issued, 2);
+    }
+
+    #[test]
+    fn owner_is_refused_on_a_stormcos_node_only() {
+        let node = "console=tty0 root=/dev/ublkb0 rd.stormblock.slab=/dev/sda rd.stormblock.assimilate=any";
+        let node2 = "BOOT_IMAGE=/vmlinuz stormblock.volume=root quiet";
+        assert!(on_stormcos_node(node) && on_stormcos_node(node2));
+        assert!(owner_refusal(Some(node)).unwrap().contains("stormcos node"));
+        // An ordinary host (dev-like Fedora), a word that only mentions it, none at all.
+        for other in [
+            "BOOT_IMAGE=(hd0,gpt2)/vmlinuz-7.2.7 root=UUID=1 ro rhgb quiet",
+            "foo=stormblock.x nostormblock.y",
+            "",
+        ] {
+            assert!(!on_stormcos_node(other), "{other}");
+            assert!(owner_refusal(Some(other)).is_none());
+        }
+        // No /proc/cmdline to read: not a node.
+        assert!(owner_refusal(None).is_none());
     }
 }
