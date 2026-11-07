@@ -497,7 +497,7 @@ change; the wait registers before it checks, 1 s backstop poll. Test
 job (a job still running skips its next fire time); `liveness_failures_total`
 monotonic, consecutive count as a gauge. Tests `cron::run_tests`.
 
-**Issue #30 — refuse `[ssh] owner` on a stormcos node (2026-11-07) — in progress.**
+**Issue #30 — refuse `[ssh] owner` on a stormcos node (2026-11-07) ✅ done.**
 stormimds#9 decided (owner, 2026-10-09): stormimds answers a node, its
 containers and host services; nobody logs in to a node over ssh; stormd
 refuses `[ssh] owner` on a node. Earlier part (2026-10-08): a 404 names the
@@ -510,8 +510,14 @@ likely cause (`cloudid::refusal`). Decisions (from the code, not asked):
   stormd keeps running and password / `authorized_keys` logins are
   unchanged (a container that booted must still boot, as #8/#71). Applies
   whatever `cloudid_url` says. No `/proc/cmdline` → not a node.
-- [ ] cloudid::on_stormcos_node + main.rs; unit tests; README, changelog
-- [ ] sc-build; golden; close; tell cloudid#4
+- [x] cloudid::on_stormcos_node + main.rs; unit tests; README, example.toml,
+      presentation, changelog (861a901)
+- [x] sc-build on 563e7c6: --locked build, 125 stormd tests incl.
+      `owner_is_refused_on_a_stormcos_node_only`; `test/live-owner.sh`: real
+      stormd, host cmdline → refresh started; /proc/cmdline bind-mounted to a
+      stormcos line (`unshare -Urm`) → one ERROR, no refresh, API + process +
+      ssh port up. clippy stops on vendored russh-sftp = #58
+- [x] golden requested; closed; told cloudid#4
 
 **Issue #28 — stormcast 0.1.0 → 0.1.1 (2026-10-08) ✅ done.** Lock
 edited by hand (`3cec734`, no deps): the API stormd uses (send_at,
