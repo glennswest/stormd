@@ -387,10 +387,11 @@ issue proposes; decisions (from the issue and code, not asked):
   golden → 409. Unknown process → 404; a bad body → 400.
 - in memory; `GET /api/v1/goldens` gains `added: true|false`. Runtime ops
   serialized by one lock.
-- [ ] goldens.rs (added flag, spec, refusal codes), supervisor add/remove,
+- [x] goldens.rs (added flag, spec, refusal codes), supervisor add/remove,
       API routes; unit tests (add, delete, failed add leaves nothing attached,
       pid kept through add + delete, idempotent re-add, configured refused)
-- [ ] README § Goldens + API table, changelog; sc-build; golden
+- [x] README § Goldens + API table, changelog
+- [ ] sc-build; golden
 
 **Issue #72 — a process's own `env`/`env_default` keys expanded in its `args` (2026-11-06) ✅ done.**
 For stormcos#362 (`${CLUSTER_VIP}` from env.d). Decisions (from the issue and code, not asked):

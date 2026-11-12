@@ -37,8 +37,9 @@ A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
   loudly, keeps it, and restarts on a long stall only when told to (#49).
 - **Goldens** — a process can name stormblock goldens; stormd attaches each
   read-only and presents it (a filesystem golden mounted read-only, an image
-  golden as a readable device node) before the process starts, and swaps one
-  for another at runtime (#36).
+  golden as a readable device node) before the process starts, swaps one
+  for another at runtime (#36), and adds or removes goldens the config does
+  not name while the process keeps running (#73).
 - **Logs** — stdout/stderr per process to a rotated file on the log volume,
   each run's file kept (and pruned) when it exits, every line on the fleet's
   multicast syslog group (repeats collapsed, rate-limited per process) (the [stormcast](https://github.com/glennswest/stormcast)
@@ -789,8 +790,9 @@ client certificate, a session cookie, or `Authorization: Bearer <token>`
 | POST | `/api/v1/processes/{name}/start` \| `stop` \| `restart` | `restart?wait=healthy&timeout=N`: answer once the new run is healthy (200), it ended (502), or N s passed (504, process left running) — below |
 | GET | `/api/v1/events?since=<seq>` | Kubernetes-shaped events (`type`, `reason`, `message`, `process`, `count`, `firstTimestamp`, `lastTimestamp`, `seq`), changed after `seq` — below (behind auth) |
 | GET | `/api/v1/health/apis` | every declared API's health: state, since, last latency, p50/p99 seen, budgets, last error (behind auth) |
-| GET | `/api/v1/goldens` | goldens presented: process, name, golden, volume, content, device, path, size_bytes |
-| PUT | `/api/v1/processes/{name}/goldens/{golden}` | `{"golden": "…"}` or `{"volume_id": "…"}` — swap it (see [Goldens](#goldens)) |
+| GET | `/api/v1/goldens` | goldens presented: process, name, golden, volume, content, device, path, size_bytes, `added` (true = added through the API) |
+| PUT | `/api/v1/processes/{name}/goldens/{golden}` | a configured golden: `{"golden": "…"}` or `{"volume_id": "…"}` swaps it; any other name: a full `[[process.golden]]` body adds it, no restart (see [Goldens](#goldens)) |
+| DELETE | `/api/v1/processes/{name}/goldens/{golden}` | release a golden added through the API, no restart (a configured one is 409) |
 | GET | `/api/v1/logs` | lines from the log files (`?process=&tail=&search=`) |
 | GET | `/api/v1/logs/{process}` | same, one process (`?tail=&search=`) |
 | GET | `/api/v1/logs/{process}/runs` | finished runs |
@@ -1180,6 +1182,31 @@ new `golden` or `volume_id` stops the process, releases the old golden,
 presents the new one and starts the process again. If the new one cannot be
 presented, the old one is put back. The swap is in memory: a stormd restart
 presents what the config says.
+
+**Add and remove at runtime** (#73; boot helpers fetched on demand,
+stormcos#881): `PUT /api/v1/processes/{p}/goldens/{name}` with a name the
+config does not give that process adds it. The body is a full
+`[[process.golden]]` as JSON (`name` optional and must match the URL;
+`content` required; `path` defaults to `<[goldens] dir>/<name>`), checked as
+the config is. It is attached and presented **without stopping the process**:
+the service finds the new file or mount at its path. Answers:
+
+| Case | Status |
+|------|--------|
+| added | 201, the golden as presented |
+| the same name again with the same body | 200, nothing done (safe to re-assert every pass) |
+| the same name with a different body | 200: the old one released, the new presented, no stop/start; the old put back if the new cannot be presented |
+| the presenter cannot attach or present it | 500, nothing left attached |
+| a bad body (no `content`, both or neither of `golden`/`volume_id`, a relative path) | 400 |
+| a path another golden (or a configured one) already has | 409 |
+| no such process | 404 |
+
+`DELETE /api/v1/processes/{p}/goldens/{name}` releases an added golden
+(unmounted or its node removed, then detached) with the process left running:
+200; a configured golden is 409, a name not presented 404. Added goldens are
+in memory, like a swap: a stormd restart presents only the config's, and
+stormd releases them at shutdown with the rest. `GET /api/v1/goldens` marks
+each `added: true|false`. Runtime adds, removes and swaps run one at a time.
 
 **What it needs from the container** (stormcos wires these per service): the
 engine's token (a `mount sbrun /run/stormblock ro` stanza, as sbregistry

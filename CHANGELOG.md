@@ -4,6 +4,18 @@
 
 <!-- New unreleased changes go here -->
 
+### 2026-11-12
+- **feat:** a process's goldens can be added and removed at runtime without
+  restarting it (#73, for stormcos#881 / stormipmi#41 / minismbd#7):
+  `PUT /api/v1/processes/{p}/goldens/{name}` with a name the config does not
+  name adds it from a full `[[process.golden]]` body (201; same body again
+  200 and nothing done; a different body replaces it in place, the old put
+  back on failure); new `DELETE` on the same route releases an added golden
+  (configured 409, unknown 404). Bad body 400, a path in use 409, unknown
+  process 404. `GET /api/v1/goldens` gains `added`. In memory; runtime
+  operations are serialized. The goldens presenter now always exists, so a
+  process with no configured goldens can be given one.
+
 ### 2026-11-07
 - **fix:** `[ssh] owner` is refused on a stormcos node (#30, stormimds#9): the
   link-local metadata address there is the node's stormimds, not cloudid, and
