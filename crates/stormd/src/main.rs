@@ -240,16 +240,14 @@ async fn main() {
         supervisor.api_health().set_state_file(path.clone());
     }
     // Goldens processes name, attached read-only and presented (stormd#36).
-    let goldens = config.process.iter().any(|p| !p.golden.is_empty()).then(|| {
-        Arc::new(stormd::goldens::Goldens::new(
-            config.goldens.clone(),
-            config.general.name.clone(),
-            Arc::new(stormd::goldens::RealHost),
-        ))
-    });
-    if let Some(g) = &goldens {
-        supervisor.set_goldens(g.clone());
-    }
+    // Always there: a golden can be added at runtime to a process whose
+    // config names none (stormd#73). It does nothing until asked.
+    let goldens = Arc::new(stormd::goldens::Goldens::new(
+        config.goldens.clone(),
+        config.general.name.clone(),
+        Arc::new(stormd::goldens::RealHost),
+    ));
+    supervisor.set_goldens(goldens.clone());
     let cron_scheduler = Arc::new(CronScheduler::new(stormlog.clone(), event_bus.clone()));
     let stats = Arc::new(StatsCollector::new(config.general.name.clone()));
     stats.start_memory_monitor();
@@ -555,9 +553,7 @@ async fn main() {
     let _ = start_handle.await;
     sup_shutdown.stop_all().await;
     // With the processes gone, nothing holds a mount: unmount and detach.
-    if let Some(g) = &goldens {
-        g.release_all().await;
-    }
+    goldens.release_all().await;
 
     // Flush stormlog buffers
     if let Err(e) = stormlog_shutdown.flush().await {

@@ -515,6 +515,77 @@ impl Supervisor {
         result
     }
 
+    /// `PUT /api/v1/processes/{process}/goldens/{name}` (stormd#36, #73). A
+    /// name the process's config has is a swap (stop, swap, start). Any other
+    /// name is added from the body, a full `[[process.golden]]`, without
+    /// stopping the process.
+    pub async fn put_golden(
+        self: &Arc<Self>,
+        process: &str,
+        name: &str,
+        body: serde_json::Value,
+    ) -> anyhow::Result<(crate::goldens::Added, crate::goldens::Presented)> {
+        use crate::goldens::{refused, Added};
+        let goldens = self.goldens.get().cloned().ok_or_else(|| anyhow::anyhow!("no golden presenter"))?;
+        let proc_arc = self
+            .processes
+            .read()
+            .await
+            .get(process)
+            .cloned()
+            .ok_or_else(|| refused(404, format!("process not found: {process}")))?;
+        let configured = proc_arc.lock().await.config.golden.iter().any(|g| g.name == name);
+        let mut body = match body {
+            serde_json::Value::Object(m) => m,
+            serde_json::Value::Null => serde_json::Map::new(),
+            _ => return Err(refused(400, "the body must be a JSON object")),
+        };
+        if configured {
+            let field = |k: &str| body.get(k).and_then(|v| v.as_str()).map(String::from);
+            let (golden, volume_id) = (field("golden"), field("volume_id"));
+            if golden.is_some() == volume_id.is_some() {
+                return Err(refused(400, "give exactly one of golden and volume_id"));
+            }
+            let p = self.swap_golden(process, name, golden, volume_id).await?;
+            return Ok((Added::Replaced, p));
+        }
+        match body.get("name") {
+            Some(serde_json::Value::String(n)) if n != name => {
+                return Err(refused(400, format!("the body names '{n}', the path '{name}'")))
+            }
+            _ => {}
+        }
+        body.insert("name".into(), name.into());
+        let g: crate::config::GoldenMount =
+            serde_json::from_value(serde_json::Value::Object(body)).map_err(|e| refused(400, e.to_string()))?;
+        // Paths the config's goldens use, presented yet or not.
+        let mut reserved = Vec::new();
+        for p in self.processes.read().await.values() {
+            for cg in &p.lock().await.config.golden {
+                reserved.push(goldens.path_of(cg));
+            }
+        }
+        goldens.add(process, g, &reserved).await
+    }
+
+    /// `DELETE /api/v1/processes/{process}/goldens/{name}` (stormd#73):
+    /// release a golden added at runtime, the process left running.
+    pub async fn remove_golden(&self, process: &str, name: &str) -> anyhow::Result<()> {
+        use crate::goldens::refused;
+        let goldens = self.goldens.get().cloned().ok_or_else(|| anyhow::anyhow!("no golden presenter"))?;
+        let proc_arc = self
+            .processes
+            .read()
+            .await
+            .get(process)
+            .cloned()
+            .ok_or_else(|| refused(404, format!("process not found: {process}")))?;
+        if proc_arc.lock().await.config.golden.iter().any(|g| g.name == name) {
+            return Err(refused(409, format!("golden '{name}' of '{process}' is from the config")));
+        }
+        goldens.remove(process, name).await
+    }
+
     /// Start shutting down: from here nothing new starts and an exit is a
     /// stop. Called first thing when stormd is signalled (stormd#26);
     /// `stop_all` does the rest.

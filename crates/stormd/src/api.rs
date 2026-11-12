@@ -77,7 +77,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/processes/{name}/restart", post(restart_process))
         // Goldens presented to processes (stormd#36)
         .route("/api/v1/goldens", get(list_goldens))
-        .route("/api/v1/processes/{name}/goldens/{golden}", axum::routing::put(swap_golden))
+        .route(
+            "/api/v1/processes/{name}/goldens/{golden}",
+            axum::routing::put(put_golden).delete(delete_golden),
+        )
         // Logs
         .route("/api/v1/logs", get(query_logs))
         .route("/api/v1/logs/files", get(list_log_files))
@@ -451,22 +454,38 @@ async fn list_goldens(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(serde_json::json!({ "items": items }))
 }
 
-#[derive(Debug, Deserialize)]
-struct SwapGolden {
-    golden: Option<String>,
-    volume_id: Option<String>,
-}
-
-/// Swap a process's golden for another (a new release): the process is
-/// stopped, the old golden released, the new one presented, the process
-/// started again.
-async fn swap_golden(
+/// A name the process's config has: swap it for another (a new release) —
+/// the process is stopped, the old golden released, the new one presented,
+/// the process started again; 200. Any other name: add it from the body, a
+/// full `[[process.golden]]`, without stopping the process (stormd#73); 201,
+/// or 200 when it was already there (the same: nothing done; another spec:
+/// replaced).
+async fn put_golden(
     State(state): State<Arc<AppState>>,
     Path((name, golden)): Path<(String, String)>,
-    Json(req): Json<SwapGolden>,
+    body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, AppError> {
-    let p = state.supervisor.swap_golden(&name, &golden, req.golden, req.volume_id).await?;
-    Ok(Json(p))
+    let body: serde_json::Value = if body.iter().all(u8::is_ascii_whitespace) {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|e| crate::goldens::refused(400, format!("the body is not JSON: {e}")))?
+    };
+    let (added, p) = state.supervisor.put_golden(&name, &golden, body).await?;
+    let status = match added {
+        crate::goldens::Added::Created => StatusCode::CREATED,
+        _ => StatusCode::OK,
+    };
+    Ok((status, Json(p)))
+}
+
+/// Release a golden added at runtime; the process keeps running (stormd#73).
+async fn delete_golden(
+    State(state): State<Arc<AppState>>,
+    Path((name, golden)): Path<(String, String)>,
+) -> Result<impl IntoResponse, AppError> {
+    state.supervisor.remove_golden(&name, &golden).await?;
+    Ok(Json(serde_json::json!({ "status": "released", "process": name, "golden": golden })))
 }
 
 // --- Logs ---
@@ -1044,7 +1063,13 @@ impl IntoResponse for AppError {
         let body = serde_json::json!({
             "error": self.0.to_string(),
         });
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
+        // A refusal carries its own status (stormd#73); anything else is a 500.
+        let status = self
+            .0
+            .downcast_ref::<crate::goldens::Refused>()
+            .and_then(|r| StatusCode::from_u16(r.status).ok())
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        (status, Json(body)).into_response()
     }
 }
 

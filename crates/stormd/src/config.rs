@@ -165,6 +165,26 @@ pub enum GoldenContent {
     Image,
 }
 
+impl GoldenMount {
+    /// What a golden must satisfy, from the config or added at runtime
+    /// (stormd#73). Uniqueness in the process is the caller's.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.is_empty() || self.name.contains('/') {
+            return Err("name must be non-empty, unique in the process, and have no '/'".into());
+        }
+        if self.golden.is_some() == self.volume_id.is_some() {
+            return Err("set exactly one of golden and volume_id".into());
+        }
+        if self.path.as_deref().is_some_and(|p| !p.starts_with('/')) {
+            return Err("path must be absolute".into());
+        }
+        if self.owner.is_some() && self.owner_ids().is_none() {
+            return Err("owner must be uid:gid (numbers)".into());
+        }
+        Ok(())
+    }
+}
+
 fn default_golden_fstype() -> String { "ext4".into() }
 fn default_golden_mode() -> u32 { 0o444 }
 
@@ -718,18 +738,10 @@ impl Config {
             let mut seen = std::collections::HashSet::new();
             for g in &p.golden {
                 let at = format!("process '{}', golden '{}'", p.name, g.name);
-                if g.name.is_empty() || g.name.contains('/') || !seen.insert(&g.name) {
+                if !seen.insert(&g.name) {
                     anyhow::bail!("{at}: name must be non-empty, unique in the process, and have no '/'");
                 }
-                if g.golden.is_some() == g.volume_id.is_some() {
-                    anyhow::bail!("{at}: set exactly one of golden and volume_id");
-                }
-                if g.path.as_deref().is_some_and(|p| !p.starts_with('/')) {
-                    anyhow::bail!("{at}: path must be absolute");
-                }
-                if g.owner.is_some() && g.owner_ids().is_none() {
-                    anyhow::bail!("{at}: owner must be uid:gid (numbers)");
-                }
+                g.validate().map_err(|e| anyhow::anyhow!("{at}: {e}"))?;
             }
         }
         if self.events.enabled {

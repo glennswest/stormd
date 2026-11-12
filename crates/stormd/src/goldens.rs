@@ -132,6 +132,42 @@ pub struct Presented {
     pub device: String,
     pub path: String,
     pub size_bytes: Option<u64>,
+    /// Added at runtime through the API (stormd#73), not from the config.
+    pub added: bool,
+    /// The golden as asked for, to tell a re-add of the same from a change.
+    #[serde(skip)]
+    pub spec: GoldenMount,
+}
+
+/// A request stormd will not carry out, with the HTTP status that says why
+/// (400 a bad golden, 404 nothing by that name, 409 a conflict).
+#[derive(Debug)]
+pub struct Refused {
+    pub status: u16,
+    pub message: String,
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+pub fn refused(status: u16, message: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(Refused { status, message: message.into() })
+}
+
+/// What an add did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Added {
+    /// Newly presented (201).
+    Created,
+    /// Already presented with another spec: the old released, the new presented.
+    Replaced,
+    /// Already presented exactly so: nothing done.
+    Unchanged,
 }
 
 pub struct Goldens {
@@ -140,6 +176,8 @@ pub struct Goldens {
     host: Arc<dyn Host>,
     client: reqwest::Client,
     presented: Mutex<HashMap<(String, String), Presented>>,
+    /// Runtime adds and removes one at a time (stormd#73).
+    ops: Mutex<()>,
 }
 
 impl Goldens {
@@ -148,7 +186,7 @@ impl Goldens {
             .timeout(Duration::from_secs(15))
             .build()
             .unwrap_or_default();
-        Self { cfg, container, host, client, presented: Mutex::new(HashMap::new()) }
+        Self { cfg, container, host, client, presented: Mutex::new(HashMap::new()), ops: Mutex::new(()) }
     }
 
     fn engine(&self) -> String {
@@ -225,6 +263,10 @@ impl Goldens {
     /// Attach and present one golden. On a failure after the attach, the
     /// attach is released again.
     pub async fn present(&self, process: &str, g: &GoldenMount) -> anyhow::Result<Presented> {
+        self.present_as(process, g, false).await
+    }
+
+    async fn present_as(&self, process: &str, g: &GoldenMount, added: bool) -> anyhow::Result<Presented> {
         let volume_id = self.resolve(g).await?;
         let holder = self.holder(process, &g.name);
         let device = self.attach(&volume_id, &holder).await?;
@@ -242,8 +284,10 @@ impl Goldens {
             device: device.display().to_string(),
             path: path.display().to_string(),
             size_bytes: g.size_bytes,
+            added,
+            spec: g.clone(),
         };
-        info!(process, golden = %g.name, volume = %p.volume_id, device = %p.device, path = %p.path, "golden presented read-only");
+        info!(process, added, golden = %g.name, volume = %p.volume_id, device = %p.device, path = %p.path, "golden presented read-only");
         self.presented.lock().await.insert((process.to_string(), g.name.clone()), p.clone());
         Ok(p)
     }
@@ -312,6 +356,65 @@ impl Goldens {
             }
         }
         true
+    }
+
+    /// Add a golden to a running process without stopping it (stormd#73).
+    /// `reserved` are the paths the config's goldens use, presented or not.
+    /// The same spec again does nothing; another spec under the same name
+    /// replaces it, and the old one is put back if the new one fails. A
+    /// failed add leaves nothing attached (`present` detaches on failure).
+    pub async fn add(&self, process: &str, g: GoldenMount, reserved: &[PathBuf]) -> anyhow::Result<(Added, Presented)> {
+        g.validate().map_err(|e| refused(400, e))?;
+        let _op = self.ops.lock().await;
+        let key = (process.to_string(), g.name.clone());
+        let path = self.path_of(&g);
+        let old = {
+            let presented = self.presented.lock().await;
+            let old = presented.get(&key).cloned();
+            if let Some(old) = &old {
+                if !old.added {
+                    return Err(refused(409, format!("golden '{}' of '{process}' is from the config", g.name)));
+                }
+                if old.spec == g {
+                    return Ok((Added::Unchanged, old.clone()));
+                }
+            }
+            if let Some(other) = presented.values().find(|p| Path::new(&p.path) == path && (p.process != process || p.name != g.name)) {
+                return Err(refused(409, format!("{} is already golden '{}' of '{}'", path.display(), other.name, other.process)));
+            }
+            old
+        };
+        if reserved.iter().any(|r| *r == path) {
+            return Err(refused(409, format!("{} is a configured golden's path", path.display())));
+        }
+        let Some(old) = old else {
+            return Ok((Added::Created, self.present_as(process, &g, true).await?));
+        };
+        self.release(process, &g.name).await?;
+        match self.present_as(process, &g, true).await {
+            Ok(p) => Ok((Added::Replaced, p)),
+            Err(e) => {
+                warn!(process, golden = %g.name, error = %e, "new golden not presented — putting the old one back");
+                if let Err(e2) = self.present_as(process, &old.spec, true).await {
+                    warn!(process, golden = %g.name, error = %e2, "old golden not presented either");
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Remove a golden added at runtime, without stopping the process
+    /// (stormd#73). A configured one is refused (409), an unknown one 404.
+    pub async fn remove(&self, process: &str, name: &str) -> anyhow::Result<()> {
+        let _op = self.ops.lock().await;
+        match self.presented.lock().await.get(&(process.to_string(), name.to_string())) {
+            None => return Err(refused(404, format!("process '{process}' has no golden '{name}'"))),
+            Some(p) if !p.added => {
+                return Err(refused(409, format!("golden '{name}' of '{process}' is from the config")))
+            }
+            Some(_) => {}
+        }
+        self.release(process, name).await
     }
 
     /// Release everything, at shutdown.
@@ -588,5 +691,118 @@ mod tests {
         let um = o.iter().position(|x| x == "umount /goldens/boot").unwrap();
         let mo = o.iter().rposition(|x| x == "mount ro /dev/ublkb2 /goldens/boot ext4").unwrap();
         assert!(um < mo, "{o:?}");
+    }
+
+    fn status_of(e: &anyhow::Error) -> u16 {
+        e.downcast_ref::<super::Refused>().map(|r| r.status).unwrap_or(500)
+    }
+
+    /// stormd#73: a golden the config does not name is added to a running
+    /// process without stopping it, re-asserted with no effect, replaced in
+    /// place, and removed again — the process's pid unchanged throughout.
+    #[tokio::test]
+    async fn an_added_golden_comes_and_goes_with_the_process_left_running() {
+        use crate::supervisor::{ProcessState, Supervisor};
+        use super::Added;
+        let (engine, host, g, dir) = setup(None).await;
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let slog = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        let sup = Arc::new(Supervisor::new(slog, bus));
+        let g = Arc::new(g);
+        sup.set_goldens(g.clone());
+        // minismbd's shape: one configured filesystem golden, the boot
+        // helpers added at runtime as images.
+        let proc: crate::config::ProcessConfig = toml::from_str(
+            "name = \"smb\"\ncommand = \"/bin/sleep\"\nargs = [\"30\"]\n\
+             [[golden]]\nname = \"base\"\ngolden = \"golden-a\"\ncontent = \"filesystem\"\n",
+        )
+        .unwrap();
+        sup.start_all(&[proc]).await.unwrap();
+        let pid = sup.get_status("smb").await.unwrap().pid;
+        assert!(pid.is_some());
+        let body = serde_json::json!({ "golden": "golden-b", "content": "image", "size_bytes": 4096, "owner": "65532:65532" });
+
+        let (added, p) = sup.put_golden("smb", "ipxe", body.clone()).await.unwrap();
+        assert_eq!(added, Added::Created);
+        assert_eq!((p.path.as_str(), p.volume_id.as_str(), p.added), ("/goldens/ipxe", "v-b", true));
+        assert!(ops(&host).iter().any(|o| o.starts_with("mknod /goldens/ipxe ") && o.ends_with("444 Some((65532, 65532))")), "{:?}", ops(&host));
+        let listed = serde_json::to_value(g.list().await).unwrap();
+        let flags: Vec<(String, bool)> = listed.as_array().unwrap().iter()
+            .map(|v| (v["name"].as_str().unwrap().to_string(), v["added"].as_bool().unwrap())).collect();
+        assert_eq!(flags, vec![("base".to_string(), false), ("ipxe".to_string(), true)]);
+
+        // stormipmi re-asserts every pass: nothing is done.
+        let n = log(&engine).len();
+        let (again, _) = sup.put_golden("smb", "ipxe", body.clone()).await.unwrap();
+        assert_eq!(again, Added::Unchanged);
+        assert_eq!(log(&engine).len(), n, "a re-add of the same spec reached the engine");
+
+        // A new release under the same name: replaced, no stop/start.
+        let (re, p2) = sup.put_golden("smb", "ipxe", serde_json::json!({ "volume_id": "v-a", "content": "image" })).await.unwrap();
+        assert_eq!((re, p2.volume_id.as_str()), (Added::Replaced, "v-a"));
+        assert!(log(&engine).iter().any(|l| l.starts_with("DELETE v-b")));
+
+        // Refusals.
+        let e = sup.put_golden("smb", "bad", serde_json::json!({ "golden": "golden-b" })).await.unwrap_err();
+        assert_eq!(status_of(&e), 400, "{e}");
+        let e = sup.put_golden("smb", "two", serde_json::json!({ "golden": "golden-b", "volume_id": "v-b", "content": "image" })).await.unwrap_err();
+        assert_eq!(status_of(&e), 400, "{e}");
+        let e = sup.put_golden("smb", "clash", serde_json::json!({ "golden": "golden-b", "content": "image", "path": "/goldens/ipxe" })).await.unwrap_err();
+        assert_eq!(status_of(&e), 409, "{e}");
+        let e = sup.put_golden("smb", "clash", serde_json::json!({ "golden": "golden-b", "content": "image", "path": "/goldens/base" })).await.unwrap_err();
+        assert_eq!(status_of(&e), 409, "{e}");
+        let e = sup.put_golden("nope", "x", body.clone()).await.unwrap_err();
+        assert_eq!(status_of(&e), 404, "{e}");
+        let e = sup.remove_golden("smb", "base").await.unwrap_err();
+        assert_eq!(status_of(&e), 409, "{e}");
+        let e = sup.remove_golden("smb", "never").await.unwrap_err();
+        assert_eq!(status_of(&e), 404, "{e}");
+
+        sup.remove_golden("smb", "ipxe").await.unwrap();
+        assert_eq!(ops(&host).last().unwrap(), "rm /goldens/ipxe");
+        assert_eq!(log(&engine).last().unwrap(), "DELETE v-a?holder=stormd%2Fminismbd%2Fsmb%2Fipxe");
+        let names: Vec<String> = g.list().await.into_iter().map(|p| p.name).collect();
+
+        let after = sup.get_status("smb").await.unwrap();
+        sup.stop_all().await;
+        g.release_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(names, vec!["base".to_string()]);
+        assert_eq!(after.state, ProcessState::Running);
+        assert_eq!(after.pid, pid, "the process was restarted by an add or a remove");
+    }
+
+    /// A failed add leaves nothing attached and nothing listed; a failed
+    /// replace puts the old golden back.
+    #[tokio::test]
+    async fn a_failed_add_leaves_nothing_attached() {
+        let (engine, host, g, dir) = setup(None).await;
+        host.fail_mount.store(true, Ordering::SeqCst);
+        let fs = golden("name = \"d\"\ngolden = \"golden-a\"\ncontent = \"filesystem\"\n");
+        assert!(g.add("p", fs.clone(), &[]).await.is_err());
+        let l = log(&engine);
+        assert!(l.iter().any(|x| x.starts_with("POST v-a")) && l.last().unwrap().starts_with("DELETE v-a"), "{l:?}");
+        assert!(g.list().await.is_empty());
+
+        let missing = golden("name = \"x\"\ngolden = \"golden-zzz\"\ncontent = \"image\"\n");
+        assert!(g.add("p", missing, &[]).await.is_err());
+        assert!(g.list().await.is_empty());
+
+        host.fail_mount.store(false, Ordering::SeqCst);
+        g.add("p", fs.clone(), &[]).await.unwrap();
+        // A replace whose new golden cannot be presented puts the old back.
+        let newer = GoldenMount { golden: Some("golden-zzz".into()), ..fs };
+        assert!(g.add("p", newer, &[]).await.is_err());
+        let listed = g.list().await;
+        assert_eq!((listed.len(), listed[0].volume_id.as_str(), listed[0].added), (1, "v-a", true));
+        assert_eq!(ops(&host).last().unwrap(), "mount ro /dev/ublkb1 /goldens/d ext4");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
