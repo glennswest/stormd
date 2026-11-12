@@ -372,7 +372,7 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
-**Issue #73 — add/remove a process's goldens at runtime, no restart (2026-11-12) — in progress.**
+**Issue #73 — add/remove a process's goldens at runtime, no restart (2026-11-12) ✅ done.**
 For stormcos#881 / stormipmi#41 / minismbd#7 (boot helpers on demand). As the
 issue proposes; decisions (from the issue and code, not asked):
 - `PUT …/goldens/{name}`: a name the config names → today's swap (stop/start,
@@ -391,7 +391,10 @@ issue proposes; decisions (from the issue and code, not asked):
       API routes; unit tests (add, delete, failed add leaves nothing attached,
       pid kept through add + delete, idempotent re-add, configured refused)
 - [x] README § Goldens + API table, changelog
-- [ ] sc-build; golden
+- [x] sc-build on dc97ea7: --locked workspace build, 0 warnings; 127 stormd tests incl.
+      `goldens::tests::an_added_golden_comes_and_goes_with_the_process_left_running`
+      and `a_failed_add_leaves_nothing_attached`; golden requested; closed.
+      Node check (minismbd shows /goldens/<name>) is stormipmi#41 / minismbd#7
 
 **Issue #72 — a process's own `env`/`env_default` keys expanded in its `args` (2026-11-06) ✅ done.**
 For stormcos#362 (`${CLUSTER_VIP}` from env.d). Decisions (from the issue and code, not asked):
