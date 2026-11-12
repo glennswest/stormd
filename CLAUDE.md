@@ -372,6 +372,26 @@ screen loads).
 - Test certs are throwaway fixtures in `crates/stormd/src/tls_fixtures.rs`
   (100-year test CA; the `.pem` gitignore is why they are Rust constants)
 
+**Issue #73 — add/remove a process's goldens at runtime, no restart (2026-11-12) — in progress.**
+For stormcos#881 / stormipmi#41 / minismbd#7 (boot helpers on demand). As the
+issue proposes; decisions (from the issue and code, not asked):
+- `PUT …/goldens/{name}`: a name the config names → today's swap (stop/start,
+  unchanged). A name it does not → **add** from a full `[[process.golden]]`
+  body (`content` required), same validation as the config, presented without
+  touching the process → 201. The same name already added: identical spec →
+  200, nothing done (stormipmi re-asserts every pass); a different spec →
+  release the old, present the new, no stop/start (point 3: added goldens
+  never trigger one); the old put back if the new fails → 200.
+- `DELETE …/goldens/{name}`: added → release (unmount/rm node, detach), 200;
+  configured → 409; unknown → 404. A path already presented by another
+  golden → 409. Unknown process → 404; a bad body → 400.
+- in memory; `GET /api/v1/goldens` gains `added: true|false`. Runtime ops
+  serialized by one lock.
+- [ ] goldens.rs (added flag, spec, refusal codes), supervisor add/remove,
+      API routes; unit tests (add, delete, failed add leaves nothing attached,
+      pid kept through add + delete, idempotent re-add, configured refused)
+- [ ] README § Goldens + API table, changelog; sc-build; golden
+
 **Issue #72 — a process's own `env`/`env_default` keys expanded in its `args` (2026-11-06) ✅ done.**
 For stormcos#362 (`${CLUSTER_VIP}` from env.d). Decisions (from the issue and code, not asked):
 - value = what the process would get: `env` > inherited > `env_default` (expanded
