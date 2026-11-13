@@ -4,6 +4,9 @@
 
 <!-- New unreleased changes go here -->
 
+### 2026-11-13
+- **docs:** refresh from the code since 2026-11-06 (#72, #30, #73): README, presentation, example.toml and CLAUDE.md re-checked against config.rs, api.rs, goldens.rs, cloudid.rs and the supervisor — routes, defaults, ports and validation match; nothing the docs promise is missing from the code. No new issues.
+
 ### 2026-11-12
 - **feat:** a process's goldens can be added and removed at runtime without
   restarting it (#73, for stormcos#881 / stormipmi#41 / minismbd#7):

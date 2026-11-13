@@ -413,6 +413,8 @@ For stormcos#362 (`${CLUSTER_VIP}` from env.d). Decisions (from the issue and co
       with VIP empty and with CLUSTER_VIP inherited; `${Y}` untouched
 - [x] golden requested; closed; told stormcos#362
 
+**Docs refresh, fifth round (2026-11-13) ✅ done.** Code since 2026-11-06 is #72, #30, #73; each documented with its change (README, example.toml, presentation). Re-checked against the source: matches; README date moved. No gaps to file.
+
 **Docs refresh, fourth round (2026-11-06) ✅ done.** Code since 2026-10-30 is #69
 and #71 only (both documented in their commits). Fixed #68 (static pods: ports
 9081/9083/9084 and "PID 1 of fastetcd/control plane" removed) and the #57 doc

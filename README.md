@@ -10,7 +10,7 @@ cadvisor, stormlb and the rest. (fastetcd and the rustkube apiserver,
 controller-manager and scheduler are kubelet static pods whose command is the
 binary itself, so they run without stormd; stormcos#559, #68) (see [How it ships](#how-it-ships)).
 
-This README is written from the code at v0.8.0 (refreshed 2026-10-09). Where something is parsed but
+This README is written from the code at v0.8.0 (refreshed 2026-11-13, through #73). Where something is parsed but
 does nothing, or does something other than it says, it says so and names the issue.
 
 A 12-slide overview is in [docs/presentation.md](docs/presentation.md) (Marp:
