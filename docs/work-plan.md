@@ -47,6 +47,17 @@ the plugin summary merge).
 
 ### In Progress
 
+**#75 (traceability: service volumes with owner, on the mirror pod) — waiting
+on the owner (2026-11-18).** As written it is not stormd's: stormd creates no
+volume (stormblock's release staging, `src/image/stage.rs`, makes every service
+clone/`-data`/`-logs`), and fastetcd has no stormd (static pod `etcd`, #68), so
+the proof (`fastetcd-{name}` naming `fastetcd-data`) is out of stormd's reach.
+Asked on the issue: A re-home to stormblock + rustkube-node#372; **B (recommended)**
+A plus a stormd `GET /api/v1/volumes` reporting the volumes its own container
+runs on (mountinfo → ublk → engine id, attached/missing) for rustkube-node's
+mirror pods of stormd-run services; C stormd PUTs `owner` after the fact.
+No code until answered.
+
 **Docs refresh, second pass (2026-09-27) ✅ done.** No code since cc11049; defaults,
 routes, applets (63) and validation re-checked against the source and still
 match. What the docs lacked is behaviour filed since as issues:
