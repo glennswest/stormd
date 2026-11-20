@@ -1022,7 +1022,7 @@ mod update_tests {
             blobs: HashMap::from([(digest(&layer), layer), (digest(&config), config)]),
             heads: Mutex::new(Vec::new()),
         });
-        async fn manifest(State(r): State<Arc<Registry>>, m: Method, h: HeaderMap) -> (HeaderMap, Vec<u8>) {
+        async fn serve_manifest(State(r): State<Arc<Registry>>, m: Method, h: HeaderMap) -> (HeaderMap, Vec<u8>) {
             let mut out = HeaderMap::new();
             if m == Method::HEAD {
                 r.heads.lock().unwrap().push(h.get("accept").and_then(|v| v.to_str().ok()).unwrap_or("").to_string());
@@ -1037,7 +1037,7 @@ mod update_tests {
             r.blobs.get(&d).cloned().ok_or(StatusCode::NOT_FOUND)
         }
         let app = Router::new()
-            .route("/v2/app/manifests/latest", get(manifest))
+            .route("/v2/app/manifests/latest", get(serve_manifest))
             .route("/v2/app/blobs/{digest}", get(blob))
             .with_state(reg.clone());
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
