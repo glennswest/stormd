@@ -761,7 +761,8 @@ impl Supervisor {
             match self.spawn_process(&cfg.name, Admit::Boot).await {
                 Ok(Spawned::Started) => {}
                 Ok(Spawned::Superseded) => {
-                    info!(process = %cfg.name, state = ?proc_arc.lock().await.state, "already started or stopped through the API — start order leaves it")
+                    let state = proc_arc.lock().await.state.clone();
+                    info!(process = %cfg.name, state = ?state, "already started or stopped through the API — start order leaves it")
                 }
                 Ok(Spawned::ExecFailed(why)) => {
                     warn!(process = %cfg.name, error = %why, "could not start — its failure policy applies; start order goes on")
