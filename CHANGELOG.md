@@ -5,6 +5,18 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **fix:** image updater (#82, review findings 10e643f2175d, 5bae04c3272c,
+  2d0e63dca0f9, 8125bda07bb1, ee990eabd358, 98cbfc29e7fd, a9f12a9b4236,
+  e686d162bda7). Whiteouts are confined to the rootfs (absolute or `..`
+  paths refuse the layer; a symlinked parent is skipped, never followed) and
+  are applied to the lower layers before the layer's own files, so an opaque
+  marker no longer deletes files from its own layer in either tar order. The
+  recorded digest is the pull's own manifest digest, not a post-pivot HEAD of
+  a tag that may have moved, and the digest check sends the pull's Accept
+  list (manifest and index types). One update per process at a time: the
+  poll and `POST /api/v1/updates/{name}/trigger` share a per-process lock
+  over pull → pivot → record → cleanup (409 for a second trigger; a poll
+  skips), and the old rootfs is removed inside it, not in the background.
 - **fix:** supervisor lifecycle races and spawn failures (#81, review
   findings 01255713e1b7, 97603be5edd9, 40b194b05b52, 149cf8585ad3,
   24879c9bdbad). A start or restart during `Stopping` or `CrashLoopBackOff`,

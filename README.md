@@ -812,7 +812,7 @@ client certificate, a session cookie, or `Authorization: Bearer <token>`
 | GET | `/api/v1/cron` | jobs with last/next run, counts |
 | GET | `/api/v1/updates` | updater state per image |
 | GET | `/api/v1/updates/{name}` | one |
-| POST | `/api/v1/updates/{name}/trigger` | check, pull and pivot now |
+| POST | `/api/v1/updates/{name}/trigger` | check, pull and pivot now; 409 while an update of it runs |
 | POST | `/api/v1/backup` | run the backup now |
 | GET | `/api/v1/mounts` | mount usage |
 | GET | `/api/v1/volumes` | the stormblock volumes this container runs on, named by the engine, each `attached` / `missing` / `unverified` (see "Volumes this container runs on") |
@@ -1039,12 +1039,28 @@ reference), unpacks it to `<name>.new`, and pivots — stop the process, move th
 current rootfs to `<name>.old`, `<name>.new` into place, set the command to the
 image entrypoint *inside* that directory (it is not chrooted), merge the
 image's env under the config's, set the working directory, start it, and
-delete `.old` in the background. Then every `poll_interval_secs` it HEADs the
-manifest and repeats the pull and pivot when the digest changes.
-`POST /api/v1/updates/{name}/trigger` does it now.
+delete `.old`. Then every `poll_interval_secs` it HEADs the manifest (asking
+for the same manifest and index types the pull does, so a multi-arch tag
+names the same thing both times) and repeats the pull and pivot when the
+digest changes. `POST /api/v1/updates/{name}/trigger` does it now.
+
+**One update at a time per process** (#82): the whole pull, assembly, pivot,
+record and cleanup holds that process's update lock. A trigger while one is
+running answers **409**; a poll that finds one running skips the process
+until the next round.
+
+**Layers** are applied in order; within a layer, its whiteouts are applied
+first, to the lower layers only, then its files (#82). So an opaque
+`.wh..wh..opq` never removes files its own layer supplies, whatever the tar
+order. A whiteout with an absolute or `..` path refuses the layer, and the
+update fails; one under a parent that is a symlink is skipped with a warning,
+since what it names is not inside the rootfs. Files are confined to the
+rootfs by tar's `unpack_in`.
 
 Each successful pull and pivot records how it started the process (image,
 digest, command, env, working directory) in `<rootfs_dir>/<name>.image.json`.
+The digest is the one the pull resolved, never a later lookup of the tag: a
+tag that moves during an update is the next poll's update (#82).
 When stormd starts and finds a rootfs with that record, it starts the process
 from it at once (#8). The record's digest counts as the current one, so if
 the registry has something newer the first poll pulls it. A rootfs without a
