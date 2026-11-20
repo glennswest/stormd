@@ -47,16 +47,22 @@ the plugin summary merge).
 
 ### In Progress
 
-**#75 (traceability: service volumes with owner, on the mirror pod) — waiting
-on the owner (2026-11-18).** As written it is not stormd's: stormd creates no
-volume (stormblock's release staging, `src/image/stage.rs`, makes every service
-clone/`-data`/`-logs`), and fastetcd has no stormd (static pod `etcd`, #68), so
-the proof (`fastetcd-{name}` naming `fastetcd-data`) is out of stormd's reach.
-Asked on the issue: A re-home to stormblock + rustkube-node#372; **B (recommended)**
-A plus a stormd `GET /api/v1/volumes` reporting the volumes its own container
-runs on (mountinfo → ublk → engine id, attached/missing) for rustkube-node's
-mirror pods of stormd-run services; C stormd PUTs `owner` after the fact.
-No code until answered.
+**#75 (traceability: service volumes with owner, on the mirror pod) — owner
+answered B (2026-11-20).** Owner at creation is stormblock#670 (release
+staging is the only creator); mirror-pod volumes from the engine listing are
+rustkube-node#372 (closed, 60854ba). stormd's part, in progress:
+- [ ] `GET /api/v1/volumes`: the volumes stormd's own container runs on —
+      `/proc/self/mountinfo` → ublk device (mount source, else
+      `/sys/dev/block/<maj:min>/uevent`) → the engine's `?in_use=true`
+      listing (`attachments[].device`) → volume id, name, kind, owner; plus
+      the goldens it presented and the declared ones it did not. State
+      `attached` / `missing` / `unverified` (engine not answering).
+- [ ] tests (mountinfo parse, the join, missing goldens, the route), README,
+      CHANGELOG
+- [ ] file on rustkube-node: put stormd's report on the mirror pod of every
+      stormd-run service, `missing` as a pod condition
+- [ ] sc-build, `component build stormd`, `shipped` with a proof on a
+      stormd-run service (cadvisor)
 
 **Docs refresh, second pass (2026-09-27) ✅ done.** No code since cc11049; defaults,
 routes, applets (63) and validation re-checked against the source and still
