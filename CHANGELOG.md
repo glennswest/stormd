@@ -4,6 +4,16 @@
 
 <!-- New unreleased changes go here -->
 
+### 2026-11-20
+- **feat:** `GET /api/v1/volumes` (#75, owner's option B): the stormblock
+  volumes this container runs on — mountinfo → ublk device → the engine's
+  `?in_use=true` listing → volume id, name, kind, owner, role
+  (`root`/`data`/`logs`/`golden`/`volume`) and mounts — plus presented and
+  declared-but-not-presented goldens, each `attached`, `missing` or
+  `unverified` (engine not answering). For rustkube-node's mirror pods of
+  stormd-run services; the creation-time owner is stormblock#670's.
+  Medium-suite case `volumes-report` in stormd-test.
+
 ### 2026-11-13
 - **docs:** refresh from the code since 2026-11-06 (#72, #30, #73): README, presentation, example.toml and CLAUDE.md re-checked against config.rs, api.rs, goldens.rs, cloudid.rs and the supervisor — routes, defaults, ports and validation match; nothing the docs promise is missing from the code. No new issues.
 

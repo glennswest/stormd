@@ -235,6 +235,23 @@ impl Goldens {
             .ok_or_else(|| anyhow::anyhow!("no golden named {want} on the engine"))
     }
 
+    /// The engine's volumes that are in use, with their attachments
+    /// (`GET /api/v1/volumes?in_use=true`): what names the ublk devices this
+    /// container is mounted on (stormd#75).
+    pub async fn engine_in_use(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        let url = format!("{}/api/v1/volumes?in_use=true", self.engine());
+        let resp = self.auth(self.client.get(&url)).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            anyhow::bail!("{url}: {status}: {}", resp.text().await.unwrap_or_default());
+        }
+        let body: serde_json::Value = resp.json().await?;
+        match body["items"].as_array() {
+            Some(items) => Ok(items.clone()),
+            None => anyhow::bail!("{url}: no items in the answer"),
+        }
+    }
+
     async fn attach(&self, volume_id: &str, holder: &str) -> anyhow::Result<PathBuf> {
         let url = format!("{}/api/v1/volumes/{volume_id}/attach", self.engine());
         let body = serde_json::json!({ "mode": "ro", "transport": "ublk", "holder": holder });

@@ -101,6 +101,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/updates/{name}/trigger", post(trigger_update))
         // System info
         .route("/api/v1/mounts", get(list_mounts))
+        .route("/api/v1/volumes", get(list_volumes))
         .route("/api/v1/memory/history", get(memory_history))
         // WebSocket
         .route("/ws/console/{process}", get(ws::ws_console))
@@ -783,6 +784,26 @@ async fn trigger_update(
 async fn list_mounts() -> impl IntoResponse {
     let mounts = crate::stats::StatsCollector::get_mounts();
     Json(mounts)
+}
+
+/// The volumes this container runs on, named by the node's engine
+/// (stormd#75): see `crate::volumes`.
+async fn list_volumes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mountinfo = tokio::fs::read_to_string("/proc/self/mountinfo").await.unwrap_or_default();
+    let mounts = crate::volumes::parse_mountinfo(&mountinfo);
+    let (engine, presented) = match state.supervisor.goldens() {
+        Some(g) => (g.engine_in_use().await.map_err(|e| e.to_string()), g.list().await),
+        None => (Err("no engine configured".to_string()), Vec::new()),
+    };
+    let declared = state.supervisor.declared_goldens().await;
+    Json(crate::volumes::report(
+        &state.container_name,
+        &mounts,
+        &crate::volumes::sysfs_devname,
+        engine,
+        &presented,
+        &declared,
+    ))
 }
 
 async fn memory_history(State(state): State<Arc<AppState>>) -> impl IntoResponse {

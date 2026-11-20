@@ -436,6 +436,20 @@ impl Supervisor {
         self.goldens.get()
     }
 
+    /// Every golden a process's config declares, by process (stormd#75).
+    pub async fn declared_goldens(&self) -> Vec<(String, crate::config::GoldenMount)> {
+        let procs = self.processes.read().await;
+        let mut out = Vec::new();
+        for p in procs.values() {
+            let p = p.lock().await;
+            for g in &p.config.golden {
+                out.push((p.config.name.clone(), g.clone()));
+            }
+        }
+        out.sort_by(|a, b| (&a.0, &a.1.name).cmp(&(&b.0, &b.1.name)));
+        out
+    }
+
     /// Present a process's goldens before it starts; false when shutdown
     /// began first.
     async fn present_goldens(&self, cfg: &ProcessConfig) -> bool {

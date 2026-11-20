@@ -807,6 +807,7 @@ client certificate, a session cookie, or `Authorization: Bearer <token>`
 | POST | `/api/v1/updates/{name}/trigger` | check, pull and pivot now |
 | POST | `/api/v1/backup` | run the backup now |
 | GET | `/api/v1/mounts` | mount usage |
+| GET | `/api/v1/volumes` | the stormblock volumes this container runs on, named by the engine, each `attached` / `missing` / `unverified` (see "Volumes this container runs on") |
 | GET | `/api/v1/memory/history` | RSS/VMS samples |
 | GET | `/api/v1/plugins` | `[process.ui]` plugins |
 | POST | `/api/v1/shutdown` | stop everything and exit; optional `{"exitCode": N}` |
@@ -1215,6 +1216,40 @@ has), reach to the engine on `:9090`, and stormd running as root with
 stormpump drops no capabilities, and boot.d services keep them under the decided default (stormpump#47). Only the local ublk transport
 is used; an NVMe-TCP answer is an error. Processes owned by the image updater
 are not given goldens.
+
+## Volumes this container runs on
+
+`GET /api/v1/volumes` (#75) says which stormblock volumes the container is
+using: its root clone, its `-data`/`-logs` volumes and its goldens. stormd
+creates none of them (release staging does, and sets their owner there,
+stormblock#670); rustkube-node puts them on the service's mirror pod.
+
+It reads `/proc/self/mountinfo`, keeps the mounts on a ublk device (the
+kernel's name for the device number in `/sys/dev/block/<maj:min>/uevent`,
+else a `/dev/ublkbN` mount source), and asks the engine
+(`[goldens] engine_url`, with its token) for `GET /api/v1/volumes?in_use=true`:
+the volume whose ublk attachment is that device names it. Goldens stormd
+presented are included (an image golden has no mount), and so is every golden
+a process declares that is not presented.
+
+```json
+{"container": "cadvisor", "items": [
+  {"volume_id": "…", "name": "cadvisor", "kind": "volume", "role": "root",
+   "device": "/dev/ublkb3", "fstype": "ext4", "mounts": ["/"],
+   "state": "attached", "owner": {"kind": "Service", "…": "…"}},
+  {"volume_id": "…", "name": "cadvisor-logs", "role": "logs", "mounts": ["/var/log/stormd"], "state": "attached", "owner": null, "…": "…"}]}
+```
+
+| field | |
+|-------|--|
+| `role` | `root` (mounted at `/`), `golden`, `data` / `logs` (the engine name ends `-data` / `-logs`), else `volume` |
+| `state` | `attached`: the engine serves that device as that volume. `missing`: mounted from a device the engine does not serve, or a declared golden not presented (`reason` says which). `unverified`: the engine did not answer (`engine_error`) |
+| `mounts` | every place the device is mounted here (bind mounts included) |
+| `owner` | the engine's owner for the volume, as it has it (`null` when unset) |
+| `goldens` | the `process`/`name` of each golden this is |
+
+Mounts not on a ublk device (tmpfs, proc, a host directory) are not volumes
+and are left out.
 
 ## Development notes
 

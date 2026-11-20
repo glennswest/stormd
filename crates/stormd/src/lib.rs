@@ -23,5 +23,6 @@ pub mod tls;
 #[cfg(test)]
 mod tls_fixtures;
 pub mod updater;
+pub mod volumes;
 pub mod web;
 pub mod ws;

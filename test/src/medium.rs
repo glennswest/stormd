@@ -30,6 +30,7 @@ pub fn run(env: &Env, r: &mut Report) {
     r.run("args-expand-declared", || args_expand_declared(env));
     r.run("api-port-taken", || api_port_taken(env));
     r.run("restart-wait-healthy", || restart_wait_healthy(env));
+    r.run("volumes-report", || volumes(env));
     r.run("node-stormd", || crate::short::node_stormd(env));
 }
 
@@ -331,6 +332,36 @@ fn components(env: &Env) -> Outcome {
                 }
             }
             Err(e) => Outcome::Fail(e),
+        }
+    })
+}
+
+/// `GET /api/v1/volumes` (stormd#75): the container's name, a golden the
+/// config declares and nothing presented reported `missing`, and an engine
+/// that does not answer said so instead of guessed around.
+fn volumes(env: &Env) -> Outcome {
+    let body = proc("needs", "\"sleep\"", "")
+        + "[[process.golden]]\nname = \"drivers\"\ngolden = \"golden-drivers-test\"\ncontent = \"filesystem\"\n\n\
+           [goldens]\nengine_url = \"http://127.0.0.1:1\"\n";
+    with(env, "volumes", &body, Opts::default(), |sd| {
+        let v = match sd.json("/api/v1/volumes") {
+            Ok(v) => v,
+            Err(e) => return Outcome::Fail(e),
+        };
+        let items = v["items"].as_array().cloned().unwrap_or_default();
+        let drivers = items.iter().find(|i| i["goldens"][0]["name"] == "drivers");
+        if v["container"] != "stormd-test-volumes" {
+            Outcome::Fail(format!("container is {}, not stormd-test-volumes", v["container"]))
+        } else if v["engine_error"].as_str().is_none_or(str::is_empty) {
+            Outcome::Fail(format!("no engine_error with the engine at 127.0.0.1:1: {v:.300}"))
+        } else {
+            match drivers {
+                Some(d) if d["state"] == "missing" && d["name"] == "golden-drivers-test" && d["role"] == "golden" => {
+                    Outcome::Pass(format!("{} volumes; the unpresented golden is missing ({}); engine: {}", items.len(), d["reason"], v["engine_error"]))
+                }
+                Some(d) => Outcome::Fail(format!("the declared golden reads {d}")),
+                None => Outcome::Fail(format!("the declared golden is not reported: {v:.300}")),
+            }
         }
     })
 }
