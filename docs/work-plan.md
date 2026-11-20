@@ -50,11 +50,12 @@ the plugin summary merge).
 **#93 (P1, review dbd850683639): SFTP SETSTAT/FSETSTAT ignored size.**
 apply_attrs set only permissions and answered OK, so a truncate-then-rewrite
 left stale trailing bytes.
-- [ ] apply every v3 attribute: size (set_len), uid/gid (chown/fchown),
+- [x] apply every v3 attribute: size (set_len), uid/gid (chown/fchown),
       permissions, atime/mtime (set_times); FSETSTAT through its open fd;
-      user/group names (v4+) refused OpUnsupported; errors propagated
-- [ ] tests (truncate, extend, read-only handle refused, times, perms);
-      docs, CHANGELOG; sc-build; image; close #93
+      user/group names (v4+) refused OpUnsupported; errors propagated —
+      3665cd6; 5923713 drops the now-unread handle path (dead-code, #94)
+- [x] 3 `setstat_tests`; README, CHANGELOG; sc-build 5923713: build.sh (157
+      tests, clippy clean) + medium 24 pass / 1 skip; image; shipped
 
 **#88 (P1, review bd2e41be2392): the UI's session check ignored client
 certificates.** `require_auth` accepted `ClientCertVerified`; `/api/v1/auth/
