@@ -174,7 +174,7 @@ dies in the pod.
 | suite | budget | covers |
 |---|---|---|
 | `short` | < 2 min | API up; a dependent waits for a tcp ready probe and for a one-shot to finish; a crash is restarted; stdout and stderr reach the logs API; SIGTERM exits 0 with no process left behind; the node's own stormds (ports 9081–9085; those with no stormd are skipped) answer `/api/v1/health` — a skip where none do |
-| `medium` | < 30 min | a failed one-shot holds its dependents, and SIGTERM still stops stormd; `no_restart_exit_codes` hold and fail; `on_failure = "fail"`; `max_restarts`; `on_exit = "restart"`; a liveness probe that keeps failing restarts; API stop/start/restart and shutdown with an exit code; bearer-token auth; `/metrics` (with the worker's own RSS, CPU and fds); the component feed; cron; a config that does not parse exits 1; run as `ps` (not an applet), exits 127 and spawns nothing; `wait_for_files` holds the start until the file exists; a taken API port exits 1 with nothing started; `restart?wait=healthy` answers 200 only after the new run's probe and 504 naming what it waits on |
+| `medium` | < 30 min | a failed one-shot holds its dependents, and SIGTERM still stops stormd; `no_restart_exit_codes` hold and fail; `on_failure = "fail"`; `max_restarts`; `on_exit = "restart"`; a liveness probe that keeps failing restarts; API stop/start/restart and shutdown with an exit code; bearer-token auth; `/metrics` (with the worker's own RSS, CPU and fds); the component feed; cron; a config that does not parse exits 1; run as `ps` (not an applet), exits 127 and spawns nothing; `wait_for_files` holds the start until the file exists; a taken API port exits 1 with nothing started; `restart?wait=healthy` answers 200 only after the new run's probe and 504 naming what it waits on; `GET /api/v1/volumes` reports a declared, unpresented golden `missing`; `helper = true` is reported in `GET /api/v1/processes` and refused (exit 1) on a one-shot |
 | `long` | the night window | waves of processes sized from the pod's own CPU, memory and pid limits (mostly long-running, some crash-once, one-shots with dependents), started, settled and stopped with SIGTERM; one resident stormd has its processes restarted through the API every wave. Per wave: settle time, stop time, leftover processes, the resident's RSS and fds. A wave twice as slow as the first of its size, a leftover, or growing residue fails |
 
 Build it on the build box (stormd needs `stormpull` over `ssh://`, so the
@@ -426,6 +426,7 @@ file does not stop it either: it is skipped, and taken up when it appears.
 | `[process.startup_probe]`, `[process.liveness_probe]`, `[process.readiness_probe]` | — | Kubernetes-style probes, below |
 | `[process.liveness]` | — | **retired** (#48): parsed, logged as retired, never acted on |
 | `restart_policy` | — | `Always` \| `OnFailure` \| `Never` (Kubernetes): replaces `on_exit`/`on_failure`/`restart_delay_secs`/`max_restarts` — below |
+| `helper` | `false` | a helper of the service (log shipper, cert renewer), not its main process (#80): reported as `"helper"` in `GET /api/v1/processes`, so a node's mirror pod shows it as a container of its own. Supervision is unchanged. Refused on a one-shot (`restart_policy` `OnFailure`/`Never`, or no `restart_policy` and `on_exit = "stop"`) |
 | `[process.ui]` | — | plugin tab, below |
 | `capture_stdout`, `capture_stderr` | `true` | `false`: that stream goes to /dev/null instead of the log (#7) |
 | `[[process.golden]]` | — | goldens presented to the process, below and [Goldens](#goldens) |
@@ -792,7 +793,7 @@ client certificate, a session cookie, or `Authorization: Bearer <token>`
 | POST | `/api/v1/auth/login` | *open* — `{username, password}` → session cookie |
 | POST | `/api/v1/auth/logout` | *open* |
 | GET | `/api/v1/auth/session` | *open* — whether login is required/held, instance name, default theme |
-| GET | `/api/v1/processes` | all process statuses |
+| GET | `/api/v1/processes` | all process statuses (each with `"helper"`, #80) |
 | GET | `/api/v1/processes/{name}` | one |
 | POST | `/api/v1/processes/{name}/start` \| `stop` \| `restart` | `restart?wait=healthy&timeout=N`: answer once the new run is healthy (200), it ended (502), or N s passed (504, process left running) — below |
 | GET | `/api/v1/events?since=<seq>` | Kubernetes-shaped events (`type`, `reason`, `message`, `process`, `count`, `firstTimestamp`, `lastTimestamp`, `seq`), changed after `seq` — below (behind auth) |

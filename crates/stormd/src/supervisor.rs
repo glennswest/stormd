@@ -60,6 +60,9 @@ pub struct ProcessStatus {
     pub liveness_passed_run: Option<u64>,
     /// Every check it has passed for this run (see `Supervisor::health_of`).
     pub healthy: bool,
+    /// `[[process]] helper = true`: a helper of the service, not its main
+    /// process (stormd#80) — its own container in a mirror pod.
+    pub helper: bool,
 }
 
 struct ManagedProcess {
@@ -137,6 +140,7 @@ impl ManagedProcess {
             liveness_passed_at: self.liveness_passed_at,
             liveness_passed_run: self.liveness_passed_run,
             healthy: false,
+            helper: self.config.helper,
         }
     }
 

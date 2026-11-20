@@ -166,6 +166,14 @@ owner = "65532:65532"                      # so an unprivileged service can read
 mode = 0o440                               # default 0o444
 size_bytes = 268435456                     # the image's own length (the volume is larger)
 
+# A helper of the service, not its main process (stormd#80): reported as
+# "helper": true in GET /api/v1/processes, so a node's mirror pod shows it as a
+# container of its own. Supervised like any other. Refused on a one-shot.
+[[process]]
+name = "log-shipper"
+command = "/app/ship-logs"
+helper = true                   # default false
+
 # --- Cron Jobs ---
 
 [[cron]]

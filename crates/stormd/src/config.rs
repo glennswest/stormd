@@ -315,6 +315,13 @@ pub struct ProcessConfig {
     /// Kubernetes restart policy with exponential back-off (stormd#48).
     #[serde(default, alias = "restartPolicy")]
     pub restart_policy: Option<RestartPolicy>,
+    /// A helper of the service (a log shipper, a cert client that renews),
+    /// not its main process (stormd#80). Only reported — `"helper"` in
+    /// `GET /api/v1/processes` — so rustkube-node's mirror pod can show it
+    /// as a container of its own; supervision is the same. Refused on a
+    /// one-shot, which is init-like, not a container.
+    #[serde(default)]
+    pub helper: bool,
     /// Kubernetes-style probes (stormd#48). The startup probe gates the
     /// other two; liveness failing restarts the run; readiness only marks it
     /// ready or not.
@@ -648,6 +655,19 @@ fn default_name() -> String { "stormd".to_string() }
 fn default_log_dir() -> PathBuf { PathBuf::from("/var/log/stormd") }
 fn default_on_failure() -> FailureAction { FailureAction::Restart }
 fn default_on_exit() -> ExitAction { ExitAction::Restart }
+
+impl ProcessConfig {
+    /// Runs once rather than for the container's life: `restart_policy`
+    /// OnFailure or Never, or — with no `restart_policy`, which replaces
+    /// `on_exit` — `on_exit = "stop"`.
+    pub fn is_one_shot(&self) -> bool {
+        match self.restart_policy {
+            Some(RestartPolicy::Always) => false,
+            Some(RestartPolicy::OnFailure | RestartPolicy::Never) => true,
+            None => self.on_exit == ExitAction::Stop,
+        }
+    }
+}
 fn default_restart_delay_secs() -> u64 { 1 }
 fn default_stop_timeout_secs() -> u64 { 10 }
 fn default_max_restarts() -> u32 { 10 }
@@ -706,6 +726,12 @@ impl Config {
             }
         }
         for p in &self.process {
+            if p.helper && p.is_one_shot() {
+                anyhow::bail!(
+                    "process '{}': helper = true on a one-shot (on_exit = \"stop\", or restart_policy OnFailure/Never); a helper is long-running",
+                    p.name
+                );
+            }
             if let Some(f) = p.wait_for_files.iter().find(|f| !f.starts_with('/')) {
                 anyhow::bail!("process '{}': wait_for_files entry '{}' is not an absolute path", p.name, f);
             }
@@ -784,6 +810,7 @@ mod tests {
         assert!(c.process.iter().any(|p| !p.wait_for_files.is_empty()));
         assert!(c.process.iter().any(|p| p.golden.len() == 2));
         assert!(c.process.iter().any(|p| !p.api.is_empty()));
+        assert!(c.process.iter().any(|p| p.helper));
     }
 
     /// stormd#7: unknown keys — removed ones included — are reported, and
@@ -803,6 +830,28 @@ mod tests {
         }
         let (_, none) = Config::parse(include_str!("../../../config/example.toml")).unwrap();
         assert!(none.is_empty(), "example.toml has unknown keys: {none:?}");
+    }
+
+    #[test]
+    fn helper_is_reported_and_refused_on_a_one_shot() {
+        let parse = |extra: &str| -> anyhow::Result<Config> {
+            let c: Config = toml::from_str(&format!(
+                "[[process]]\nname = \"p\"\ncommand = \"/bin/true\"\n{extra}"
+            ))?;
+            c.validate().map(|_| c)
+        };
+        assert!(!parse("").unwrap().process[0].helper);
+        assert!(parse("helper = true\n").unwrap().process[0].helper);
+        assert!(parse("helper = true\non_exit = \"stop\"\nrestart_policy = \"Always\"\n").is_ok());
+        assert!(parse("on_exit = \"stop\"\n").is_ok());
+        for bad in [
+            "helper = true\non_exit = \"stop\"\n",
+            "helper = true\nrestart_policy = \"OnFailure\"\n",
+            "helper = true\nrestart_policy = \"Never\"\n",
+        ] {
+            let e = parse(bad).unwrap_err().to_string();
+            assert!(e.contains("helper = true on a one-shot"), "{bad}: {e}");
+        }
     }
 
     #[test]

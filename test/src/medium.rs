@@ -31,6 +31,8 @@ pub fn run(env: &Env, r: &mut Report) {
     r.run("api-port-taken", || api_port_taken(env));
     r.run("restart-wait-healthy", || restart_wait_healthy(env));
     r.run("volumes-report", || volumes(env));
+    r.run("helper-reported", || helper_reported(env));
+    r.run("helper-on-one-shot-refused", || helper_on_one_shot(env));
     r.run("node-stormd", || crate::short::node_stormd(env));
 }
 
@@ -364,6 +366,43 @@ fn volumes(env: &Env) -> Outcome {
             }
         }
     })
+}
+
+/// `[[process]] helper = true` is reported as `"helper": true` in
+/// `GET /api/v1/processes`, and every other process says `false` (stormd#80).
+fn helper_reported(env: &Env) -> Outcome {
+    let body = proc("main", "\"sleep\"", "") + &proc("shipper", "\"sleep\"", "helper = true");
+    with(env, "helper", &body, Opts::default(), |sd| {
+        let list = match sd.json("/api/v1/processes") {
+            Ok(v) => v,
+            Err(e) => return Outcome::Fail(e),
+        };
+        let helper_of = |name: &str| {
+            list.as_array()
+                .and_then(|a| a.iter().find(|p| p["name"] == name))
+                .map(|p| p["helper"].clone())
+        };
+        match (helper_of("main"), helper_of("shipper")) {
+            (Some(m), Some(s)) if m == false && s == true => {
+                Outcome::Pass("GET /api/v1/processes: main helper=false, shipper helper=true".into())
+            }
+            (m, s) => Outcome::Fail(format!("main helper={m:?}, shipper helper={s:?}: {list:.300}")),
+        }
+    })
+}
+
+/// `helper = true` on a one-shot is a config error: stormd exits 1.
+fn helper_on_one_shot(env: &Env) -> Outcome {
+    let body = proc("once", "\"exit\", \"0\"", "on_exit = \"stop\"\nhelper = true");
+    let mut sd = match Stormd::start_raw(env, "helperoneshot", &body) {
+        Ok(s) => s,
+        Err(e) => return Outcome::Infra(e),
+    };
+    match sd.wait_exit(S(10)) {
+        Some((s, _)) if s.code() == Some(1) => Outcome::Pass("helper = true on a one-shot refused with exit 1".into()),
+        Some((s, _)) => Outcome::Fail(format!("exited {s}, want 1")),
+        None => Outcome::Fail("still running with helper = true on a one-shot".into()),
+    }
 }
 
 fn cron(env: &Env) -> Outcome {

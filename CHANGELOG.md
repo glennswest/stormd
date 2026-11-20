@@ -5,6 +5,13 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **feat:** `[[process]] helper = true` (#80, for rustkube-node#378): marks a
+  helper of the service (log shipper, cert renewer) and is reported as
+  `"helper": true|false` on every process in `GET /api/v1/processes`, so a
+  node's mirror pod can show it as a container of its own. Default false;
+  refused on a one-shot (`restart_policy` OnFailure/Never, or `on_exit =
+  "stop"` without one). Supervision unchanged. Unit test, example.toml, and
+  medium-suite cases `helper-reported` / `helper-on-one-shot-refused`.
 - **fix:** the build is warning-free and stays so (#77): 37 clippy findings
   cleared (vendored russh-sftp `io::Error::other` ×8 and a redundant
   `.into_iter()`; stormlog `sort_by_key`, `Default` for `StreamManager`,
