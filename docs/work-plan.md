@@ -53,11 +53,15 @@ marker deletes files from its own layer (2d0e63dca0f9); (2) the recorded
 digest is a post-pivot HEAD of the tag, not what was pulled (8125bda07bb1,
 ee990eabd358, 98cbfc29e7fd); (3) poll + trigger run do_update concurrently on
 the same .new/.old dirs (a9f12a9b4236, e686d162bda7).
-- [ ] whiteouts: reject abs/`..` paths, refuse symlinked parents, opaque
-      clears only lower-layer entries (both marker orders); tests
-- [ ] record pulled.manifest_digest; tests
-- [ ] per-process update lock across pull→pivot→record→cleanup; test
-- [ ] sc-build build.sh + medium; image; close #82
+- [x] whiteouts: reject abs/`..` paths, skip symlinked parents, whiteouts
+      applied to the lower layers before the layer's files (both marker
+      orders); 4 `layer_tests` — 056e999
+- [x] record pulled.manifest_digest; check_digest sends the pull's Accept
+      list; `update_tests` against a fake registry whose tag moves
+- [x] per-process update lock across pull→pivot→record→cleanup (409 for a
+      second trigger, poll skips); test
+- [x] sc-build 74e2d83 (after test-only fixes 89e7594 #90, 74e2d83 #91):
+      build.sh (143 tests, clippy clean) + medium 23 pass / 1 skip
 
 **#81 (P1, review): 5 supervisor.rs concurrency/error findings.**
 01255713e1b7 / 97603be5edd9 / 40b194b05b52: start/restart during Stopping or
