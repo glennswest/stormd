@@ -267,26 +267,31 @@ impl Credential {
 /// (stormd#88). The session endpoint used to count only a cookie, so with a
 /// client certificate as the sole credential the API worked and the web UI
 /// sat on a login screen that no password could pass.
-pub async fn credential(auth: &AuthState, req: &Request) -> Option<Credential> {
-    if req.extensions().get::<ClientCertVerified>().is_some() {
-        return Some(Credential::ClientCertificate);
-    }
-    if let Some(given) = req
+///
+/// What it needs from the request is read before it returns, so the future
+/// does not hold the request (whose body is not `Sync`) and a handler
+/// awaiting it stays `Send`.
+pub fn credential<'a>(auth: &'a AuthState, req: &Request) -> impl std::future::Future<Output = Option<Credential>> + Send + 'a {
+    let cert = req.extensions().get::<ClientCertVerified>().is_some();
+    let bearer = req
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-    {
-        if auth.token_matches(given) {
+        .map(str::to_string);
+    let cookie = session_cookie(req);
+    async move {
+        if cert {
+            return Some(Credential::ClientCertificate);
+        }
+        if bearer.is_some_and(|t| auth.token_matches(&t)) {
             return Some(Credential::Bearer);
         }
-    }
-    if let Some(id) = session_cookie(req) {
-        if let Some(user) = auth.session_user(&id).await {
-            return Some(Credential::Session(user));
+        match cookie {
+            Some(id) => auth.session_user(&id).await.map(Credential::Session),
+            None => None,
         }
     }
-    None
 }
 
 pub async fn require_auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
@@ -370,17 +375,20 @@ pub async fn session(State(state): State<Arc<AppState>>, req: Request) -> Respon
 
 /// `{required, authenticated, via, user}` for a request: authenticated by
 /// exactly what `require_auth` accepts (`credential`), and how.
-pub async fn session_status(auth: Option<&AuthState>, req: &Request) -> serde_json::Value {
-    let cred = match auth {
-        Some(a) => credential(a, req).await,
-        None => None,
-    };
-    serde_json::json!({
-        "required": auth.is_some(),
-        "authenticated": auth.is_none() || cred.is_some(),
-        "via": cred.as_ref().map(Credential::via),
-        "user": cred.as_ref().map(Credential::user),
-    })
+pub fn session_status<'a>(auth: Option<&'a AuthState>, req: &Request) -> impl std::future::Future<Output = serde_json::Value> + Send + 'a {
+    let pending = auth.map(|a| credential(a, req));
+    async move {
+        let cred = match pending {
+            Some(f) => f.await,
+            None => None,
+        };
+        serde_json::json!({
+            "required": auth.is_some(),
+            "authenticated": auth.is_none() || cred.is_some(),
+            "via": cred.as_ref().map(Credential::via),
+            "user": cred.as_ref().map(Credential::user),
+        })
+    }
 }
 
 #[cfg(test)]
