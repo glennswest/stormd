@@ -47,6 +47,15 @@ the plugin summary merge).
 
 ### In Progress
 
+**#93 (P1, review dbd850683639): SFTP SETSTAT/FSETSTAT ignored size.**
+apply_attrs set only permissions and answered OK, so a truncate-then-rewrite
+left stale trailing bytes.
+- [ ] apply every v3 attribute: size (set_len), uid/gid (chown/fchown),
+      permissions, atime/mtime (set_times); FSETSTAT through its open fd;
+      user/group names (v4+) refused OpUnsupported; errors propagated
+- [ ] tests (truncate, extend, read-only handle refused, times, perms);
+      docs, CHANGELOG; sc-build; image; close #93
+
 **#88 (P1, review bd2e41be2392): the UI's session check ignored client
 certificates.** `require_auth` accepted `ClientCertVerified`; `/api/v1/auth/
 session` counted only a cookie, so with `client_ca_file` the only credential
