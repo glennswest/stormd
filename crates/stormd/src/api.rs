@@ -597,6 +597,14 @@ async fn ingest_log(
     State(state): State<Arc<AppState>>,
     Json(req): Json<stormlog::types::IngestRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    // The process names the log file: one file name, never a path
+    // (stormd#87). `../../x` or `/abs` wrote outside log_dir.
+    if !stormlog::types::safe_process_name(&req.process) {
+        return Err(AppError(crate::goldens::refused(
+            400,
+            "process must be one file name: no '/', '\\', NUL, '.' or '..', at most 200 bytes",
+        )));
+    }
     let entry = stormlog::types::LogEntry::new(req.process, req.stream, req.line)
         .with_severity(req.severity.unwrap_or(stormlog::types::Severity::Info));
     state.stormlog.write_entry(entry).await;

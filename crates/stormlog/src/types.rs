@@ -245,3 +245,33 @@ pub struct IngestRequest {
 }
 
 fn default_ingest_stream() -> LogStream { LogStream::Ingest }
+
+/// Whether `name` may name a process's log files: one file-name component
+/// (stormd#87). Log paths are `{log_dir}/{name}.log` and its rotations and
+/// archives, so a name with a `/` (or `\\`), a NUL, `.` or `..`, or none at
+/// all would put them — created, appended to, renamed — outside `log_dir`.
+/// At most 200 bytes, leaving room for `.{run_id}.failed.log` within a
+/// file-name's 255.
+pub fn safe_process_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 200
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', '\0'])
+}
+
+#[cfg(test)]
+mod safe_name_tests {
+    use super::safe_process_name;
+
+    #[test]
+    fn one_component_only() {
+        for ok in ["fastetcd", "cron.cleanup", "api-1", "a..b", ".hidden"] {
+            assert!(safe_process_name(ok), "{ok}");
+        }
+        let long = "x".repeat(201);
+        for bad in ["", ".", "..", "../x", "../../etc/passwd", "/abs", "a/b", "a\\b", "nul\0", long.as_str()] {
+            assert!(!safe_process_name(bad), "{bad:?}");
+        }
+    }
+}

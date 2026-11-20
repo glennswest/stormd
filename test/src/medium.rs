@@ -32,6 +32,7 @@ pub fn run(env: &Env, r: &mut Report) {
     r.run("restart-wait-healthy", || restart_wait_healthy(env));
     r.run("volumes-report", || volumes(env));
     r.run("helper-reported", || helper_reported(env));
+    r.run("ingest-process-name-confined", || ingest_confined(env));
     r.run("helper-on-one-shot-refused", || helper_on_one_shot(env));
     r.run("node-stormd", || crate::short::node_stormd(env));
 }
@@ -364,6 +365,53 @@ fn volumes(env: &Env) -> Outcome {
                 Some(d) => Outcome::Fail(format!("the declared golden reads {d}")),
                 None => Outcome::Fail(format!("the declared golden is not reported: {v:.300}")),
             }
+        }
+    })
+}
+
+/// stormd#87: `POST /api/v1/logs/ingest` names a log file by `process`, so
+/// a name that is not one file name is refused (400) and nothing is written
+/// outside `log_dir`; a plain one is ingested into `log_dir/<name>.log`.
+fn ingest_confined(env: &Env) -> Outcome {
+    let body = proc("main", "\"sleep\"", "");
+    with(env, "ingest", &body, Opts::default(), |sd| {
+        let abs = sd.dir.join("abs-escape").display().to_string();
+        let mut refused = Vec::new();
+        for name in ["../escape", "../../escape", abs.as_str(), "a/b", ".."] {
+            let req = serde_json::json!({ "process": name, "line": "should not be written" }).to_string();
+            match sd.post("/api/v1/logs/ingest", Some(&req)) {
+                Ok((400, _)) => refused.push(name.to_string()),
+                Ok((s, b)) => return Outcome::Fail(format!("process {name:?}: HTTP {s} {b:.200}, want 400")),
+                Err(e) => return Outcome::Fail(e),
+            }
+        }
+        let escaped: Vec<String> = ["escape.log", "abs-escape.log", "log/a"]
+            .iter()
+            .map(|f| sd.dir.join(f))
+            .chain([sd.dir.parent().map(|p| p.join("escape.log")).unwrap_or_default()])
+            .filter(|p| p.exists())
+            .map(|p| p.display().to_string())
+            .collect();
+        if !escaped.is_empty() {
+            return Outcome::Fail(format!("written outside log_dir: {escaped:?}"));
+        }
+        let ok = serde_json::json!({ "process": "external", "line": "hello from outside" }).to_string();
+        match sd.post("/api/v1/logs/ingest", Some(&ok)) {
+            Ok((200, _)) => {}
+            Ok((s, b)) => return Outcome::Fail(format!("a plain name: HTTP {s} {b:.200}")),
+            Err(e) => return Outcome::Fail(e),
+        }
+        let file = sd.dir.join("log/external.log");
+        let t = std::time::Instant::now();
+        while !file.exists() && t.elapsed() < S(5) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        match std::fs::read_to_string(&file) {
+            Ok(text) if text.contains("hello from outside") => {
+                Outcome::Pass(format!("refused with 400: {refused:?}; nothing outside log_dir; a plain name ingested"))
+            }
+            Ok(text) => Outcome::Fail(format!("log/external.log lacks the line: {text:.200}")),
+            Err(e) => Outcome::Fail(format!("log/external.log not written: {e}")),
         }
     })
 }

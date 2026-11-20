@@ -66,6 +66,12 @@ impl FileLogger {
     }
 
     async fn write_at(&self, entry: &LogEntry, now: Instant) {
+        // Never a path outside log_dir (stormd#87): the API refuses such a
+        // name, and the config does; this is the last line.
+        if !crate::types::safe_process_name(&entry.process) {
+            warn!(process = ?entry.process, "log line for a process name that is not one file name — not written to a file");
+            return;
+        }
         let mut writers = self.writers.lock().await;
         let writer = writers
             .entry(entry.process.clone())
@@ -194,6 +200,9 @@ impl FileLogger {
     /// writer so the next write creates a fresh file. Returns the path to the
     /// renamed file, or None if there's no file.
     pub async fn take_file(&self, process: &str, run_id: &str, failed: bool) -> Option<PathBuf> {
+        if !crate::types::safe_process_name(process) {
+            return None;
+        }
         let mut writers = self.writers.lock().await;
         writers.remove(process);
 
@@ -224,6 +233,9 @@ impl FileLogger {
 
     /// Remove any old rotated files for a process to free disk space.
     pub fn cleanup_rotated(&self, process: &str) {
+        if !crate::types::safe_process_name(process) {
+            return;
+        }
         let dir = &self.config.log_dir;
         for i in 1..=self.config.max_files {
             let path = dir.join(format!("{}.{}.log", process, i));
@@ -297,6 +309,28 @@ mod failure_tests {
 
     fn e(line: &str) -> LogEntry {
         LogEntry::new("app", LogStream::Stdout, line)
+    }
+
+    /// stormd#87: a process name that is not one file name never becomes a
+    /// path — nothing is created, appended to or renamed outside log_dir.
+    #[tokio::test]
+    async fn a_name_that_is_a_path_writes_nothing() {
+        let (l, dir) = logger("escape");
+        let outside = dir.with_file_name(format!("{}-outside", dir.file_name().unwrap().to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&outside).unwrap();
+        let rel = format!("../{}/x", outside.file_name().unwrap().to_string_lossy());
+        for name in [rel.as_str(), &format!("{}/abs", outside.display()), ".."] {
+            l.write(&LogEntry::new(name, LogStream::Ingest, "nope")).await;
+            assert_eq!(l.take_file(name, "r1", true).await, None);
+            l.cleanup_rotated(name);
+        }
+        let leaked: Vec<_> = std::fs::read_dir(&outside).unwrap().flatten().map(|e| e.path()).collect();
+        let parent_dotlog = dir.parent().unwrap().join("..log").exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
+        assert!(leaked.is_empty(), "written outside log_dir: {leaked:?}");
+        assert!(!parent_dotlog);
     }
 
     /// stormd#1: the directory removed under a running stormd is made again.

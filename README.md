@@ -754,7 +754,11 @@ no level is info on stdout and warning on stderr. A crash adds
 `*** PROCESS CRASHED *** exit code N` (or `killed by signal`) at emergency.
 
 `POST /api/v1/logs/ingest` (`{process, line, stream?, severity?}`) adds a line
-from outside.
+from outside. `process` names its log file, so it must be one file name: no
+`/`, `\`, NUL, not `.` or `..`, 1–200 bytes; anything else is refused with
+400 (#87). The same rule holds for `[[process]]` names, and for `[[cron]]`
+names as `cron.<name>` (a config that breaks it does not load). The file
+logger and the stored-log reads never build a path from such a name.
 
 **stormd's own output** (stderr) carries stormd's log lines, not its
 children's — except when a run fails: then the last 20 lines that run printed

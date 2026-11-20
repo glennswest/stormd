@@ -716,8 +716,17 @@ impl Config {
             if !names.insert(&p.name) {
                 anyhow::bail!("duplicate process name: {}", p.name);
             }
+            if !stormlog::types::safe_process_name(&p.name) {
+                anyhow::bail!("process name {:?} must be one file name (it names its log files): no '/', '\\', NUL, '.' or '..', at most 200 bytes", p.name);
+            }
             if p.command.is_empty() && p.image.is_none() {
                 anyhow::bail!("process '{}' must have either command or image set", p.name);
+            }
+        }
+        for c in &self.cron {
+            // Its output is logged as process `cron.<name>` (stormd#87).
+            if c.name.is_empty() || !stormlog::types::safe_process_name(&format!("cron.{}", c.name)) {
+                anyhow::bail!("cron name {:?} must be one file name (its output is logged as cron.<name>): no '/', '\\', NUL, at most 195 bytes", c.name);
             }
         }
         for dep in self.process.iter().flat_map(|p| &p.depends_on) {
@@ -852,6 +861,23 @@ mod tests {
             let e = parse(bad).unwrap_err().to_string();
             assert!(e.contains("helper = true on a one-shot"), "{bad}: {e}");
         }
+    }
+
+    /// stormd#87: a process or cron name names log files, so it is one
+    /// file name.
+    #[test]
+    fn process_and_cron_names_are_one_file_name() {
+        let parse = |t: &str| -> anyhow::Result<()> {
+            let c: Config = toml::from_str(t)?;
+            c.validate()
+        };
+        assert!(parse("[[process]]\nname = \"api.v2\"\ncommand = \"/bin/true\"\n").is_ok());
+        for bad in ["../x", "/abs", "a/b", ".."] {
+            let e = parse(&format!("[[process]]\nname = \"{bad}\"\ncommand = \"/bin/true\"\n")).unwrap_err().to_string();
+            assert!(e.contains("must be one file name"), "{bad}: {e}");
+        }
+        let e = parse("[[cron]]\nname = \"../up\"\nschedule = \"* * * * * *\"\ncommand = \"/bin/true\"\n").unwrap_err().to_string();
+        assert!(e.contains("cron name"), "{e}");
     }
 
     #[test]

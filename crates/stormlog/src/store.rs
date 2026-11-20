@@ -147,6 +147,10 @@ impl LogStore {
     /// Oldest first because a query is answered by reading forward and then
     /// tailing, and because the caller almost always wants time order.
     fn files_for(&self, process: &str) -> Vec<PathBuf> {
+        // A name that is not one file name has no files here (stormd#87).
+        if !crate::types::safe_process_name(process) {
+            return Vec::new();
+        }
         let mut rotated: Vec<(u32, PathBuf)> = Vec::new();
         let mut archived: Vec<(String, PathBuf)> = Vec::new();
         let current = self.dir.join(format!("{process}.log"));
@@ -250,6 +254,9 @@ impl LogStore {
 
     /// The runs of a process, newest first.
     pub fn runs(&self, process: &str) -> Vec<RunInfo> {
+        if !crate::types::safe_process_name(process) {
+            return Vec::new();
+        }
         let mut runs: Vec<RunInfo> = Vec::new();
         let Ok(entries) = std::fs::read_dir(&self.dir) else { return runs };
         for e in entries.flatten() {
@@ -296,6 +303,9 @@ impl LogStore {
     /// in a loop writes one archive per restart. Without this the thing that
     /// fills the volume is the record of what went wrong.
     pub fn prune(&self, process: &str, keep: usize) -> usize {
+        if !crate::types::safe_process_name(process) {
+            return 0;
+        }
         let runs = self.runs(process);
         let mut removed = 0;
         for r in runs.into_iter().filter(|r| r.outcome != "current").skip(keep) {

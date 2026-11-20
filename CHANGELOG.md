@@ -5,6 +5,14 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **fix (security):** log paths from process names (#87, review finding
+  9624a8409928). `POST /api/v1/logs/ingest` with `process = "../../x"` or an
+  absolute path created, appended to and rotated files outside `log_dir`. A
+  process name must now be one file name (`stormlog::types::safe_process_name`:
+  no `/`, `\`, NUL, not `.`/`..`, 1–200 bytes): ingest refuses others with
+  400, the file logger and the log store never build a path from one, and
+  config validation refuses such `[[process]]` and `[[cron]]` names. Unit
+  tests and medium-suite case `ingest-process-name-confined`.
 - **fix (security):** SSH (#86, review findings 813579212408,
   94c19c75c80b). The generated host key is written 0600 (exclusive temp file
   + rename) instead of with the umask (0644 — readable by anyone who could
