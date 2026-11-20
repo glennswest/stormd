@@ -210,7 +210,7 @@ impl russh_sftp::server::Handler for SftpSession {
         attrs: FileAttributes,
     ) -> Result<Status, Self::Error> {
         let path = Self::resolve_path(&path);
-        apply_attrs(&path, &attrs)?;
+        apply_attrs(Target::Path(&path), &attrs)?;
         Ok(Self::ok_status(id))
     }
 
@@ -221,11 +221,12 @@ impl russh_sftp::server::Handler for SftpSession {
         attrs: FileAttributes,
     ) -> Result<Status, Self::Error> {
         let state = self.handles.get(&handle).ok_or(StatusCode::Failure)?;
-        let path = match state {
-            HandleState::File { path, .. } => path.clone(),
-            HandleState::Dir { path, .. } => path.clone(),
-        };
-        apply_attrs(&path, &attrs)?;
+        // A file handle is changed through its open descriptor: a truncate
+        // on a handle opened read-only fails, as it should.
+        match state {
+            HandleState::File { file, .. } => apply_attrs(Target::File(file), &attrs)?,
+            HandleState::Dir { path, .. } => apply_attrs(Target::Path(path), &attrs)?,
+        }
         Ok(Self::ok_status(id))
     }
 
@@ -385,18 +386,150 @@ fn io_to_status(e: &std::io::Error) -> StatusCode {
     }
 }
 
-fn apply_attrs(path: &Path, attrs: &FileAttributes) -> Result<(), StatusCode> {
-    #[cfg(unix)]
-    {
-        if let Some(perms) = attrs.permissions {
-            use std::os::unix::fs::PermissionsExt;
-            let permissions = std::fs::Permissions::from_mode(perms & 0o7777);
-            std::fs::set_permissions(path, permissions).map_err(|e| io_to_status(&e))?;
+/// What a SETSTAT or FSETSTAT changes: a path, or an open file.
+enum Target<'a> {
+    Path(&'a Path),
+    File(&'a std::fs::File),
+}
+
+/// Apply a SETSTAT/FSETSTAT's attributes, all of them, or answer with why
+/// not (stormd#93).
+///
+/// **Only permissions were applied, and OK answered regardless.** A client
+/// that truncated before rewriting a shorter file was told it had, and the
+/// old trailing bytes stayed. Now each attribute SFTP v3 carries is applied
+/// — size (`set_len`, truncating or extending), owner (`chown`), permissions,
+/// access and modification times — in an order where none undoes another
+/// (times last: a truncate moves mtime), through the open file for an
+/// FSETSTAT. The first that fails is the answer. User and group *names*
+/// (SFTP v4+) are not something this server sets: `OpUnsupported`, before
+/// anything is changed.
+fn apply_attrs(target: Target, attrs: &FileAttributes) -> Result<(), StatusCode> {
+    use std::os::unix::fs::PermissionsExt;
+    if attrs.user.is_some() || attrs.group.is_some() {
+        return Err(StatusCode::OpUnsupported);
+    }
+    let io = |e: std::io::Error| io_to_status(&e);
+    if let Some(size) = attrs.size {
+        match target {
+            Target::File(f) => f.set_len(size).map_err(io)?,
+            Target::Path(p) => std::fs::OpenOptions::new().write(true).open(p).and_then(|f| f.set_len(size)).map_err(io)?,
         }
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, attrs);
+    if attrs.uid.is_some() || attrs.gid.is_some() {
+        match target {
+            Target::File(f) => std::os::unix::fs::fchown(f, attrs.uid, attrs.gid).map_err(io)?,
+            Target::Path(p) => std::os::unix::fs::chown(p, attrs.uid, attrs.gid).map_err(io)?,
+        }
+    }
+    if let Some(perms) = attrs.permissions {
+        let permissions = std::fs::Permissions::from_mode(perms & 0o7777);
+        match target {
+            Target::File(f) => f.set_permissions(permissions).map_err(io)?,
+            Target::Path(p) => std::fs::set_permissions(p, permissions).map_err(io)?,
+        }
+    }
+    if attrs.atime.is_some() || attrs.mtime.is_some() {
+        let at = |secs: u32| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs.into());
+        let mut times = std::fs::FileTimes::new();
+        if let Some(a) = attrs.atime {
+            times = times.set_accessed(at(a));
+        }
+        if let Some(m) = attrs.mtime {
+            times = times.set_modified(at(m));
+        }
+        match target {
+            Target::File(f) => f.set_times(times).map_err(io)?,
+            // Any open will do: setting times needs ownership, not write.
+            Target::Path(p) => std::fs::File::open(p).and_then(|f| f.set_times(times)).map_err(io)?,
+        }
     }
     Ok(())
+}
+
+/// stormd#93 (dbd850683639): SETSTAT and FSETSTAT do what they answer OK to.
+#[cfg(test)]
+mod setstat_tests {
+    use super::SftpSession;
+    use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
+    use russh_sftp::server::Handler;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    fn dir(label: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("stormd-sftp-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn size(n: u64) -> FileAttributes {
+        FileAttributes { size: Some(n), ..FileAttributes::empty() }
+    }
+
+    #[tokio::test]
+    async fn setstat_truncates_and_extends() {
+        let d = dir("setstat");
+        let f = d.join("f");
+        std::fs::write(&f, b"0123456789").unwrap();
+        let mut s = SftpSession::default();
+        s.setstat(1, f.display().to_string(), size(4)).await.unwrap();
+        let short = std::fs::read(&f).unwrap();
+        s.setstat(2, f.display().to_string(), size(6)).await.unwrap();
+        let long = std::fs::read(&f).unwrap();
+        let missing = s.setstat(3, d.join("nope").display().to_string(), size(1)).await;
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(short, b"0123", "truncated");
+        assert_eq!(long, b"0123\0\0", "extended with zeros");
+        assert_eq!(missing.unwrap_err(), StatusCode::NoSuchFile);
+    }
+
+    /// The rewrite the finding names: truncate through the handle, write a
+    /// shorter body, and nothing of the old one is left.
+    #[tokio::test]
+    async fn fsetstat_truncates_through_the_open_handle() {
+        let d = dir("fsetstat");
+        let f = d.join("config");
+        std::fs::write(&f, b"a much longer old body").unwrap();
+        let mut s = SftpSession::default();
+        let h = s
+            .open(1, f.display().to_string(), OpenFlags::WRITE, FileAttributes::empty())
+            .await
+            .unwrap()
+            .handle;
+        s.fsetstat(2, h.clone(), size(0)).await.unwrap();
+        s.write(3, h.clone(), 0, b"short".to_vec()).await.unwrap();
+        s.close(4, h).await.unwrap();
+        // A handle opened read-only cannot truncate, and says so.
+        let ro = s.open(5, f.display().to_string(), OpenFlags::READ, FileAttributes::empty()).await.unwrap().handle;
+        let refused = s.fsetstat(6, ro, size(0)).await;
+        let body = std::fs::read(&f).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(body, b"short");
+        assert!(refused.is_err(), "a read-only handle reported a truncate as done");
+    }
+
+    #[tokio::test]
+    async fn permissions_and_times_are_applied_and_names_refused() {
+        let d = dir("attrs");
+        let f = d.join("f");
+        std::fs::write(&f, b"x").unwrap();
+        let mut s = SftpSession::default();
+        let attrs = FileAttributes {
+            permissions: Some(0o640),
+            atime: Some(1_000_000_000),
+            mtime: Some(1_200_000_000),
+            ..FileAttributes::empty()
+        };
+        s.setstat(1, f.display().to_string(), attrs).await.unwrap();
+        let m = std::fs::metadata(&f).unwrap();
+        let named = s
+            .setstat(2, f.display().to_string(), FileAttributes { user: Some("root".into()), size: Some(0), ..FileAttributes::empty() })
+            .await;
+        let still = std::fs::read(&f).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(m.permissions().mode() & 0o7777, 0o640);
+        assert_eq!((m.atime(), m.mtime()), (1_000_000_000, 1_200_000_000));
+        assert_eq!(named.unwrap_err(), StatusCode::OpUnsupported);
+        assert_eq!(still, b"x", "nothing applied when refused");
+    }
 }

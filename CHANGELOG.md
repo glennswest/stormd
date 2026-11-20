@@ -5,6 +5,12 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **fix:** SFTP SETSTAT/FSETSTAT (#93, review finding dbd850683639) applied
+  only permissions and answered OK to everything, so a truncate before a
+  shorter rewrite left the old trailing bytes. Size (truncate/extend), owner,
+  permissions and times are now all applied, FSETSTAT through its open
+  handle (a read-only handle cannot truncate), errors returned; user/group
+  names are refused `OpUnsupported`. Tests for each.
 - **fix:** the web UI with client-certificate auth (#88, review finding
   bd2e41be2392). `/api/v1/auth/session` counted only a session cookie while
   `require_auth` also took a verified client certificate and a bearer token,

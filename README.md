@@ -997,6 +997,12 @@ as above, and a 404 is logged once as a WARN naming the likely cause.
 A session is an interactive shell (a PTY is expected); `ssh host command`
 (exec requests) is not supported. The `sftp` subsystem is, so `sftp` and
 OpenSSH's default (SFTP-based) `scp` work; legacy `scp -O` does not.
+SETSTAT and FSETSTAT apply every SFTP v3 attribute they carry: size
+(truncate or extend), owner, permissions, access and modification times. An
+FSETSTAT goes through the open handle, so a read-only handle cannot
+truncate. A change that fails is answered with its error, not OK.
+User and group *names* (v4+) are refused (`OpUnsupported`) before anything
+changes (#93).
 
 The shell, in addition to every applet below:
 
