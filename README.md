@@ -817,7 +817,7 @@ client certificate, a session cookie, or `Authorization: Bearer <token>`
 | GET | `/api/v1/components` | the component-summary feed (below) |
 | POST | `/api/v1/auth/login` | *open* — `{username, password}` → session cookie |
 | POST | `/api/v1/auth/logout` | *open* |
-| GET | `/api/v1/auth/session` | *open* — whether login is required/held, instance name, default theme |
+| GET | `/api/v1/auth/session` | *open* — whether login is required, whether this request is authenticated and `via` what (client certificate, bearer, session — the middleware's own test, #88), instance name, default theme |
 | GET | `/api/v1/processes` | all process statuses (each with `"helper"`, #80) |
 | GET | `/api/v1/processes/{name}` | one |
 | POST | `/api/v1/processes/{name}/start` \| `stop` \| `restart` | `restart?wait=healthy&timeout=N`: answer once the new run is healthy (200), it ended (502), or N s passed (504, process left running) — below |
@@ -909,6 +909,14 @@ Off unless `[api]` sets `token_file`, `auth_token`, `client_ca_file`,
   for `admin`;
 - an HttpOnly `stormd_session` cookie from a UI login (sessions are in
   memory, 24 h, gone on restart).
+
+`GET /api/v1/auth/session` (open) answers with the same test (#88):
+`{required, authenticated, via, user, container, theme}`, `via` being
+`client_certificate`, `bearer` or `session`. So a browser presenting a good
+client certificate goes straight to the dashboard, with no login screen,
+including when `client_ca_file` is the only credential configured. Before,
+it counted only a session cookie, and such a browser was stuck at a login
+no password could pass.
 
 Credentials are compared in constant time. Open paths: `/api/v1/health` and
 `/healthz` (the probes), and what the login screen needs: `/`, `/ui/*` except

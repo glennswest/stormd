@@ -5,6 +5,13 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **fix:** the web UI with client-certificate auth (#88, review finding
+  bd2e41be2392). `/api/v1/auth/session` counted only a session cookie while
+  `require_auth` also took a verified client certificate and a bearer token,
+  so with `client_ca_file` the only credential the UI showed a login no
+  password could pass. Both now use one `auth::credential`; the session
+  answer adds `via` (`client_certificate` / `bearer` / `session`). Tests: a
+  unit test of every credential, and the session check over real mTLS.
 - **fix (security):** log paths from process names (#87, review finding
   9624a8409928). `POST /api/v1/logs/ingest` with `process = "../../x"` or an
   absolute path created, appended to and rotated files outside `log_dir`. A

@@ -550,6 +550,34 @@ mod tests {
         assert!(who(client(Some((STRANGER_CERT, STRANGER_KEY)))).await.is_err());
     }
 
+    /// stormd#88: over real mTLS, with `client_ca_file` the only
+    /// credential, the UI's session check says a browser presenting a good
+    /// certificate is authenticated, and one without is not.
+    #[tokio::test]
+    async fn the_session_check_counts_a_verified_client_certificate() {
+        let d = server_files();
+        let api = api_config(&d.0, true);
+        let auth = crate::auth::AuthState::from_config(&api).expect("client_ca_file turns auth on");
+        let app = axum::Router::new().route(
+            "/api/v1/auth/session",
+            get(move |req: axum::extract::Request| {
+                let auth = auth.clone();
+                async move { axum::Json(crate::auth::session_status(Some(&auth), &req).await) }
+            }),
+        );
+        let config = server_config(&api).unwrap().unwrap();
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("https://127.0.0.1:{}/api/v1/auth/session", l.local_addr().unwrap().port());
+        tokio::spawn(serve(l, app, config));
+
+        let with: serde_json::Value =
+            client(Some((CLIENT_CERT, CLIENT_KEY))).get(&url).send().await.unwrap().json().await.unwrap();
+        let without: serde_json::Value = client(None).get(&url).send().await.unwrap().json().await.unwrap();
+        assert_eq!(with["authenticated"], true, "{with}");
+        assert_eq!(with["via"], "client_certificate");
+        assert_eq!((without["required"].as_bool(), without["authenticated"].as_bool()), (Some(true), Some(false)), "{without}");
+    }
+
     #[tokio::test]
     async fn a_rotated_pair_is_served_from_the_next_handshake() {
         let d = server_files();

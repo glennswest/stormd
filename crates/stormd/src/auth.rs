@@ -176,10 +176,6 @@ impl AuthState {
             .map(|s| s.user.clone())
     }
 
-    async fn session_valid(&self, id: &str) -> bool {
-        self.session_user(id).await.is_some()
-    }
-
     async fn drop_session(&self, id: &str) {
         self.sessions.write().await.remove(id);
     }
@@ -233,19 +229,48 @@ fn session_cookie(req: &Request) -> Option<String> {
     None
 }
 
-pub async fn require_auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
-    let Some(auth) = &state.auth else {
-        return next.run(req).await;
-    };
-    if is_public(req.uri().path()) {
-        return next.run(req).await;
+/// The credential a request carries, if any that `auth` accepts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Credential {
+    /// A client certificate the TLS listener verified against
+    /// `client_ca_file`.
+    ClientCertificate,
+    /// `Authorization: Bearer` with a configured token.
+    Bearer,
+    /// A live browser session (the cookie also rides along on WebSocket
+    /// upgrades); the user it belongs to.
+    Session(String),
+}
+
+impl Credential {
+    /// How `/api/v1/auth/session` names it.
+    fn via(&self) -> &'static str {
+        match self {
+            Credential::ClientCertificate => "client_certificate",
+            Credential::Bearer => "bearer",
+            Credential::Session(_) => "session",
+        }
     }
 
-    // A client certificate the TLS listener verified against client_ca_file.
+    /// Who it is, for the UI's nav.
+    fn user(&self) -> String {
+        match self {
+            Credential::ClientCertificate => "client certificate".into(),
+            Credential::Bearer => "token".into(),
+            Credential::Session(u) => u.clone(),
+        }
+    }
+}
+
+/// The one test of whether a request is authenticated: the middleware and
+/// the UI's session endpoint both ask it, so they cannot disagree
+/// (stormd#88). The session endpoint used to count only a cookie, so with a
+/// client certificate as the sole credential the API worked and the web UI
+/// sat on a login screen that no password could pass.
+pub async fn credential(auth: &AuthState, req: &Request) -> Option<Credential> {
     if req.extensions().get::<ClientCertVerified>().is_some() {
-        return next.run(req).await;
+        return Some(Credential::ClientCertificate);
     }
-
     if let Some(given) = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -253,15 +278,23 @@ pub async fn require_auth(State(state): State<Arc<AppState>>, req: Request, next
         .and_then(|v| v.strip_prefix("Bearer "))
     {
         if auth.token_matches(given) {
-            return next.run(req).await;
+            return Some(Credential::Bearer);
         }
     }
-
-    // Browser sessions — the cookie also rides along on WebSocket upgrades.
-    if let Some(id) = session_cookie(&req) {
-        if auth.session_valid(&id).await {
-            return next.run(req).await;
+    if let Some(id) = session_cookie(req) {
+        if let Some(user) = auth.session_user(&id).await {
+            return Some(Credential::Session(user));
         }
+    }
+    None
+}
+
+pub async fn require_auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+    let Some(auth) = &state.auth else {
+        return next.run(req).await;
+    };
+    if is_public(req.uri().path()) || credential(auth, &req).await.is_some() {
+        return next.run(req).await;
     }
 
     (
@@ -329,22 +362,25 @@ pub async fn logout(State(state): State<Arc<AppState>>, req: Request) -> Respons
 /// instance name and the configured default theme — since everything else
 /// is behind the gate at that point.
 pub async fn session(State(state): State<Arc<AppState>>, req: Request) -> Response {
-    let user = match &state.auth {
+    let mut body = session_status(state.auth.as_deref(), &req).await;
+    body["container"] = state.container_name.clone().into();
+    body["theme"] = serde_json::to_value(&state.ui_theme).unwrap_or_default();
+    Json(body).into_response()
+}
+
+/// `{required, authenticated, via, user}` for a request: authenticated by
+/// exactly what `require_auth` accepts (`credential`), and how.
+pub async fn session_status(auth: Option<&AuthState>, req: &Request) -> serde_json::Value {
+    let cred = match auth {
+        Some(a) => credential(a, req).await,
         None => None,
-        Some(auth) => match session_cookie(&req) {
-            Some(id) => auth.session_user(&id).await,
-            None => None,
-        },
     };
-    let authenticated = state.auth.is_none() || user.is_some();
-    Json(serde_json::json!({
-        "required": state.auth.is_some(),
-        "authenticated": authenticated,
-        "user": user,
-        "container": state.container_name,
-        "theme": state.ui_theme,
-    }))
-    .into_response()
+    serde_json::json!({
+        "required": auth.is_some(),
+        "authenticated": auth.is_none() || cred.is_some(),
+        "via": cred.as_ref().map(Credential::via),
+        "user": cred.as_ref().map(Credential::user),
+    })
 }
 
 #[cfg(test)]
@@ -376,6 +412,46 @@ mod tests {
 
     fn api(toml_text: &str) -> crate::config::ApiConfig {
         toml::from_str(toml_text).unwrap()
+    }
+
+    fn req(cert: bool, bearer: Option<&str>, cookie: Option<&str>) -> Request {
+        let mut b = axum::http::Request::builder().uri("/api/v1/auth/session");
+        if let Some(t) = bearer {
+            b = b.header(header::AUTHORIZATION, format!("Bearer {t}"));
+        }
+        if let Some(c) = cookie {
+            b = b.header(header::COOKIE, format!("{COOKIE}={c}"));
+        }
+        let mut r = b.body(axum::body::Body::empty()).unwrap();
+        if cert {
+            r.extensions_mut().insert(ClientCertVerified);
+        }
+        r
+    }
+
+    /// stormd#88 (bd2e41be2392): the session endpoint counts every
+    /// credential the middleware does — a verified client certificate
+    /// above all, the only one when `client_ca_file` is the sole setting.
+    #[tokio::test]
+    async fn the_session_endpoint_agrees_with_the_middleware() {
+        let cert_only = AuthState::from_config(&api("client_ca_file = \"/ca.pem\"")).unwrap();
+        let s = session_status(Some(&cert_only), &req(true, None, None)).await;
+        assert_eq!((s["authenticated"].as_bool(), s["via"].as_str()), (Some(true), Some("client_certificate")), "{s}");
+        assert_eq!(s["user"], "client certificate");
+        let s = session_status(Some(&cert_only), &req(false, None, None)).await;
+        assert_eq!((s["required"].as_bool(), s["authenticated"].as_bool()), (Some(true), Some(false)));
+
+        let tok = AuthState::from_config(&api("auth_token = \"t0k\"\npassword = \"pw\"")).unwrap();
+        assert_eq!(credential(&tok, &req(false, Some("t0k"), None)).await, Some(Credential::Bearer));
+        assert_eq!(credential(&tok, &req(false, Some("wrong"), None)).await, None);
+        let id = tok.new_session("admin").await;
+        assert_eq!(credential(&tok, &req(false, None, Some(&id))).await, Some(Credential::Session("admin".into())));
+        assert_eq!(credential(&tok, &req(false, None, Some("stale"))).await, None);
+        let s = session_status(Some(&tok), &req(false, None, Some(&id))).await;
+        assert_eq!((s["via"].as_str(), s["user"].as_str()), (Some("session"), Some("admin")));
+
+        let s = session_status(None, &req(false, None, None)).await;
+        assert_eq!((s["required"].as_bool(), s["authenticated"].as_bool()), (Some(false), Some(true)), "auth off");
     }
 
     #[test]
