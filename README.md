@@ -1052,6 +1052,32 @@ record (left by an older stormd) is pulled again. With `[updater] enabled =
 false` an `image` process never runs, and stormd logs one ERROR per such
 process at start saying so.
 
+## Start, stop and restart: one at a time
+
+A process's start, stop and restart (API, shell, updater), a swap of one of
+its configured goldens, and an automatic restart after its cooloff or
+back-off are serialized per process (#81):
+
+- **One run at a time.** A start is refused while the process is starting or
+  running, and waits while a stop is still landing (up to its
+  `stop_timeout_secs`); two starts at once start one run. A restart stops the
+  current run, waits for it to be gone, and starts the next as one step.
+- **A manual action cancels a pending restart.** A start or restart during a
+  cooloff (`restarting`) or `CrashLoopBackOff` is the restart; a stop then
+  leaves it `stopped`. The scheduled restart, when its delay ends, sees that
+  and does nothing.
+- **An earlier run never writes a later one's state.** Exits and stops carry
+  the run they belong to. A run that exits on its own while a stop is asked
+  for is `stopped`, not restarted.
+- **An exec that fails** (no such command, not executable, a bad
+  `working_dir`) is a failed run: the process goes `failed`, its `on_failure`
+  or `restart_policy` applies (`fail` fails the container; `restart` retries
+  under `max_restarts`), the start order goes on to the next process, and an
+  API start answers with the error.
+- **Golden swaps** (`PUT …/goldens/{name}` on a configured golden) hold the
+  golden operation lock for the whole stop, release, present and start, as
+  runtime adds and removes do.
+
 ## Restart that waits for health
 
 `POST /api/v1/processes/{name}/restart?wait=healthy&timeout=N` (default 60 s,

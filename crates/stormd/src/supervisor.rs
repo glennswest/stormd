@@ -99,9 +99,70 @@ struct ManagedProcess {
     startup_passed_run: Option<u64>,
     /// Consecutive back-offs under a `restart_policy` (stormd#48).
     backoff_step: u32,
+    /// Held across a whole lifecycle operation — an API start, stop or
+    /// restart (its stop, the wait for the old run, the spawn), a golden
+    /// swap, an automatic restart's admission and spawn — so two of them on
+    /// one process take turns instead of interleaving (stormd#81).
+    lifecycle: Arc<Mutex<()>>,
+}
+
+/// Who asks for a run, which decides when it may start (stormd#81). The
+/// check and the claim (`Starting`) are one step under the process's lock, so
+/// two askers cannot both pass it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Admit {
+    /// The start order at boot: only a process that has never run.
+    Boot,
+    /// An API, shell or updater start: anything but a live run — refused
+    /// while it is starting, running or stopping.
+    Manual,
+    /// The restart scheduled after run `n` ended: only if nothing has
+    /// happened since — still run `n`, still waiting to restart. A manual
+    /// start, restart or stop in the meantime cancels it.
+    Restart(u64),
+}
+
+/// What `spawn_process` did.
+#[derive(Debug, PartialEq)]
+enum Spawned {
+    /// A new run is up.
+    Started,
+    /// Not started: something else started or stopped it first (an `Admit::Boot`
+    /// or `Admit::Restart` that is no longer wanted).
+    Superseded,
+    /// The exec failed. Already handled as a failed exit — the process's
+    /// failure policy applies — so the caller only reports it.
+    ExecFailed(String),
 }
 
 impl ManagedProcess {
+    fn new(config: ProcessConfig) -> Self {
+        let ready = !Self::starts_unready(&config);
+        Self {
+            config,
+            state: ProcessState::Pending,
+            pid: None,
+            exit_code: None,
+            started_at: None,
+            stopped_at: None,
+            restarts: 0,
+            crashes: 0,
+            restart_timestamps: Vec::new(),
+            kill_tx: None,
+            stdin_tx: None,
+            liveness_failures: 0,
+            liveness_failures_total: 0,
+            run: 0,
+            ready,
+            ready_at: None,
+            liveness_passed_at: None,
+            liveness_passed_run: None,
+            startup_passed_run: None,
+            backoff_step: 0,
+            lifecycle: Arc::new(Mutex::new(())),
+        }
+    }
+
     /// Whether a new run starts not ready: it has a check that must pass.
     fn starts_unready(c: &ProcessConfig) -> bool {
         c.ready_probe.is_some() || c.readiness_probe.is_some() || c.startup_probe.is_some()
@@ -155,11 +216,16 @@ impl ManagedProcess {
 
 struct ExitEvent {
     name: String,
+    /// The run that ended: an exit of an earlier run never touches a later
+    /// one's state (stormd#81).
+    run: u64,
     exit_code: Option<i32>,
     /// The signal it died of, if it did.
     signal: Option<i32>,
     /// Why no status could be read, if none could (stormd#61).
     lost: Option<String>,
+    /// The run never started: the exec failed, and this says why (stormd#81).
+    not_started: Option<String>,
 }
 
 /// How an exit reads in the log: the code, else the signal by name, else
@@ -482,13 +548,13 @@ impl Supervisor {
         if golden.is_some() == volume_id.is_some() {
             anyhow::bail!("give exactly one of golden and volume_id");
         }
-        let proc_arc = self
-            .processes
-            .read()
-            .await
-            .get(process)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("process not found: {}", process))?;
+        // The whole swap — read the old spec, stop, release, present, update
+        // the config, start — is one golden operation and one lifecycle
+        // operation (stormd#81): two swaps of one golden at once read the
+        // same old spec, and one released or restarted under the other.
+        let _golden_op = goldens.lock_ops().await;
+        let (proc_arc, lifecycle) = self.lifecycle_of(process).await?;
+        let _op = lifecycle.lock().await;
         let old = {
             let p = proc_arc.lock().await;
             p.config
@@ -502,12 +568,12 @@ impl Supervisor {
 
         let was_running = proc_arc.lock().await.state == ProcessState::Running;
         if was_running {
-            self.stop_process(process).await?;
+            self.stop_locked(process).await?;
             self.wait_stopped(process).await;
         }
         if let Err(e) = goldens.release(process, name).await {
             if was_running {
-                self.spawn_process(process).await?;
+                manual(self.spawn_process(process, Admit::Manual).await)?;
             }
             return Err(e);
         }
@@ -528,7 +594,7 @@ impl Supervisor {
             }
         };
         if was_running {
-            self.spawn_process(process).await?;
+            manual(self.spawn_process(process, Admit::Manual).await)?;
         }
         result
     }
@@ -653,8 +719,11 @@ impl Supervisor {
             let this = Arc::clone(self);
             tokio::spawn(async move {
                 this.settle_group_signal(evt.signal).await;
-                let how = describe_exit(evt.exit_code, evt.signal, evt.lost.as_deref());
-                this.handle_exit(&evt.name, evt.exit_code, &how).await;
+                let how = evt
+                    .not_started
+                    .clone()
+                    .unwrap_or_else(|| describe_exit(evt.exit_code, evt.signal, evt.lost.as_deref()));
+                this.handle_exit(&evt.name, evt.run, evt.exit_code, &how).await;
                 this.state_changed.notify_waiters();
             });
         }
@@ -662,28 +731,7 @@ impl Supervisor {
 
     pub async fn start_all(self: &Arc<Self>, configs: &[ProcessConfig]) -> anyhow::Result<()> {
         for cfg in configs {
-            let proc = Arc::new(Mutex::new(ManagedProcess {
-                config: cfg.clone(),
-                state: ProcessState::Pending,
-                pid: None,
-                exit_code: None,
-                started_at: None,
-                stopped_at: None,
-                restarts: 0,
-                crashes: 0,
-                restart_timestamps: Vec::new(),
-                kill_tx: None,
-                stdin_tx: None,
-                liveness_failures: 0,
-                liveness_failures_total: 0,
-                run: 0,
-                ready: !ManagedProcess::starts_unready(cfg),
-                ready_at: None,
-                liveness_passed_at: None,
-                liveness_passed_run: None,
-                startup_passed_run: None,
-                backoff_step: 0,
-            }));
+            let proc = Arc::new(Mutex::new(ManagedProcess::new(cfg.clone())));
             self.processes.write().await.insert(cfg.name.clone(), proc);
         }
 
@@ -706,10 +754,46 @@ impl Supervisor {
                 return Ok(());
             }
 
-            self.spawn_process(&cfg.name).await?;
+            // One process that cannot start does not end the start order
+            // (stormd#81): its failure policy has it, and the rest go on.
+            let (proc_arc, lifecycle) = self.lifecycle_of(&cfg.name).await?;
+            let _op = lifecycle.lock().await;
+            match self.spawn_process(&cfg.name, Admit::Boot).await {
+                Ok(Spawned::Started) => {}
+                Ok(Spawned::Superseded) => {
+                    info!(process = %cfg.name, state = ?proc_arc.lock().await.state, "already started or stopped through the API — start order leaves it")
+                }
+                Ok(Spawned::ExecFailed(why)) => {
+                    warn!(process = %cfg.name, error = %why, "could not start — its failure policy applies; start order goes on")
+                }
+                Err(_) if self.is_shutting_down() => {
+                    info!(process = %cfg.name, "shutting down — not starting");
+                    return Ok(());
+                }
+                Err(e) => {
+                    error!(process = %cfg.name, error = %e, "not started — start order goes on");
+                    let mut p = proc_arc.lock().await;
+                    if p.state == ProcessState::Pending {
+                        p.state = ProcessState::Failed;
+                    }
+                }
+            }
         }
 
         Ok(())
+    }
+
+    /// A process and its lifecycle lock (see `ManagedProcess::lifecycle`).
+    async fn lifecycle_of(&self, name: &str) -> anyhow::Result<(Arc<Mutex<ManagedProcess>>, Arc<Mutex<()>>)> {
+        let proc_arc = self
+            .processes
+            .read()
+            .await
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("process not found: {}", name))?;
+        let lifecycle = proc_arc.lock().await.lifecycle.clone();
+        Ok((proc_arc, lifecycle))
     }
 
     /// Drive a process's `ready_probe` until it passes, then mark it ready.
@@ -884,7 +968,9 @@ impl Supervisor {
         }
     }
 
-    async fn spawn_process(self: &Arc<Self>, name: &str) -> anyhow::Result<()> {
+    /// Start a new run of `name`, if `admit` allows it now (see `Admit`).
+    /// Callers hold the process's lifecycle lock.
+    async fn spawn_process(self: &Arc<Self>, name: &str, admit: Admit) -> anyhow::Result<Spawned> {
         let procs = self.processes.read().await;
         let proc_arc = procs
             .get(name)
@@ -909,6 +995,24 @@ impl Supervisor {
 
         let (config, run) = {
             let mut proc = proc_arc.lock().await;
+            // Admission and the claim in one step (stormd#81): before, a
+            // start was refused only when Running, so one during Stopping or
+            // CrashLoopBackOff — or a backoff restart waking after a manual
+            // one — forked a second child over the first.
+            let live = matches!(proc.state, ProcessState::Starting | ProcessState::Running | ProcessState::Stopping);
+            match admit {
+                Admit::Boot if proc.state != ProcessState::Pending => return Ok(Spawned::Superseded),
+                Admit::Restart(n)
+                    if proc.run != n
+                        || !matches!(proc.state, ProcessState::Restarting | ProcessState::CrashLoopBackOff) =>
+                {
+                    return Ok(Spawned::Superseded)
+                }
+                Admit::Manual if live => {
+                    anyhow::bail!("process '{}' is {:?} — not starting a second run", name, proc.state)
+                }
+                _ => {}
+            }
             proc.state = ProcessState::Starting;
             // A restarted process is not ready until it says so again.
             proc.ready = !ManagedProcess::starts_unready(&proc.config);
@@ -956,7 +1060,33 @@ impl Supervisor {
             cmd.current_dir(dir);
         }
 
-        let mut child = cmd.spawn()?;
+        // An exec that fails (no such file, not executable, a bad
+        // working_dir) is this run's failed exit (stormd#81): before, `?`
+        // returned with the process left Starting for good, and at boot it
+        // ended the whole start order with every later process Pending.
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                let why = format!("could not start {}: {e}", config.command);
+                error!(process = %config.name, error = %why, "spawn failed");
+                {
+                    let mut proc = proc_arc.lock().await;
+                    if proc.run == run {
+                        proc.state = ProcessState::Failed;
+                        proc.pid = None;
+                        proc.started_at = Some(Utc::now());
+                        proc.stopped_at = proc.started_at;
+                    }
+                }
+                self.k8s_events.warning(&config.name, "Failed", format!("Error: {why}"));
+                self.state_changed.notify_waiters();
+                let _ = self
+                    .exit_tx
+                    .send(ExitEvent { name: config.name.clone(), run, exit_code: None, signal: None, lost: None, not_started: Some(why.clone()) })
+                    .await;
+                return Ok(Spawned::ExecFailed(why));
+            }
+        };
         let pid = child.id();
 
         // Set up stdin channel
@@ -982,7 +1112,10 @@ impl Supervisor {
             child.stderr.take(),
         ).await;
 
-        // Update state
+        // Running and its kill handle in one step: a stop that saw Running
+        // with no handle yet marked it Stopping and sent nothing, and it
+        // stayed Stopping (stormd#81).
+        let (kill_tx, mut kill_rx) = tokio::sync::oneshot::channel::<()>();
         {
             let mut proc = proc_arc.lock().await;
             proc.state = ProcessState::Running;
@@ -991,6 +1124,7 @@ impl Supervisor {
             proc.started_at = Some(Utc::now());
             proc.stopped_at = None;
             proc.stdin_tx = Some(stdin_tx);
+            proc.kill_tx = Some(kill_tx);
         }
 
         info!(process = %config.name, pid = ?pid, "process started");
@@ -1000,13 +1134,6 @@ impl Supervisor {
         self.event_bus
             .emit_simple(EventKind::ProcessStarted, Some(config.name.clone()))
             .await;
-
-        // Monitor task
-        let (kill_tx, mut kill_rx) = tokio::sync::oneshot::channel::<()>();
-        {
-            let mut proc = proc_arc.lock().await;
-            proc.kill_tx = Some(kill_tx);
-        }
 
         // Liveness, one task for this run, ended by the monitor below when
         // the run ends (stormd#45).
@@ -1069,11 +1196,16 @@ impl Supervisor {
                     #[cfg(not(unix))]
                     let signal = None;
                     let lost = status.as_ref().err().map(|e| e.to_string());
-                    let _ = exit_tx.send(ExitEvent { name: name_owned, exit_code, signal, lost }).await;
+                    let _ = exit_tx.send(ExitEvent { name: name_owned, run, exit_code, signal, lost, not_started: None }).await;
                 }
                 _ = &mut kill_rx => {
                     let exit_code = stop_child(&mut child, pid, stop_timeout, &name_owned).await;
                     let mut proc = proc_arc_clone.lock().await;
+                    // Only this run's state is this monitor's to write.
+                    if proc.run != run {
+                        info!(process = %name_owned, run, current = proc.run, "an earlier run stopped — state left to the current one");
+                        return;
+                    }
                     proc.state = ProcessState::Stopped;
                     proc.stopped_at = Some(Utc::now());
                     proc.pid = None;
@@ -1085,7 +1217,7 @@ impl Supervisor {
             }
         });
 
-        Ok(())
+        Ok(Spawned::Started)
     }
 
     /// Signal `pid` if it is still `run`'s process. False when the run has
@@ -1107,7 +1239,7 @@ impl Supervisor {
         true
     }
 
-    async fn handle_exit(self: &Arc<Self>, name: &str, exit_code: Option<i32>, how: &str) {
+    async fn handle_exit(self: &Arc<Self>, name: &str, run: u64, exit_code: Option<i32>, how: &str) {
         let procs = self.processes.read().await;
         let proc_arc = match procs.get(name) {
             Some(p) => p.clone(),
@@ -1128,6 +1260,26 @@ impl Supervisor {
             ran_secs,
         ) = {
             let mut proc = proc_arc.lock().await;
+            // An earlier run's exit, reaching us after a new run began, says
+            // nothing about the new one (stormd#81).
+            if proc.run != run {
+                info!(process = %name, run, current = proc.run, exit = %how, "an earlier run exited — ignored");
+                return;
+            }
+            // It exited on its own while a stop was asked for: that is the
+            // stop, not a crash to restart.
+            if proc.state == ProcessState::Stopping {
+                proc.state = ProcessState::Stopped;
+                proc.exit_code = exit_code;
+                proc.stopped_at = Some(Utc::now());
+                proc.pid = None;
+                proc.ready = false;
+                proc.ready_at = None;
+                drop(proc);
+                self.stormlog.archive_run(name, false).await;
+                info!(process = %name, code = ?exit_code, exit = %how, "process exited while stopping");
+                return;
+            }
             proc.exit_code = exit_code;
             proc.stopped_at = Some(Utc::now());
             proc.pid = None;
@@ -1185,7 +1337,7 @@ impl Supervisor {
                 self.echo_tail(name);
                 warn!(process = %name, code = ?exit_code, exit = %how, "process exited with error");
             }
-            self.restart_with_backoff(&proc_arc, name, policy, success, ran_secs).await;
+            self.restart_with_backoff(&proc_arc, name, run, policy, success, ran_secs).await;
             return;
         }
 
@@ -1278,10 +1430,7 @@ impl Supervisor {
                 .await;
             tokio::time::sleep(cooloff(restart_delay, restarts_in_window)).await;
             self.wait_for_node_vars(name).await;
-            if self.stand_down(&proc_arc, name).await {
-                return;
-            }
-            if let Err(e) = self.spawn_process(name).await {
+            if let Err(e) = self.respawn(&proc_arc, name, run).await {
                 error!(process = %name, error = %e, "failed to restart process after clean exit");
                 let mut proc = proc_arc.lock().await;
                 proc.state = ProcessState::Failed;
@@ -1343,10 +1492,7 @@ impl Supervisor {
                         .await;
                     tokio::time::sleep(wait).await;
                     self.wait_for_node_vars(name).await;
-                    if self.stand_down(&proc_arc, name).await {
-                        return;
-                    }
-                    if let Err(e) = self.spawn_process(name).await {
+                    if let Err(e) = self.respawn(&proc_arc, name, run).await {
                         error!(process = %name, error = %e, "failed to restart process");
                         let mut proc = proc_arc.lock().await;
                         proc.state = ProcessState::Failed;
@@ -1362,7 +1508,17 @@ impl Supervisor {
         }
     }
 
+    /// Stop a process: SIGTERM, SIGKILL after its stop timeout. Returns
+    /// once the stop is asked for; `wait_stopped` waits for it to land. A
+    /// process waiting to restart is left stopped and its restart cancelled.
     pub async fn stop_process(&self, name: &str) -> anyhow::Result<()> {
+        let (_, lifecycle) = self.lifecycle_of(name).await?;
+        let _op = lifecycle.lock().await;
+        self.stop_locked(name).await
+    }
+
+    /// `stop_process` for a caller holding the lifecycle lock.
+    async fn stop_locked(&self, name: &str) -> anyhow::Result<()> {
         let procs = self.processes.read().await;
         let proc_arc = procs
             .get(name)
@@ -1371,6 +1527,18 @@ impl Supervisor {
         drop(procs);
 
         let mut proc = proc_arc.lock().await;
+        if matches!(proc.state, ProcessState::Restarting | ProcessState::CrashLoopBackOff) {
+            // Waiting out a cooloff or back-off: the pending restart is
+            // admitted only from these states, so leaving them cancels it.
+            proc.state = ProcessState::Stopped;
+            drop(proc);
+            info!(process = %name, "stopped while waiting to restart — restart cancelled");
+            self.state_changed.notify_waiters();
+            self.event_bus
+                .emit_simple(EventKind::ProcessStopped, Some(name.to_string()))
+                .await;
+            return Ok(());
+        }
         if proc.state != ProcessState::Running {
             anyhow::bail!("process '{}' is not running (state: {:?})", name, proc.state);
         }
@@ -1385,37 +1553,38 @@ impl Supervisor {
         Ok(())
     }
 
+    /// Stop the current run, if any, wait for it to be gone, and start a
+    /// new one — as one operation, so no other start, stop or automatic
+    /// restart lands in between (stormd#81).
     pub async fn restart_process(self: &Arc<Self>, name: &str) -> anyhow::Result<()> {
-        {
-            let procs = self.processes.read().await;
-            if let Some(proc_arc) = procs.get(name) {
-                let proc = proc_arc.lock().await;
-                if proc.state == ProcessState::Running {
-                    drop(proc);
-                    drop(procs);
-                    self.stop_process(name).await?;
-                    // The old run must be gone before the new one starts:
-                    // a slow exit after SIGTERM would hold its port.
-                    self.wait_stopped(name).await;
-                }
-            }
+        let (proc_arc, lifecycle) = self.lifecycle_of(name).await?;
+        let _op = lifecycle.lock().await;
+        let state = proc_arc.lock().await.state.clone();
+        if state == ProcessState::Running {
+            self.stop_locked(name).await?;
         }
-        self.spawn_process(name).await
+        // The old run must be gone before the new one starts: a slow exit
+        // after SIGTERM would hold its port.
+        if matches!(state, ProcessState::Running | ProcessState::Stopping) {
+            self.wait_stopped(name).await;
+        }
+        manual(self.spawn_process(name, Admit::Manual).await)
     }
 
+    /// Start a process that is not running. A stop still landing is waited
+    /// for (bounded by its stop timeout); a live run is refused.
     pub async fn start_process(self: &Arc<Self>, name: &str) -> anyhow::Result<()> {
-        {
-            let procs = self.processes.read().await;
-            let proc_arc = procs
-                .get(name)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("process not found: {}", name))?;
-            let proc = proc_arc.lock().await;
-            if proc.state == ProcessState::Running {
-                anyhow::bail!("process '{}' is already running", name);
+        let (proc_arc, lifecycle) = self.lifecycle_of(name).await?;
+        let _op = lifecycle.lock().await;
+        let state = proc_arc.lock().await.state.clone();
+        match state {
+            ProcessState::Running | ProcessState::Starting => {
+                anyhow::bail!("process '{}' is already running", name)
             }
+            ProcessState::Stopping => self.wait_stopped(name).await,
+            _ => {}
         }
-        self.spawn_process(name).await
+        manual(self.spawn_process(name, Admit::Manual).await)
     }
 
     pub async fn send_stdin(&self, name: &str, input: &str) -> anyhow::Result<()> {
@@ -1570,8 +1739,9 @@ impl Supervisor {
                     let Some(p) = procs.get(name) else { continue };
                     let mut proc = p.lock().await;
                     longest = longest.max(proc.config.stop_timeout_secs);
-                    // A process marked Running a moment before its kill handle
-                    // is stored is left Running, for the second call to catch.
+                    // Running and its kill handle are stored together
+                    // (stormd#81); one forked while this ran is caught by the
+                    // second call.
                     if proc.state == ProcessState::Running {
                         if let Some(tx) = proc.kill_tx.take() {
                             proc.state = ProcessState::Stopping;
@@ -1685,6 +1855,7 @@ impl Supervisor {
         self: &Arc<Self>,
         proc_arc: &Arc<Mutex<ManagedProcess>>,
         name: &str,
+        run: u64,
         policy: crate::config::RestartPolicy,
         success: bool,
         ran_secs: i64,
@@ -1718,25 +1889,36 @@ impl Supervisor {
         self.event_bus.emit_simple(EventKind::ProcessRestarting, Some(name.to_string())).await;
         self.sleep_unless_shutdown(delay).await;
         self.wait_for_node_vars(name).await;
-        if self.stand_down(proc_arc, name).await {
-            return;
-        }
-        if let Err(e) = self.spawn_process(name).await {
+        if let Err(e) = self.respawn(proc_arc, name, run).await {
             error!(process = %name, error = %e, "failed to restart process");
             proc_arc.lock().await.state = ProcessState::Failed;
         }
     }
 
-    /// After a restart's cooloff: if stormd began shutting down meanwhile,
-    /// leave the process stopped rather than start it into a container that
-    /// is going away. `true` when it stood down.
-    async fn stand_down(&self, proc_arc: &Arc<Mutex<ManagedProcess>>, name: &str) -> bool {
-        if !self.is_shutting_down() {
-            return false;
+    /// The restart scheduled after run `run` ended, once its cooloff or
+    /// back-off is over. Under the lifecycle lock, and admitted only if
+    /// nothing has happened since (`Admit::Restart`): a manual start,
+    /// restart or stop meanwhile has superseded it, and it does nothing
+    /// (stormd#81). If stormd began shutting down meanwhile, the process is
+    /// left stopped rather than started into a container that is going away.
+    async fn respawn(self: &Arc<Self>, proc_arc: &Arc<Mutex<ManagedProcess>>, name: &str, run: u64) -> anyhow::Result<()> {
+        let lifecycle = proc_arc.lock().await.lifecycle.clone();
+        let _op = lifecycle.lock().await;
+        if self.is_shutting_down() {
+            let mut p = proc_arc.lock().await;
+            if p.run == run && matches!(p.state, ProcessState::Restarting | ProcessState::CrashLoopBackOff) {
+                p.state = ProcessState::Stopped;
+            }
+            info!(process = %name, "shutting down — not restarting");
+            return Ok(());
         }
-        proc_arc.lock().await.state = ProcessState::Stopped;
-        info!(process = %name, "shutting down — not restarting");
-        true
+        match self.spawn_process(name, Admit::Restart(run)).await? {
+            Spawned::Started | Spawned::ExecFailed(_) => {}
+            Spawned::Superseded => {
+                info!(process = %name, run, "restart no longer wanted — started or stopped through the API meanwhile")
+            }
+        }
+        Ok(())
     }
 
     /// Sleep, but wake early if shutdown begins.
@@ -1770,29 +1952,9 @@ impl Supervisor {
 
     /// Register a new process without starting it.
     pub async fn register_process(&self, config: ProcessConfig) {
-        let proc = Arc::new(Mutex::new(ManagedProcess {
-            config: config.clone(),
-            state: ProcessState::Pending,
-            pid: None,
-            exit_code: None,
-            started_at: None,
-            stopped_at: None,
-            restarts: 0,
-            crashes: 0,
-            restart_timestamps: Vec::new(),
-            kill_tx: None,
-            stdin_tx: None,
-            liveness_failures: 0,
-            liveness_failures_total: 0,
-            run: 0,
-            ready: !ManagedProcess::starts_unready(&config),
-            ready_at: None,
-            liveness_passed_at: None,
-            liveness_passed_run: None,
-            startup_passed_run: None,
-            backoff_step: 0,
-        }));
-        self.processes.write().await.insert(config.name.clone(), proc);
+        let name = config.name.clone();
+        let proc = Arc::new(Mutex::new(ManagedProcess::new(config)));
+        self.processes.write().await.insert(name, proc);
     }
 
     /// Get names of all registered processes.
@@ -1813,6 +1975,15 @@ impl Supervisor {
         let proc = proc_arc.lock().await;
         let pid = proc.pid.ok_or_else(|| anyhow::anyhow!("process has no pid"))?;
         send_signal(pid, signal)
+    }
+}
+
+/// A manual start's result: an exec that failed is an error to the caller
+/// (its failure policy has already been applied).
+fn manual(r: anyhow::Result<Spawned>) -> anyhow::Result<()> {
+    match r? {
+        Spawned::Started | Spawned::Superseded => Ok(()),
+        Spawned::ExecFailed(why) => Err(anyhow::anyhow!(why)),
     }
 }
 
@@ -3442,5 +3613,156 @@ mod describe_exit_tests {
             "exit status lost: No child processes (os error 10)"
         );
         assert_eq!(describe_exit(None, None, None), "no exit status");
+    }
+}
+
+/// stormd#81: lifecycle operations take turns, a pending restart is
+/// cancelled by a manual one, an earlier run never writes a later one's
+/// state, and a spawn that fails is a failed run, not a stuck start order.
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::{ProcessState, Supervisor};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    async fn supervisor(label: &str) -> (Arc<Supervisor>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("stormd-life-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        let sup = Arc::new(Supervisor::new(log, bus));
+        let h = sup.clone();
+        tokio::spawn(async move { h.run_exit_handler().await });
+        (sup, dir)
+    }
+
+    fn sh(name: &str, script: &str, extra: &str) -> crate::config::ProcessConfig {
+        toml::from_str(&format!(
+            "name = \"{name}\"\ncommand = \"/bin/sh\"\nargs = [\"-c\", '''{script}''']\n{extra}\n"
+        ))
+        .unwrap()
+    }
+
+    /// Crashes until `flag` exists, then runs.
+    fn crash_until(name: &str, flag: &Path, extra: &str) -> crate::config::ProcessConfig {
+        sh(name, &format!("if [ -e {} ]; then exec sleep 60; else exit 1; fi", flag.display()), extra)
+    }
+
+    async fn state_of(sup: &Supervisor, name: &str, want: ProcessState) -> super::ProcessStatus {
+        for _ in 0..100 {
+            let s = sup.get_status(name).await.unwrap();
+            if s.state == want {
+                return s;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("{name} never reached {want:?}: {:?}", sup.get_status(name).await.unwrap());
+    }
+
+    /// 40b194b05b52 / 01255713e1b7: a manual restart during CrashLoopBackOff
+    /// is not followed, when the back-off ends, by a second spawn over it;
+    /// and a stop during the back-off cancels the restart.
+    #[tokio::test]
+    async fn a_manual_restart_or_stop_during_backoff_cancels_the_pending_restart() {
+        let (sup, dir) = supervisor("backoff").await;
+        let flag = dir.join("ok");
+        let restart = crash_until("restart", &flag, "restart_policy = \"Always\"");
+        let stop = crash_until("stop", &flag, "restart_policy = \"Always\"");
+        sup.start_all(&[restart, stop]).await.unwrap();
+        state_of(&sup, "restart", ProcessState::CrashLoopBackOff).await;
+        state_of(&sup, "stop", ProcessState::CrashLoopBackOff).await;
+
+        std::fs::write(&flag, "").unwrap();
+        sup.restart_process("restart").await.unwrap();
+        sup.stop_process("stop").await.unwrap();
+        let manual = sup.get_status("restart").await.unwrap();
+        // The first back-off is 10 s: wait it out.
+        tokio::time::sleep(Duration::from_secs(11)).await;
+        let r = sup.get_status("restart").await.unwrap();
+        let s = sup.get_status("stop").await.unwrap();
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(manual.state, ProcessState::Running);
+        assert_eq!((r.state, r.run, r.pid), (ProcessState::Running, manual.run, manual.pid), "the back-off spawned over the manual run");
+        assert_eq!((s.state, s.run, s.pid), (ProcessState::Stopped, 1, None), "the stop did not cancel the restart");
+    }
+
+    /// 97603be5edd9: a start while a stop is still landing waits for it, and
+    /// the old run's monitor does not then mark the new run Stopped; two
+    /// starts at once start one run.
+    #[tokio::test]
+    async fn a_start_during_stopping_waits_and_concurrent_starts_start_one() {
+        let (sup, dir) = supervisor("stopping").await;
+        let p = sh("p", "trap '' TERM; while :; do sleep 0.1; done", "stop_timeout_secs = 1");
+        sup.start_all(&[p]).await.unwrap();
+        let first = state_of(&sup, "p", ProcessState::Running).await;
+
+        sup.stop_process("p").await.unwrap();
+        assert_eq!(sup.get_status("p").await.unwrap().state, ProcessState::Stopping);
+        sup.start_process("p").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let second = sup.get_status("p").await.unwrap();
+
+        sup.stop_process("p").await.unwrap();
+        sup.wait_stopped("p").await;
+        let (a, b) = tokio::join!(sup.start_process("p"), sup.start_process("p"));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let third = sup.get_status("p").await.unwrap();
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(second.state, ProcessState::Running, "the old monitor overwrote the new run: {second:?}");
+        assert_eq!(second.run, first.run + 1);
+        assert!(second.pid.is_some() && second.pid != first.pid);
+        assert_eq!([a.is_ok(), b.is_ok()].iter().filter(|o| **o).count(), 1, "{a:?} / {b:?}");
+        assert_eq!((third.state, third.run), (ProcessState::Running, second.run + 1), "two starts, two runs");
+    }
+
+    /// 149cf8585ad3: an exec that fails leaves the process Failed, not
+    /// Starting; its failure policy applies (`fail` fails the container);
+    /// and the start order goes on to the next process.
+    #[tokio::test]
+    async fn a_spawn_failure_is_a_failed_run_and_the_start_order_goes_on() {
+        let (sup, dir) = supervisor("spawnfail").await;
+        let bad: crate::config::ProcessConfig =
+            toml::from_str("name = \"bad\"\ncommand = \"/nonexistent/stormd-81\"\non_failure = \"fail\"\n").unwrap();
+        let retry: crate::config::ProcessConfig =
+            toml::from_str("name = \"retry\"\ncommand = \"/nonexistent/stormd-81\"\nrestart_delay_secs = 5\n").unwrap();
+        let after = sh("after", "exec sleep 60", "");
+        let started = sup.start_all(&[bad, retry, after]).await;
+        // The spawn marks it Failed at once; the exit handler then applies
+        // on_failure, which is what fails the container.
+        let mut failed = false;
+        for _ in 0..100 {
+            failed = sup.has_failed().await;
+            if failed {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let bad = state_of(&sup, "bad", ProcessState::Failed).await;
+        let retry = state_of(&sup, "retry", ProcessState::Restarting).await;
+        let after = sup.get_status("after").await.unwrap();
+        let manual = sup.start_process("bad").await;
+        sup.stop_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(started.is_ok(), "{started:?}");
+        assert_eq!((bad.pid, bad.crashes), (None, 1));
+        assert!(failed, "on_failure = \"fail\" did not fail the container");
+        assert_eq!((retry.crashes, retry.restarts), (1, 1), "on_failure = \"restart\" did not schedule a restart");
+        assert_eq!(after.state, ProcessState::Running, "the start order stopped at the failed spawn");
+        let e = manual.unwrap_err().to_string();
+        assert!(e.contains("could not start /nonexistent/stormd-81"), "{e}");
     }
 }

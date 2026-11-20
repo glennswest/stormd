@@ -176,7 +176,8 @@ pub struct Goldens {
     host: Arc<dyn Host>,
     client: reqwest::Client,
     presented: Mutex<HashMap<(String, String), Presented>>,
-    /// Runtime adds and removes one at a time (stormd#73).
+    /// Runtime adds and removes, and the supervisor's swaps of a
+    /// configured golden, one at a time (stormd#73, #81).
     ops: Mutex<()>,
 }
 
@@ -380,6 +381,13 @@ impl Goldens {
     /// The same spec again does nothing; another spec under the same name
     /// replaces it, and the old one is put back if the new one fails. A
     /// failed add leaves nothing attached (`present` detaches on failure).
+    /// Hold the golden operation lock — the supervisor's swap of a
+    /// configured golden holds it across its stop, release, present and
+    /// start (stormd#81). `add` and `remove` take it themselves.
+    pub async fn lock_ops(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.ops.lock().await
+    }
+
     pub async fn add(&self, process: &str, g: GoldenMount, reserved: &[PathBuf]) -> anyhow::Result<(Added, Presented)> {
         g.validate().map_err(|e| refused(400, e))?;
         let _op = self.ops.lock().await;
@@ -708,6 +716,62 @@ mod tests {
         let um = o.iter().position(|x| x == "umount /goldens/boot").unwrap();
         let mo = o.iter().rposition(|x| x == "mount ro /dev/ublkb2 /goldens/boot ext4").unwrap();
         assert!(um < mo, "{o:?}");
+    }
+
+    /// stormd#81 (24879c9bdbad): two swaps of one configured golden at once
+    /// take turns. Each releases what the other presented, never what it is
+    /// presenting: attaches and detaches alternate, and the config ends
+    /// naming the golden that is attached.
+    #[tokio::test]
+    async fn concurrent_swaps_of_one_golden_take_turns() {
+        use crate::supervisor::{ProcessState, Supervisor};
+        let (engine, _host, g, dir) = setup(None).await;
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let slog = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        let sup = Arc::new(Supervisor::new(slog, bus));
+        let g = Arc::new(g);
+        sup.set_goldens(g.clone());
+        let proc: crate::config::ProcessConfig = toml::from_str(
+            "name = \"smb\"\ncommand = \"/bin/sleep\"\nargs = [\"30\"]\n\
+             [[golden]]\nname = \"boot\"\ngolden = \"golden-a\"\ncontent = \"filesystem\"\n",
+        )
+        .unwrap();
+        sup.start_all(&[proc]).await.unwrap();
+
+        let (to_b, to_a) = tokio::join!(
+            sup.swap_golden("smb", "boot", Some("golden-b".into()), None),
+            sup.swap_golden("smb", "boot", Some("golden-a".into()), None),
+        );
+        let state = sup.get_status("smb").await.unwrap().state;
+        let named = sup.declared_goldens().await[0].1.golden.clone();
+        let attached = g.list().await[0].volume_id.clone();
+        let l: Vec<String> = log(&engine)
+            .into_iter()
+            .filter(|x| x.starts_with("POST") || x.starts_with("DELETE"))
+            .collect();
+        sup.stop_all().await;
+        g.release_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(to_b.is_ok() && to_a.is_ok(), "{to_b:?} / {to_a:?}");
+        assert_eq!(state, ProcessState::Running);
+        let want = match named.as_deref() {
+            Some("golden-a") => "v-a",
+            Some("golden-b") => "v-b",
+            other => panic!("config names {other:?}"),
+        };
+        assert_eq!(attached, want, "the config and the attached volume disagree");
+        assert_eq!(l.len(), 5, "{l:?}");
+        for (i, x) in l.iter().enumerate() {
+            assert_eq!(x.starts_with("POST"), i % 2 == 0, "attaches and detaches interleaved: {l:?}");
+        }
     }
 
     fn status_of(e: &anyhow::Error) -> u16 {

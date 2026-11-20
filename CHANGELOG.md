@@ -5,6 +5,18 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **fix:** supervisor lifecycle races and spawn failures (#81, review
+  findings 01255713e1b7, 97603be5edd9, 40b194b05b52, 149cf8585ad3,
+  24879c9bdbad). A start or restart during `Stopping` or `CrashLoopBackOff`,
+  or a back-off restart waking after a manual one, no longer forks a second
+  run: admission and the `Starting` claim are one step, manual operations and
+  automatic restarts take a per-process lifecycle lock, and a pending restart
+  is admitted only if its run is still current and still waiting. Exit events
+  and the stop monitor carry their run, so an earlier run cannot mark a later
+  one stopped. Running and its kill handle are stored together. A failed exec
+  is a failed run under `on_failure`/`restart_policy` instead of leaving the
+  process `Starting` and ending the start order. A configured golden's swap
+  holds the golden operation lock throughout. Regression tests for each.
 - **feat:** `[[process]] helper = true` (#80, for rustkube-node#378): marks a
   helper of the service (log shipper, cert renewer) and is reported as
   `"helper": true|false` on every process in `GET /api/v1/processes`, so a
