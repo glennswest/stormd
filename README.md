@@ -529,11 +529,11 @@ See [Image updater](#image-updater).
 |---|---|---|
 | `enabled` | `false` | |
 | `bind` | `"0.0.0.0:22"` | |
-| `host_key` | `"/etc/stormd/host_key"` | ed25519, generated and saved if missing |
+| `host_key` | `"/etc/stormd/host_key"` | ed25519, generated and saved if missing — 0600, written to a temp file and renamed; an existing key readable by group or other is made 0600 when loaded; a symlink here is neither followed nor replaced (#86) |
 | `password` | `"stormd"` | the cloud ID is also accepted |
 | `owner` | — | when set, public-key auth from CloudID is on; refused on a stormcos node (#30, § SSH) |
 | `cloudid_url` | `"http://169.254.169.254"` | |
-| `authorized_keys` | — | an OpenSSH `authorized_keys` file (lines `type base64 [comment]`, options allowed), read at every login, accepted alongside CloudID's keys (#7) |
+| `authorized_keys` | — | an OpenSSH `authorized_keys` file (lines `[options] type base64 [comment]`), read at every login, accepted alongside CloudID's keys (#7). Only options stormd holds by construction are accepted: `no-port-forwarding`, `no-agent-forwarding`, `no-X11-forwarding`, `no-user-rc` (it has no forwarding and runs no rc file) and their positive forms and `pty`. A line with any other option (`from=`, `command=`, `restrict`, `no-pty`, `environment=`, `expiry-time=` …) is **refused**, with a WARN naming the options, instead of granting the shell its restriction was meant to limit (#86) |
 
 ### `[debug]`
 

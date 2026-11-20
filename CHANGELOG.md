@@ -5,6 +5,20 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **fix (security):** SSH (#86, review findings 813579212408,
+  94c19c75c80b). The generated host key is written 0600 (exclusive temp file
+  + rename) instead of with the umask (0644 — readable by anyone who could
+  read the filesystem); an existing key readable beyond its owner is made
+  0600 on load, and a symlink at `host_key` is neither followed nor
+  replaced. `authorized_keys` options are now parsed: only those stormd
+  holds by construction (no port/agent/X11 forwarding, no rc file, and their
+  positive forms, `pty`) are accepted; an entry with any other option
+  (`from=`, `command=`, `restrict`, `no-pty`, …) is refused with a WARN.
+- **BREAKING:** an `authorized_keys` line carrying `from=`, `command=`,
+  `restrict`, `no-pty` or another option stormd does not enforce no longer
+  logs in (before, its restriction was silently dropped and it got a full
+  shell). Remove the option, or use a separate, unrestricted line for
+  stormd.
 - **fix:** stormlog capture (#85, review findings 618ee2a9a43d,
   7b4d771dbcf5). Captured output is cut into records at `\n` from a
   per-stream buffer instead of per 4 KiB read, so lines written in pieces
