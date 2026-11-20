@@ -47,6 +47,15 @@ the plugin summary merge).
 
 ### In Progress
 
+**#83 (P1, review 3b808d13a1d6): webhook delivery blocks supervision.**
+`EventBus::emit` awaited the webhook POST inline, no timeout; a webhook that
+accepts and never answers held ContainerStarting, ProcessStarted, restarts.
+- [ ] bounded queue (drop + count when full) and one delivery task, in
+      order; connect 5 s / request 10 s deadlines; emit never waits on it
+- [ ] tests: emit against a hung webhook returns at once; delivery in order;
+      a full queue drops and counts
+- [ ] docs, CHANGELOG; sc-build; image; close #83
+
 **#82 (P1, review): 8 updater.rs findings, three problems.**
 (1) whiteouts escape the rootfs (10e643f2175d, 5bae04c3272c) and an opaque
 marker deletes files from its own layer (2d0e63dca0f9); (2) the recorded
