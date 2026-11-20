@@ -175,6 +175,15 @@ impl StormLog {
         stdout: Option<tokio::process::ChildStdout>,
         stderr: Option<tokio::process::ChildStderr>,
     ) {
+        // Readers of an earlier run still here (a stop that did not archive,
+        // or a descendant holding its pipe) are drained briefly and then
+        // ended, before this run begins, so they cannot write into it
+        // (stormd#85).
+        let earlier = self.reader_tasks.lock().await.remove(&process);
+        if let Some(earlier) = earlier {
+            Self::drain(&process, earlier, NEW_RUN_DRAIN).await;
+        }
+
         let run_id = Self::make_run_id();
         info!(process = %process, run_id = %run_id, "starting log capture");
 
@@ -218,14 +227,8 @@ impl StormLog {
             }));
         }
 
-        // Store handles so archive_run can await them. Readers of an
-        // earlier run still here (a stop that did not archive, or a
-        // descendant holding its pipe) are drained briefly and then ended, so
-        // they cannot write into this run (stormd#85).
-        let earlier = self.reader_tasks.lock().await.insert(process.clone(), handles);
-        if let Some(earlier) = earlier {
-            Self::drain(&process, earlier, NEW_RUN_DRAIN).await;
-        }
+        // Store handles so archive_run can await them.
+        self.reader_tasks.lock().await.insert(process, handles);
     }
 
     /// Read one stream of a run into log records until EOF (stormd#85).
