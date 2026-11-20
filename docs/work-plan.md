@@ -47,6 +47,14 @@ the plugin summary merge).
 
 ### In Progress
 
+**#80 (P1, for rustkube-node#378): `[[process]] helper = true`, reported as
+`"helper"` in `GET /api/v1/processes`.** Bool, default false; validation
+refuses it on a one-shot (`restart_policy` OnFailure/Never, or no
+`restart_policy` and `on_exit = "stop"`). Nothing else changes.
+- [ ] config field + validation + unit tests; `ProcessStatus.helper`
+- [ ] example.toml, README, CHANGELOG; stormd-test case
+- [ ] sc-build deploy/build.sh; image; shipped with proof
+
 **#77 (P1, build-failure): clear the clippy backlog and gate the build on it.**
 `cargo clippy --all-targets --workspace -- -D warnings` fails: vendored
 russh-sftp (`io::Error::other` ×8, explicit `.into_iter()`), stormlog
