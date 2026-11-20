@@ -47,6 +47,17 @@ the plugin summary merge).
 
 ### In Progress
 
+**#86 (P1, review): 2 ssh.rs security findings.** 813579212408: the
+generated host key was written with the umask (0644). 94c19c75c80b:
+`authorized_keys` options were skipped, so a restricted key got a full shell.
+- [ ] host key: written 0600 via a create_new O_NOFOLLOW temp + rename; on
+      load, O_NOFOLLOW, regular file only, group/other bits removed; never
+      written through or over a symlink
+- [ ] authorized_keys: parse options (quoted); accept only those stormd
+      enforces by construction (no-port/agent/X11-forwarding, no-user-rc and
+      their positives, pty); refuse the entry otherwise, with a WARN naming them
+- [ ] tests; docs, CHANGELOG; sc-build; image; close #86
+
 **#85 (P1, review): 2 stormlog capture findings.** 618ee2a9a43d: a reader
 past its drain deadline was detached, not aborted, and kept writing into the
 next run (a descendant holding the pipe). 7b4d771dbcf5: each 4 KiB read was
