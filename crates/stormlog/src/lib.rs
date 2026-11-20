@@ -299,13 +299,16 @@ impl StormLog {
         self.capture(name, None, stream, kind, default, false).await
     }
 
-    /// Wait for a run's readers to drain, up to `deadline` each; one still
+    /// Wait for a run's readers to drain, up to `deadline` in all; one still
     /// running then is aborted, and awaited, so it cannot outlive the run
     /// (stormd#85). Dropping a timed-out `JoinHandle` only detached it: a
     /// descendant holding the pipe kept it writing into the next run.
+    /// One deadline for all of them: stdout and stderr both held open
+    /// wait `deadline` in all, not once each.
     async fn drain(process: &str, handles: Vec<JoinHandle<()>>, deadline: std::time::Duration) {
+        let until = tokio::time::Instant::now() + deadline;
         for mut h in handles {
-            if tokio::time::timeout(deadline, &mut h).await.is_err() {
+            if tokio::time::timeout_at(until, &mut h).await.is_err() {
                 warn!(
                     process = %process, deadline_secs = deadline.as_secs_f32(),
                     "output still open after the run ended (a child holding the pipe?) — capture ended"

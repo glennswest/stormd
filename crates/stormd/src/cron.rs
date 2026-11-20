@@ -207,9 +207,11 @@ impl CronScheduler {
                     }
                 };
                 // The last lines still in the pipes; a pipe held open by
-                // something the job left behind is let go after 5 s.
+                // something the job left behind is let go 5 s after the job
+                // ended — one deadline for both readers, not 5 s each.
+                let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
                 for mut h in readers {
-                    if tokio::time::timeout(tokio::time::Duration::from_secs(5), &mut h).await.is_err() {
+                    if tokio::time::timeout_at(deadline, &mut h).await.is_err() {
                         warn!(job = %name, "cron job output still open after it ended — capture stopped");
                         h.abort();
                         let _ = h.await;
@@ -422,7 +424,9 @@ mod output_tests {
         job(
             &s,
             "quiet",
-            &format!("readlink /proc/self/fd/1 > {f}; readlink /proc/self/fd/2 >> {f}; echo noise", f = fds.display()),
+            // The shell's own fds ($$), not readlink's — whose stdout is the
+            // redirect.
+            &format!("readlink /proc/$$/fd/1 > {f}; readlink /proc/$$/fd/2 >> {f}; echo noise", f = fds.display()),
             "capture_output = false",
         )
         .await;
@@ -469,6 +473,7 @@ mod output_tests {
         let gone = !std::path::Path::new(&format!("/proc/{pid}")).exists();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(gone, "the job's process is still there (unkilled, or a zombie)");
-        assert!(took < Duration::from_secs(9), "took {took:?}");
+        // 1 s timeout + one 5 s drain for both pipes, with slack.
+        assert!(took < Duration::from_secs(8), "took {took:?}");
     }
 }

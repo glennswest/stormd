@@ -12,7 +12,9 @@
   streamed into the log as the job runs (stormlog's new `capture_stream`,
   the line-buffered capture of #85: whole lines, 64 KiB cap). The child is
   awaited under the timeout on its own; a timeout kills and reaps it, and
-  its readers get 5 s to drain before they are ended.
+  its readers get 5 s to drain before they are ended. The 5 s is one
+  deadline for a run's readers together — also in stormlog's drain (#85),
+  where stdout and stderr both held open waited 5 s each.
 - **fix:** SFTP SETSTAT/FSETSTAT (#93, review finding dbd850683639) applied
   only permissions and answered OK to everything, so a truncate before a
   shorter rewrite left the old trailing bytes. Size (truncate/extend), owner,
