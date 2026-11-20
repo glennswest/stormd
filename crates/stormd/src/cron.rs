@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use stormlog::types::{LogEntry, LogStream, Severity};
+use stormlog::types::{LogStream, Severity};
 use stormlog::StormLog;
 use tokio::process::Command;
 use tokio::sync::RwLock;
@@ -168,46 +168,54 @@ impl CronScheduler {
         // running unsupervised (stormd#10).
         cmd.kill_on_drop(true);
         cmd.args(&config.args);
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
+        // **Output was held whole in stormd** (stormd#95): both streams were
+        // piped and `wait_with_output` kept every byte until the job exited
+        // — `capture_output = false` included — so a noisy job could run PID
+        // 1 out of memory. Off, the output goes nowhere; on, it is streamed
+        // into the log line by line while the job runs.
+        let out = || if config.capture_output { std::process::Stdio::piped() } else { std::process::Stdio::null() };
+        cmd.stdout(out());
+        cmd.stderr(out());
         for (k, v) in &config.env {
             cmd.env(k, v);
         }
 
         let result = match cmd.spawn() {
-            Ok(child) => {
+            Ok(mut child) => {
+                let cron_name = format!("cron.{}", name);
+                let mut readers = Vec::new();
+                if let Some(o) = child.stdout.take() {
+                    let (log, n) = (self.stormlog.clone(), cron_name.clone());
+                    readers.push(tokio::spawn(async move { log.capture_stream(&n, o, LogStream::Stdout, Severity::Info).await }));
+                }
+                if let Some(e) = child.stderr.take() {
+                    let (log, n) = (self.stormlog.clone(), cron_name.clone());
+                    readers.push(tokio::spawn(async move { log.capture_stream(&n, e, LogStream::Stderr, Severity::Warning).await }));
+                }
                 let timeout_dur = tokio::time::Duration::from_secs(timeout);
-                match tokio::time::timeout(timeout_dur, child.wait_with_output()).await {
-                    Ok(Ok(output)) => {
-                        if config.capture_output {
-                            let cron_name = format!("cron.{}", name);
-                            if let Ok(s) = String::from_utf8(output.stdout) {
-                                for line in s.lines() {
-                                    let entry = LogEntry::new(&cron_name, LogStream::Stdout, line);
-                                    self.stormlog.write_entry(entry).await;
-                                }
-                            }
-                            if let Ok(s) = String::from_utf8(output.stderr) {
-                                for line in s.lines() {
-                                    let entry = LogEntry::new(&cron_name, LogStream::Stderr, line)
-                                        .with_severity(Severity::Warning);
-                                    self.stormlog.write_entry(entry).await;
-                                }
-                            }
-                        }
-                        output.status.code()
-                    }
+                let code = match tokio::time::timeout(timeout_dur, child.wait()).await {
+                    Ok(Ok(status)) => status.code(),
                     Ok(Err(e)) => {
                         error!(job = %name, error = %e, "cron job execution error");
                         None
                     }
                     Err(_) => {
-                        // Dropping the wait dropped the child, and kill_on_drop
-                        // has sent it SIGKILL.
+                        // Killed and reaped before going on.
+                        let _ = child.kill().await;
                         warn!(job = %name, timeout_secs = timeout, "cron job timed out — killed");
                         None
                     }
+                };
+                // The last lines still in the pipes; a pipe held open by
+                // something the job left behind is let go after 5 s.
+                for mut h in readers {
+                    if tokio::time::timeout(tokio::time::Duration::from_secs(5), &mut h).await.is_err() {
+                        warn!(job = %name, "cron job output still open after it ended — capture stopped");
+                        h.abort();
+                        let _ = h.await;
+                    }
                 }
+                code
             }
             Err(e) => {
                 error!(job = %name, error = %e, "failed to spawn cron job");
@@ -353,5 +361,114 @@ mod run_tests {
         let runs = std::fs::read_to_string(&quick).map(|t| t.lines().count()).unwrap_or(0);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(runs >= 2, "the quick job ran {runs} times in 3.5 s beside a 5 s job");
+    }
+}
+
+/// stormd#95 (b1dfa55675ce): cron output is streamed, never held whole, and
+/// goes nowhere when not captured; a timeout still kills and reaps.
+#[cfg(test)]
+mod output_tests {
+    use super::CronScheduler;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    fn setup(label: &str) -> (Arc<CronScheduler>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("stormd-cron-out-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        (Arc::new(CronScheduler::new(log, bus)), dir)
+    }
+
+    async fn job(s: &CronScheduler, name: &str, script: &str, extra: &str) {
+        let j: crate::config::CronJobConfig = toml::from_str(&format!(
+            "name = \"{name}\"\nschedule = \"0 0 0 1 1 *\"\ncommand = \"/bin/sh\"\nargs = [\"-c\", '''{script}''']\n{extra}\n"
+        ))
+        .unwrap();
+        s.register_jobs(&[j]).await.unwrap();
+    }
+
+    /// A line is in the log while the job is still running — not held
+    /// until it exits.
+    #[tokio::test]
+    async fn output_is_logged_as_the_job_runs() {
+        let (s, dir) = setup("stream");
+        job(&s, "stream", "echo first; sleep 3; echo last >&2", "capture_output = true").await;
+        let s2 = s.clone();
+        let run = tokio::spawn(async move { s2.execute_job("stream").await });
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let during = s.stormlog.tail("cron.stream");
+        run.await.unwrap();
+        let after = s.stormlog.tail("cron.stream");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(during, vec!["first"], "the first line waited for the job to end");
+        assert_eq!(after, vec!["first", "last"]);
+    }
+
+    /// `capture_output = false`: the job's stdout and stderr are /dev/null —
+    /// nothing reaches stormd at all.
+    #[tokio::test]
+    async fn uncaptured_output_goes_nowhere() {
+        let (s, dir) = setup("off");
+        let fds = dir.join("fds");
+        job(
+            &s,
+            "quiet",
+            &format!("readlink /proc/self/fd/1 > {f}; readlink /proc/self/fd/2 >> {f}; echo noise", f = fds.display()),
+            "capture_output = false",
+        )
+        .await;
+        s.execute_job("quiet").await;
+        let seen = std::fs::read_to_string(&fds).unwrap_or_default();
+        let tail = s.stormlog.tail("cron.quiet");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(seen, "/dev/null\n/dev/null\n");
+        assert!(tail.is_empty(), "{tail:?}");
+    }
+
+    /// A job writing far more than a line's cap without a newline is cut
+    /// into bounded records as it goes, and finishes.
+    #[tokio::test]
+    async fn a_flood_without_newlines_is_cut_into_bounded_records() {
+        let (s, dir) = setup("flood");
+        job(&s, "flood", "head -c 4000000 /dev/zero | tr '\\0' x", "capture_output = true\ntimeout_secs = 60").await;
+        s.execute_job("flood").await;
+        let tail = s.stormlog.tail("cron.flood");
+        let code = s.get_status().await.into_iter().find(|j| j.name == "flood").and_then(|j| j.last_exit_code);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(code, Some(0));
+        assert!(!tail.is_empty());
+        assert!(tail.iter().all(|l| l.len() <= stormlog::MAX_LINE), "a record past MAX_LINE");
+    }
+
+    /// A timeout kills and reaps the job, and a pipe something it left behind
+    /// still holds does not hold the run up past the drain.
+    #[tokio::test]
+    async fn a_timeout_kills_and_reaps_even_with_the_pipe_held() {
+        let (s, dir) = setup("timeout");
+        let pid_file = dir.join("pid");
+        job(
+            &s,
+            "stuck",
+            &format!("echo $$ > {}; (sleep 30) & exec sleep 30", pid_file.display()),
+            "capture_output = true\ntimeout_secs = 1",
+        )
+        .await;
+        let t = Instant::now();
+        s.execute_job("stuck").await;
+        let took = t.elapsed();
+        let pid: u32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        let gone = !std::path::Path::new(&format!("/proc/{pid}")).exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(gone, "the job's process is still there (unkilled, or a zombie)");
+        assert!(took < Duration::from_secs(9), "took {took:?}");
     }
 }

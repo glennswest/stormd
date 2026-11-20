@@ -480,7 +480,7 @@ summary). See [docs/plugin-ui.md](docs/plugin-ui.md).
 | `args` | `[]` | |
 | `env` | `{}` | |
 | `timeout_secs` | `300` | after this the job is killed (SIGKILL) and the run recorded as failed |
-| `capture_output` | `true` | once the job ends, its stdout/stderr are logged as process `cron.<name>` (stderr as warnings) |
+| `capture_output` | `true` | the job's stdout/stderr are logged as process `cron.<name>` **as it runs**, line by line (records as for a process: whole lines, a line over 64 KiB cut; severity from the line, else info on stdout and warning on stderr). stormd holds at most one unfinished line, however much the job writes. `false`: both go to `/dev/null` (#95) |
 
 Each job keeps its next fire time and runs when it comes (`GET /api/v1/cron`
 shows it as `next_run`). Each run is on its own task, so a long job does not

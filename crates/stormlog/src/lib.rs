@@ -207,7 +207,7 @@ impl StormLog {
             let name = process.clone();
             let rid = run_id.clone();
             handles.push(tokio::spawn(async move {
-                this.capture(&name, &rid, stdout, LogStream::Stdout, Severity::Info).await;
+                this.capture(&name, Some(&rid), stdout, LogStream::Stdout, Severity::Info, true).await;
                 // Its output has ended: a run of repeats still held by the
                 // group's limiter goes out now, not with the next run.
                 if let Some(m) = &this.mcast {
@@ -223,7 +223,7 @@ impl StormLog {
             let name = process.clone();
             let rid = run_id.clone();
             handles.push(tokio::spawn(async move {
-                this.capture(&name, &rid, stderr, LogStream::Stderr, Severity::Warning).await;
+                this.capture(&name, Some(&rid), stderr, LogStream::Stderr, Severity::Warning, true).await;
             }));
         }
 
@@ -243,7 +243,7 @@ impl StormLog {
     /// boundary into records of at most that; what is left at EOF is the
     /// last record. Empty lines are skipped, as before. The terminal still
     /// gets the raw bytes as they come.
-    async fn capture<R>(&self, name: &str, run_id: &str, stream: R, kind: LogStream, default: Severity)
+    async fn capture<R>(&self, name: &str, run_id: Option<&str>, stream: R, kind: LogStream, default: Severity, terminal: bool)
     where
         R: tokio::io::AsyncRead + Unpin,
     {
@@ -254,7 +254,9 @@ impl StormLog {
             match reader.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
-                    self.terminal_manager.feed(name, &buf[..n]).await;
+                    if terminal {
+                        self.terminal_manager.feed(name, &buf[..n]).await;
+                    }
                     pending.extend_from_slice(&buf[..n]);
                     for record in take_records(&mut pending, false) {
                         self.record(name, run_id, &record, kind, default).await;
@@ -272,14 +274,29 @@ impl StormLog {
     }
 
     /// One captured line: remembered for the tail, written everywhere.
-    async fn record(&self, name: &str, run_id: &str, line: &str, kind: LogStream, default: Severity) {
+    async fn record(&self, name: &str, run_id: Option<&str>, line: &str, kind: LogStream, default: Severity) {
         if line.is_empty() {
             return;
         }
         let sev = detect_severity(line, default);
         self.remember(name, line);
-        let entry = LogEntry::new(name, kind, line).with_severity(sev).with_run_id(run_id);
+        let mut entry = LogEntry::new(name, kind, line).with_severity(sev);
+        if let Some(r) = run_id {
+            entry = entry.with_run_id(r);
+        }
         self.write_entry(entry).await;
+    }
+
+    /// Stream a side job's output — a cron run — into the log as it comes,
+    /// line by line, until EOF (stormd#95). The same records as a process's
+    /// capture (`MAX_LINE`, whole lines, whole characters), with no run and
+    /// no terminal. Memory stays one 4 KiB read plus at most one unfinished
+    /// line, however much the job writes.
+    pub async fn capture_stream<R>(&self, name: &str, stream: R, kind: LogStream, default: Severity)
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        self.capture(name, None, stream, kind, default, false).await
     }
 
     /// Wait for a run's readers to drain, up to `deadline` each; one still

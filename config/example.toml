@@ -183,7 +183,7 @@ command = "/app/cleanup"
 args = []
 # env = { KEY = "value" }
 timeout_secs = 60              # default 300; killed and recorded as failed after this
-capture_output = true          # output logged as process "cron.cleanup" when the job ends
+capture_output = true          # output logged as process "cron.cleanup" as it runs; false = /dev/null
 
 # --- Events ---
 # Every event is written to the log regardless; this adds a webhook, POSTed

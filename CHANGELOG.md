@@ -5,6 +5,14 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **fix:** cron output (#95, review finding b1dfa55675ce). A job's stdout and
+  stderr were always piped and held whole by `wait_with_output` until it
+  exited — `capture_output = false` included — so a noisy job could exhaust
+  stormd's memory. Off, output now goes to `/dev/null`; on, both pipes are
+  streamed into the log as the job runs (stormlog's new `capture_stream`,
+  the line-buffered capture of #85: whole lines, 64 KiB cap). The child is
+  awaited under the timeout on its own; a timeout kills and reaps it, and
+  its readers get 5 s to drain before they are ended.
 - **fix:** SFTP SETSTAT/FSETSTAT (#93, review finding dbd850683639) applied
   only permissions and answered OK to everything, so a truncate before a
   shorter rewrite left the old trailing bytes. Size (truncate/extend), owner,
