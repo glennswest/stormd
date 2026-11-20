@@ -1007,6 +1007,7 @@ mod update_tests {
             "architecture": "amd64", "os": "linux",
             "config": { "Cmd": ["sleep", "30"] },
             "rootfs": { "type": "layers", "diff_ids": [digest(&layer)] },
+            "history": [{ "created_by": "stormd-test" }],
         }))
         .unwrap();
         let manifest = serde_json::to_vec(&serde_json::json!({
