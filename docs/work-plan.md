@@ -47,6 +47,18 @@ the plugin summary merge).
 
 ### In Progress
 
+**#82 (P1, review): 8 updater.rs findings, three problems.**
+(1) whiteouts escape the rootfs (10e643f2175d, 5bae04c3272c) and an opaque
+marker deletes files from its own layer (2d0e63dca0f9); (2) the recorded
+digest is a post-pivot HEAD of the tag, not what was pulled (8125bda07bb1,
+ee990eabd358, 98cbfc29e7fd); (3) poll + trigger run do_update concurrently on
+the same .new/.old dirs (a9f12a9b4236, e686d162bda7).
+- [ ] whiteouts: reject abs/`..` paths, refuse symlinked parents, opaque
+      clears only lower-layer entries (both marker orders); tests
+- [ ] record pulled.manifest_digest; tests
+- [ ] per-process update lock across pull→pivot→record→cleanup; test
+- [ ] sc-build build.sh + medium; image; close #82
+
 **#81 (P1, review): 5 supervisor.rs concurrency/error findings.**
 01255713e1b7 / 97603be5edd9 / 40b194b05b52: start/restart during Stopping or
 CrashLoopBackOff spawns a second run; a pending backoff restart spawns over a
