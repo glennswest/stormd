@@ -15,7 +15,6 @@ pub struct SftpSession {
 
 enum HandleState {
     File {
-        path: PathBuf,
         file: std::fs::File,
     },
     Dir {
@@ -112,7 +111,7 @@ impl russh_sftp::server::Handler for SftpSession {
             Ok(file) => {
                 let handle = self.alloc_handle();
                 self.handles
-                    .insert(handle.clone(), HandleState::File { path, file });
+                    .insert(handle.clone(), HandleState::File { file });
                 Ok(Handle { id, handle })
             }
             Err(e) => {
