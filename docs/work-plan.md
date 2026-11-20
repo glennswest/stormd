@@ -51,18 +51,21 @@ the plugin summary merge).
 answered B (2026-11-20).** Owner at creation is stormblock#670 (release
 staging is the only creator); mirror-pod volumes from the engine listing are
 rustkube-node#372 (closed, 60854ba). stormd's part, in progress:
-- [ ] `GET /api/v1/volumes`: the volumes stormd's own container runs on —
+- [x] `GET /api/v1/volumes`: the volumes stormd's own container runs on —
       `/proc/self/mountinfo` → ublk device (mount source, else
       `/sys/dev/block/<maj:min>/uevent`) → the engine's `?in_use=true`
       listing (`attachments[].device`) → volume id, name, kind, owner; plus
       the goldens it presented and the declared ones it did not. State
       `attached` / `missing` / `unverified` (engine not answering).
-- [ ] tests (mountinfo parse, the join, missing goldens, the route), README,
-      CHANGELOG
-- [ ] file on rustkube-node: put stormd's report on the mirror pod of every
-      stormd-run service, `missing` as a pod condition
-- [ ] sc-build, `component build stormd`, `shipped` with a proof on a
-      stormd-run service (cadvisor)
+- [x] tests (5 `volumes::` units; stormd-test medium `volumes-report`),
+      README "Volumes this container runs on", CHANGELOG — d1c5966
+- [x] rustkube-node#378 (already open, blocked on #75) told what it gets;
+      per container, not per process (one mount namespace)
+- [x] sc-build d1c5966: build + workspace tests pass (132 stormd);
+      clippy `--no-deps` clean on the new code — the rest of the clippy
+      backlog is #77 (#78/#79 duplicates), proposed. Image build
+      359d2314dc7d; `shipped` with proof
+      `get:https://{node}:9196/api/v1/volumes ~ "name":"cadvisor-logs"…"state":"attached"`
 
 **Docs refresh, second pass (2026-09-27) ✅ done.** No code since cc11049; defaults,
 routes, applets (63) and validation re-checked against the source and still
