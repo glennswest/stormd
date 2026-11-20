@@ -5,6 +5,13 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **fix:** the build is warning-free and stays so (#77): 37 clippy findings
+  cleared (vendored russh-sftp `io::Error::other` ×8 and a redundant
+  `.into_iter()`; stormlog `sort_by_key`, `Default` for `StreamManager`,
+  derived `Default`s; stormsh collapsed matches; stormd type aliases,
+  `contains`, `strip_prefix`, derived `Default` for `SftpSession`, …).
+  Workspace lints deny warnings; new `deploy/build.sh` runs build, tests and
+  `cargo clippy --workspace --all-targets -- -D warnings`. No behaviour change.
 - **feat:** `GET /api/v1/volumes` (#75, owner's option B): the stormblock
   volumes this container runs on — mountinfo → ublk device → the engine's
   `?in_use=true` listing → volume id, name, kind, owner, role

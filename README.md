@@ -107,12 +107,19 @@ Versions: stormd 0.8.0, stormsh 0.5.0, stormlog 0.4.0 (each crate's
 first, then from the checkout:
 
 ```bash
-sc-build                         # cargo build && cargo test, on dev.g8.lo
+sc-build deploy/build.sh         # the whole build: workspace build + tests + clippy
+sc-build                         # cargo build && cargo test (default members)
 sc-build 'cargo test -p stormd'  # any command
 ```
 
-`sc-build` fetches the pushed commit onto `dev.g8.lo` as an unprivileged build
-user, builds in a scratch directory and deletes it. A failure files a
+`sc-build` fetches the pushed commit onto a fresh build VM (made for the job,
+destroyed after it) as an unprivileged build user, and builds it there.
+
+**Zero warnings** (#77): the workspace denies rustc warnings
+(`[workspace.lints.rust] warnings = "deny"`, every member has `[lints]
+workspace = true`), and `deploy/build.sh` ends with `cargo clippy --workspace
+--all-targets -- -D warnings`, vendored `russh-sftp` included. A warning
+fails the build. A failure files a
 `build-failure` issue here. Uncommitted changes are refused — it builds what
 is on GitHub. Linux only matters: the PID 1, signal and `/proc` code is
 `cfg(target_os = "linux")`, and a macOS build skips it.
