@@ -47,6 +47,15 @@ the plugin summary merge).
 
 ### In Progress
 
+**#88 (P1, review bd2e41be2392): the UI's session check ignored client
+certificates.** `require_auth` accepted `ClientCertVerified`; `/api/v1/auth/
+session` counted only a cookie, so with `client_ca_file` the only credential
+the web UI sat on a login screen no password could pass.
+- [ ] one `auth::credential` for the middleware and the session endpoint
+      (client cert, bearer, session cookie); session reports `via`
+- [ ] tests: unit + over real mTLS (tls.rs listener); docs, CHANGELOG;
+      sc-build; image; close #88
+
 **#87 (P1, review 9624a8409928): ingested process names became log paths.**
 `POST /api/v1/logs/ingest` `process = "../../x"` (or absolute) wrote, created
 dirs and rotated outside `log_dir`; the stored-log reads join it too.
