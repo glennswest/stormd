@@ -47,6 +47,17 @@ the plugin summary merge).
 
 ### In Progress
 
+**#85 (P1, review): 2 stormlog capture findings.** 618ee2a9a43d: a reader
+past its drain deadline was detached, not aborted, and kept writing into the
+next run (a descendant holding the pipe). 7b4d771dbcf5: each 4 KiB read was
+split into lines on its own — lines and UTF-8 chars broken across reads.
+- [ ] one capture loop for both streams: per-stream byte buffer, emit only
+      complete `\n` records (decoded whole), cap a record at 64 KiB (on a
+      char boundary), flush the partial one at EOF
+- [ ] drain: wait on `&mut handle`, abort + await on timeout; a new capture
+      first drains (1 s) and aborts what is left of the previous run's
+- [ ] tests; docs, CHANGELOG; sc-build; image; close #85
+
 **#84 (P1, review 3e7358b0a350): API health state-file publication not
 serialized — already fixed on main.** Reviewed at fc17f5a (2026-10-13), before
 5f12c31 (#69): `publish` now holds `publish_lock` across snapshot, write of
