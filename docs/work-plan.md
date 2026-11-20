@@ -50,11 +50,14 @@ the plugin summary merge).
 **#87 (P1, review 9624a8409928): ingested process names became log paths.**
 `POST /api/v1/logs/ingest` `process = "../../x"` (or absolute) wrote, created
 dirs and rotated outside `log_dir`; the stored-log reads join it too.
-- [ ] `stormlog::safe_process_name`: one filename component (no `/`, `\`,
-      NUL, not `.`/`..`, non-empty, ≤ 200 bytes)
-- [ ] ingest refuses (400); FileLogger and LogStore never build a path from
+- [x] `stormlog::types::safe_process_name`: one filename component (no `/`,
+      `\`, NUL, not `.`/`..`, non-empty, ≤ 200 bytes) — 59ef420
+- [x] ingest refuses (400); FileLogger and LogStore never build a path from
       an unsafe name; config refuses such `[[process]]`/`[[cron]]` names
-- [ ] tests; docs, CHANGELOG; sc-build; image; close #87
+- [x] unit tests (rule, file logger, config) + medium
+      `ingest-process-name-confined`; README, CHANGELOG; sc-build a5d64e1:
+      build.sh (stormd 152, stormlog 21, clippy clean) + medium 24 pass /
+      1 skip; image; shipped
 
 **#86 (P1, review): 2 ssh.rs security findings.** 813579212408: the
 generated host key was written with the umask (0644). 94c19c75c80b:
