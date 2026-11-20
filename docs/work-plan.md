@@ -51,10 +51,12 @@ the plugin summary merge).
 certificates.** `require_auth` accepted `ClientCertVerified`; `/api/v1/auth/
 session` counted only a cookie, so with `client_ca_file` the only credential
 the web UI sat on a login screen no password could pass.
-- [ ] one `auth::credential` for the middleware and the session endpoint
-      (client cert, bearer, session cookie); session reports `via`
-- [ ] tests: unit + over real mTLS (tls.rs listener); docs, CHANGELOG;
-      sc-build; image; close #88
+- [x] one `auth::credential` for the middleware and the session endpoint
+      (client cert, bearer, session cookie); session reports `via` — 57ad4e8;
+      3367d33 reads the request before the future (non-Send, #92)
+- [x] tests: unit + over real mTLS (tls.rs listener); README, CHANGELOG;
+      sc-build 3367d33: build.sh (154 tests, clippy clean) + medium 24 pass /
+      1 skip; image; shipped
 
 **#87 (P1, review 9624a8409928): ingested process names became log paths.**
 `POST /api/v1/logs/ingest` `process = "../../x"` (or absolute) wrote, created
