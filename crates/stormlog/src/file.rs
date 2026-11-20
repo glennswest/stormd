@@ -320,7 +320,8 @@ mod failure_tests {
         let _ = std::fs::remove_dir_all(&outside);
         std::fs::create_dir_all(&outside).unwrap();
         let rel = format!("../{}/x", outside.file_name().unwrap().to_string_lossy());
-        for name in [rel.as_str(), &format!("{}/abs", outside.display()), ".."] {
+        let abs = format!("{}/abs", outside.display());
+        for name in [rel.as_str(), abs.as_str(), ".."] {
             l.write(&LogEntry::new(name, LogStream::Ingest, "nope")).await;
             assert_eq!(l.take_file(name, "r1", true).await, None);
             l.cleanup_rotated(name);
