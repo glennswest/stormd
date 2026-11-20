@@ -706,7 +706,11 @@ Every line of every process, and every event, goes three places:
    renamed `{process}.{run_id}.{failed|exited}.log` and the next run starts a
    fresh one; the oldest runs past `max_runs` are deleted. Before the rename
    stormd waits (up to 5 s) for the output pipes to drain, so the line that
-   explains a crash is in the file. The file is opened for every line. If
+   explains a crash is in the file. A pipe still open after that (a child
+   the process left behind holds it) has its capture ended there, so
+   nothing it writes later lands in the next run's log; a new run likewise
+   gives a previous run's leftover capture 1 s and then ends it (#85). The
+   file is opened for every line. If
    the directory has gone (removed, a mount that came late) it is created
    again and the open retried. If the file still cannot be opened or
    written (disk full, permissions, a mount gone), stormd says so once,
@@ -733,6 +737,14 @@ Every line of every process, and every event, goes three places:
    non-ASCII character is sent with `_` in its place.
 3. **Live streams** — the VT100 screen per process and a broadcast channel,
    followed by the web console, stormsh, `attach`, and `/ws/logs`.
+
+**A line is a record** (#85): output is gathered per stream and cut at
+`\n` (a trailing `\r` dropped), whatever the pipe reads were, so a line
+written in several pieces is one entry and a multibyte character split
+across reads stays whole. A line longer than 64 KiB is cut, at a character
+boundary, into entries of at most 64 KiB; what is left when the stream
+ends is the last entry; empty lines are skipped. The terminal (VT100) still
+gets the raw bytes as they arrive.
 
 **Severity** is stormcast's judgement from the first 120 characters of the
 line: klog prefixes (`F`/`E`/`W`/`I`/`D` + `MMDD`), else the *leftmost* of

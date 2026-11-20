@@ -197,88 +197,102 @@ impl StormLog {
             let this = self.clone();
             let name = process.clone();
             let rid = run_id.clone();
-            let h = tokio::spawn(async move {
-                let mut reader = BufReader::new(stdout);
-                let mut buf = [0u8; 4096];
-                loop {
-                    match reader.read(&mut buf).await {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            let bytes = &buf[..n];
-                            // Feed raw bytes to VT100
-                            this.terminal_manager.feed(&name, bytes).await;
-                            // Split into lines and publish
-                            let text = String::from_utf8_lossy(bytes);
-                            for line in text.lines() {
-                                if !line.is_empty() {
-                                    let sev = detect_severity(line, Severity::Info);
-                                    this.remember(&name, line);
-                                    let entry = LogEntry::new(&name, LogStream::Stdout, line)
-                                        .with_severity(sev)
-                                        .with_run_id(&rid);
-                                    this.write_entry(entry).await;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!(error = %e, process = %name, "stdout read error");
-                            break;
-                        }
-                    }
-                }
+            handles.push(tokio::spawn(async move {
+                this.capture(&name, &rid, stdout, LogStream::Stdout, Severity::Info).await;
                 // Its output has ended: a run of repeats still held by the
                 // group's limiter goes out now, not with the next run.
                 if let Some(m) = &this.mcast {
                     m.flush(&name);
                 }
-                // Emit end marker
-                let end = LogEntry::new(&name, LogStream::Stdout, "--- process exited ---")
-                    .with_run_id(&rid);
+                let end = LogEntry::new(&name, LogStream::Stdout, "--- process exited ---").with_run_id(&rid);
                 this.write_entry(end).await;
-            });
-            handles.push(h);
+            }));
         }
 
         if let Some(stderr) = stderr {
             let this = self.clone();
             let name = process.clone();
             let rid = run_id.clone();
-            let h = tokio::spawn(async move {
-                let mut reader = BufReader::new(stderr);
-                let mut buf = [0u8; 4096];
-                loop {
-                    match reader.read(&mut buf).await {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            let bytes = &buf[..n];
-                            // Stderr also goes through VT100
-                            this.terminal_manager.feed(&name, bytes).await;
-                            let text = String::from_utf8_lossy(bytes);
-                            for line in text.lines() {
-                                if !line.is_empty() {
-                                    let sev = detect_severity(line, Severity::Warning);
-                                    this.remember(&name, line);
-                                    let entry = LogEntry::new(&name, LogStream::Stderr, line)
-                                        .with_severity(sev)
-                                        .with_run_id(&rid);
-                                    this.write_entry(entry).await;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!(error = %e, process = %name, "stderr read error");
-                            break;
-                        }
-                    }
-                }
-            });
-            handles.push(h);
+            handles.push(tokio::spawn(async move {
+                this.capture(&name, &rid, stderr, LogStream::Stderr, Severity::Warning).await;
+            }));
         }
 
-        // Store handles so archive_run can await them
-        {
-            let mut tasks = self.reader_tasks.lock().await;
-            tasks.insert(process, handles);
+        // Store handles so archive_run can await them. Readers of an
+        // earlier run still here (a stop that did not archive, or a
+        // descendant holding its pipe) are drained briefly and then ended, so
+        // they cannot write into this run (stormd#85).
+        let earlier = self.reader_tasks.lock().await.insert(process.clone(), handles);
+        if let Some(earlier) = earlier {
+            Self::drain(&process, earlier, NEW_RUN_DRAIN).await;
+        }
+    }
+
+    /// Read one stream of a run into log records until EOF (stormd#85).
+    ///
+    /// **A record is a line, not a read.** A pipe keeps no write or line
+    /// boundaries: each 4 KiB read used to be decoded and split on its own,
+    /// so one diagnostic written in two writes, or longer than the buffer,
+    /// became several entries, a UTF-8 character split across reads became
+    /// U+FFFD, and severity was judged on fragments. Bytes now gather in a
+    /// buffer, a record is everything up to `\n` (a trailing `\r` dropped),
+    /// decoded whole; a line longer than `MAX_LINE` is cut at a character
+    /// boundary into records of at most that; what is left at EOF is the
+    /// last record. Empty lines are skipped, as before. The terminal still
+    /// gets the raw bytes as they come.
+    async fn capture<R>(&self, name: &str, run_id: &str, stream: R, kind: LogStream, default: Severity)
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        let mut reader = BufReader::new(stream);
+        let mut buf = [0u8; 4096];
+        let mut pending: Vec<u8> = Vec::new();
+        loop {
+            match reader.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    self.terminal_manager.feed(name, &buf[..n]).await;
+                    pending.extend_from_slice(&buf[..n]);
+                    for record in take_records(&mut pending, false) {
+                        self.record(name, run_id, &record, kind, default).await;
+                    }
+                }
+                Err(e) => {
+                    error!(error = %e, process = %name, stream = ?kind, "read error");
+                    break;
+                }
+            }
+        }
+        for record in take_records(&mut pending, true) {
+            self.record(name, run_id, &record, kind, default).await;
+        }
+    }
+
+    /// One captured line: remembered for the tail, written everywhere.
+    async fn record(&self, name: &str, run_id: &str, line: &str, kind: LogStream, default: Severity) {
+        if line.is_empty() {
+            return;
+        }
+        let sev = detect_severity(line, default);
+        self.remember(name, line);
+        let entry = LogEntry::new(name, kind, line).with_severity(sev).with_run_id(run_id);
+        self.write_entry(entry).await;
+    }
+
+    /// Wait for a run's readers to drain, up to `deadline` each; one still
+    /// running then is aborted, and awaited, so it cannot outlive the run
+    /// (stormd#85). Dropping a timed-out `JoinHandle` only detached it: a
+    /// descendant holding the pipe kept it writing into the next run.
+    async fn drain(process: &str, handles: Vec<JoinHandle<()>>, deadline: std::time::Duration) {
+        for mut h in handles {
+            if tokio::time::timeout(deadline, &mut h).await.is_err() {
+                warn!(
+                    process = %process, deadline_secs = deadline.as_secs_f32(),
+                    "output still open after the run ended (a child holding the pipe?) — capture ended"
+                );
+                h.abort();
+                let _ = h.await;
+            }
         }
     }
 
@@ -344,13 +358,7 @@ impl StormLog {
         };
         if !handles.is_empty() {
             info!(process = %process, tasks = handles.len(), "waiting for reader tasks to drain");
-            for h in handles {
-                if let Err(e) =
-                    tokio::time::timeout(tokio::time::Duration::from_secs(5), h).await
-                {
-                    warn!(process = %process, error = %e, "reader task drain timed out");
-                }
-            }
+            Self::drain(process, handles, ARCHIVE_DRAIN).await;
         }
 
         let file_path = self.file_logger.take_file(process, &run_id, failed).await;
@@ -426,6 +434,52 @@ impl StormLog {
     }
 }
 
+/// The longest record a captured line makes; longer ones are cut into
+/// records of at most this (stormd#85).
+pub const MAX_LINE: usize = 64 * 1024;
+/// How long `archive_run` lets a run's readers drain before ending them.
+const ARCHIVE_DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long a new run lets readers of the previous one, still running, drain.
+const NEW_RUN_DRAIN: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Take the complete records out of `pending`: each line up to `\n` (a
+/// trailing `\r` dropped), a run of more than `MAX_LINE` bytes without one
+/// cut at a UTF-8 boundary, and — at `eof` — whatever is left. Each record is
+/// decoded whole, so a character split across reads stays one character.
+fn take_records(pending: &mut Vec<u8>, eof: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    loop {
+        if let Some(nl) = pending.iter().position(|&b| b == b'\n') {
+            if nl <= MAX_LINE {
+                let mut line: Vec<u8> = pending.drain(..=nl).collect();
+                line.pop();
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                out.push(String::from_utf8_lossy(&line).into_owned());
+                continue;
+            }
+        }
+        if pending.len() > MAX_LINE {
+            // Cut at the last character boundary within MAX_LINE.
+            let cut = match std::str::from_utf8(&pending[..MAX_LINE]) {
+                Ok(_) => MAX_LINE,
+                Err(e) if e.error_len().is_none() && e.valid_up_to() > 0 => e.valid_up_to(),
+                Err(_) => MAX_LINE,
+            };
+            let chunk: Vec<u8> = pending.drain(..cut).collect();
+            out.push(String::from_utf8_lossy(&chunk).into_owned());
+            continue;
+        }
+        break;
+    }
+    if eof && !pending.is_empty() {
+        let rest = std::mem::take(pending);
+        out.push(String::from_utf8_lossy(&rest).trim_end_matches('\r').to_string());
+    }
+    out
+}
+
 /// Where lines go on the wire: no `group` → the fleet's default group;
 /// `"off"` or `""` → nowhere; anything else → that `host:port` (nowhere, with
 /// a warning, if it does not parse).
@@ -499,5 +553,109 @@ mod tail_tests {
         assert_eq!(log.tail("fastetcd"), vec!["only".to_string()], "a new run starts empty");
         assert!(log.tail("never").is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// stormd#85 (7b4d771dbcf5): records are lines, whatever the reads were.
+#[cfg(test)]
+mod record_tests {
+    use super::{take_records, MAX_LINE};
+
+    fn feed(chunks: &[&[u8]]) -> Vec<String> {
+        let mut pending = Vec::new();
+        let mut out = Vec::new();
+        for c in chunks {
+            pending.extend_from_slice(c);
+            out.extend(take_records(&mut pending, false));
+        }
+        out.extend(take_records(&mut pending, true));
+        out
+    }
+
+    #[test]
+    fn a_line_split_across_reads_is_one_record() {
+        assert_eq!(feed(&[b"Error: disk ", b"full\nnext\n"]), vec!["Error: disk full", "next"]);
+        assert_eq!(feed(&[b"a\r", b"\nb\r\n"]), vec!["a", "b"], "CRLF, even split");
+    }
+
+    #[test]
+    fn a_character_split_across_reads_stays_whole() {
+        let e = "é".as_bytes();
+        assert_eq!(feed(&[b"caf", &e[..1], &e[1..], b"\n"]), vec!["café"]);
+    }
+
+    #[test]
+    fn a_partial_line_at_eof_is_the_last_record() {
+        assert_eq!(feed(&[b"one\ntwo"]), vec!["one", "two"]);
+        assert!(feed(&[b""]).is_empty());
+    }
+
+    #[test]
+    fn a_long_line_is_cut_at_a_character_boundary() {
+        // MAX_LINE - 1 ASCII bytes, then a 2-byte character straddling the cap.
+        let mut line = vec![b'x'; MAX_LINE - 1];
+        line.extend_from_slice("é".as_bytes());
+        line.extend_from_slice(b"rest\n");
+        let r = feed(&[&line]);
+        assert_eq!(r.len(), 2, "{:?}", r.iter().map(String::len).collect::<Vec<_>>());
+        assert_eq!(r[0].len(), MAX_LINE - 1, "cut before the character, not through it");
+        assert_eq!(r[1], "érest");
+        assert!(r.iter().all(|s| !s.contains('\u{FFFD}')));
+    }
+}
+
+/// stormd#85 against real pipes: lines across writes, and a reader that
+/// outlives its run is ended (618ee2a9a43d).
+#[cfg(test)]
+mod capture_tests {
+    use super::StormLog;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    fn log(label: &str) -> (Arc<StormLog>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("stormlog-cap-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cfg = crate::types::StormLogConfig::default();
+        cfg.file.log_dir = dir.clone();
+        cfg.mcast.group = Some("off".into());
+        (Arc::new(StormLog::new(cfg, "t")), dir)
+    }
+
+    async fn run(log: &Arc<StormLog>, name: &str, script: &str) -> Duration {
+        let mut child = tokio::process::Command::new("/bin/sh")
+            .args(["-c", script])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        log.spawn_capture(name.into(), child.stdout.take(), child.stderr.take()).await;
+        child.wait().await.unwrap();
+        let t = Instant::now();
+        log.archive_run(name, false).await;
+        t.elapsed()
+    }
+
+    #[tokio::test]
+    async fn lines_and_characters_survive_separate_writes() {
+        let (log, dir) = log("lines");
+        // "é" is \303\251; each half, and each half-line, in its own write.
+        run(&log, "p", r"printf 'Error: half'; sleep 0.2; printf ' a line\n'; printf 'caf\303'; sleep 0.2; printf '\251\n'; printf 'no newline'").await;
+        let t = log.tail("p");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(t, vec!["Error: half a line", "café", "no newline"]);
+    }
+
+    #[tokio::test]
+    async fn a_reader_left_open_by_a_descendant_is_ended_with_its_run() {
+        let (log, dir) = log("drain");
+        // The background subshell keeps stdout open past the run, and
+        // writes into it 6 s later.
+        let waited = run(&log, "p", "(sleep 6; echo late) 2>/dev/null & echo hi").await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let t = log.tail("p");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(waited >= Duration::from_secs(4), "archive did not wait for the drain: {waited:?}");
+        assert!(waited < Duration::from_secs(8), "archive waited {waited:?}");
+        assert_eq!(t, vec!["hi"], "the reader outlived its run and kept writing");
     }
 }

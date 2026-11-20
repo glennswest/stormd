@@ -5,6 +5,15 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **fix:** stormlog capture (#85, review findings 618ee2a9a43d,
+  7b4d771dbcf5). Captured output is cut into records at `\n` from a
+  per-stream buffer instead of per 4 KiB read, so lines written in pieces
+  stay one entry, UTF-8 split across reads stays whole, and severity is
+  judged on the whole line; lines over 64 KiB are cut at a character
+  boundary, the partial line at EOF is flushed. A reader still running at
+  its drain deadline (5 s at archive, 1 s when the next run starts) is
+  aborted and awaited instead of detached, so a descendant holding the pipe
+  can no longer write into the next run. stdout and stderr share one loop.
 - **docs:** review finding 3e7358b0a350 (#84, API health state file written
   by concurrent probes) was already fixed by 5f12c31 (#69) — one writer at a
   time, snapshot taken under the lock — and is covered by
