@@ -49,9 +49,12 @@ pub struct ClientCertVerified;
 /// time or size changes — a rotated token works without restarting stormd.
 /// An unreadable or empty file means no token (nothing matches), not an open
 /// API.
+/// The file's (mtime, length) when last read, and the token read then.
+type TokenCache = (Option<(std::time::SystemTime, u64)>, Option<String>);
+
 struct TokenFile {
     path: PathBuf,
-    cached: Mutex<(Option<(std::time::SystemTime, u64)>, Option<String>)>,
+    cached: Mutex<TokenCache>,
 }
 
 impl TokenFile {

@@ -53,13 +53,13 @@ pub async fn cmd_ls(args: &[&str]) -> ShellOutput {
         let meta = entry.metadata().await.ok();
         items.push((name, meta, entry.file_type().await.ok()));
     }
-    items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    items.sort_by_key(|a| a.0.to_lowercase());
 
     let mut out = String::new();
     if long {
         for (name, meta, ft) in &items {
             if let Some(m) = meta {
-                out.push_str(&format_file_long(&name, m));
+                out.push_str(&format_file_long(name, m));
             } else {
                 let indicator = match ft {
                     Some(t) if t.is_dir() => "/",
@@ -1013,7 +1013,7 @@ fn detect_file_type(data: &[u8]) -> &'static str {
     }
     // Check if it's text
     let sample = &data[..data.len().min(512)];
-    if sample.iter().all(|&b| b == b'\n' || b == b'\r' || b == b'\t' || (b >= 0x20 && b < 0x7f)) {
+    if sample.iter().all(|&b| b == b'\n' || b == b'\r' || b == b'\t' || (0x20..0x7f).contains(&b)) {
         return "ASCII text";
     }
     if sample

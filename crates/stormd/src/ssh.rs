@@ -352,9 +352,11 @@ impl Handler for SshSession {
                     return Ok(());
                 }
                 // Backspace
+                // Not a guard on the arm: 0x7f on an empty line must stop
+                // here, not fall through to the printable arm below.
                 0x7f | 0x08 => {
-                    if !state.line_buffer.is_empty() {
-                        state.line_buffer.pop();
+                    let erased = state.line_buffer.pop().is_some();
+                    if erased {
                         session.data(channel, cv(b"\x08 \x08"));
                     }
                 }
@@ -367,12 +369,10 @@ impl Handler for SshSession {
                     return Ok(());
                 }
                 // Ctrl-D (EOF)
-                0x04 => {
-                    if state.line_buffer.is_empty() {
-                        session.data(channel, cv(b"\r\nlogout\r\n"));
-                        session.close(channel);
-                        return Ok(());
-                    }
+                0x04 if state.line_buffer.is_empty() => {
+                    session.data(channel, cv(b"\r\nlogout\r\n"));
+                    session.close(channel);
+                    return Ok(());
                 }
                 // Tab completion
                 0x09 => {

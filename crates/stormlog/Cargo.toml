@@ -20,3 +20,5 @@ anyhow.workspace = true
 vt100.workspace = true
 tokio-util.workspace = true
 
+[lints]
+workspace = true

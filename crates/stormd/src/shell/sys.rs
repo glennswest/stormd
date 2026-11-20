@@ -19,7 +19,7 @@ pub fn cmd_mount() -> ShellOutput {
 }
 
 pub fn cmd_df(args: &[&str]) -> ShellOutput {
-    let human = args.iter().any(|a| *a == "-h");
+    let human = args.contains(&"-h");
     let mounts = crate::stats::StatsCollector::get_mounts();
 
     if mounts.is_empty() {
@@ -131,10 +131,10 @@ fn parse_kb(s: &str) -> u64 {
 }
 
 pub fn cmd_uname(args: &[&str]) -> ShellOutput {
-    let show_all = args.iter().any(|a| *a == "-a");
-    let show_machine = args.iter().any(|a| *a == "-m");
-    let show_release = args.iter().any(|a| *a == "-r");
-    let show_sysname = args.iter().any(|a| *a == "-s") || args.is_empty();
+    let show_all = args.contains(&"-a");
+    let show_machine = args.contains(&"-m");
+    let show_release = args.contains(&"-r");
+    let show_sysname = args.contains(&"-s") || args.is_empty();
 
     let sysname = if cfg!(target_os = "linux") {
         "Linux"

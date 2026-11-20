@@ -171,7 +171,7 @@ impl LogStore {
         }
 
         archived.sort_by(|a, b| a.0.cmp(&b.0));
-        rotated.sort_by(|a, b| b.0.cmp(&a.0));
+        rotated.sort_by_key(|r| std::cmp::Reverse(r.0));
 
         let mut out: Vec<PathBuf> = archived.into_iter().map(|(_, p)| p).collect();
         out.extend(rotated.into_iter().map(|(_, p)| p));

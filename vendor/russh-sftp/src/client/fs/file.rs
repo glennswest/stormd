@@ -145,7 +145,7 @@ impl AsyncRead for File {
                         Err(Error::Status(status)) if status.status_code == StatusCode::Eof => {
                             Ok(None)
                         }
-                        Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+                        Err(e) => Err(io::Error::other(e.to_string())),
                     }
                 }))
             }
@@ -172,10 +172,7 @@ impl AsyncRead for File {
 impl AsyncSeek for File {
     fn start_seek(mut self: Pin<&mut Self>, position: io::SeekFrom) -> io::Result<()> {
         match self.state.f_seek {
-            Some(_) => Err(io::Error::new(
-                io::ErrorKind::Other,
-                "other file operation is pending, call poll_complete before start_seek",
-            )),
+            Some(_) => Err(io::Error::other("other file operation is pending, call poll_complete before start_seek")),
             None => {
                 let session = self.session.clone();
                 let file_handle = self.handle.clone();
@@ -189,25 +186,19 @@ impl AsyncSeek for File {
                             let result = session
                                 .fstat(file_handle)
                                 .await
-                                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                                .map_err(|e| io::Error::other(e.to_string()))?;
 
                             match result.attrs.size {
                                 Some(size) => size as i64 + pos,
                                 None => {
-                                    return Err(io::Error::new(
-                                        io::ErrorKind::Other,
-                                        "file size unknown",
-                                    ))
+                                    return Err(io::Error::other("file size unknown"))
                                 }
                             }
                         }
                     };
 
                     if new_pos < 0 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            "cannot move file pointer before the beginning",
-                        ));
+                        return Err(io::Error::other("cannot move file pointer before the beginning"));
                     }
 
                     Ok(new_pos as u64)
@@ -261,7 +252,7 @@ impl AsyncWrite for File {
                     session
                         .write(file_handle, offset, data[..len].to_vec())
                         .await
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                        .map_err(|e| io::Error::other(e.to_string()))?;
                     Ok(len)
                 }))
             }
@@ -295,7 +286,7 @@ impl AsyncWrite for File {
                         .fsync(file_handle)
                         .await
                         .map(|_| ())
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+                        .map_err(|e| io::Error::other(e.to_string()))
                 }))
             }
         })
@@ -322,7 +313,7 @@ impl AsyncWrite for File {
                     session
                         .close(file_handle)
                         .await
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                        .map_err(|e| io::Error::other(e.to_string()))?;
                     Ok(())
                 }))
             }

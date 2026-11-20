@@ -73,8 +73,11 @@ struct ReloadingCert {
     cert: PathBuf,
     key: PathBuf,
     provider: Arc<CryptoProvider>,
-    current: Mutex<((Stamp, Stamp), Option<Arc<CertifiedKey>>)>,
+    current: Mutex<LoadedPair>,
 }
+
+/// The (cert, key) stamps last loaded, and the pair loaded then.
+type LoadedPair = ((Stamp, Stamp), Option<Arc<CertifiedKey>>);
 
 impl ReloadingCert {
     fn new(cert: PathBuf, key: PathBuf, provider: Arc<CryptoProvider>) -> Self {
@@ -385,13 +388,12 @@ mod tests {
     }
 
     fn api_config(dir: &Path, client_ca: bool) -> crate::config::ApiConfig {
-        let mut api = crate::config::ApiConfig::default();
-        api.tls_cert_file = Some(dir.join("server.crt"));
-        api.tls_key_file = Some(dir.join("server.key"));
-        if client_ca {
-            api.client_ca_file = vec![dir.join("ca.crt")];
+        crate::config::ApiConfig {
+            tls_cert_file: Some(dir.join("server.crt")),
+            tls_key_file: Some(dir.join("server.key")),
+            client_ca_file: if client_ca { vec![dir.join("ca.crt")] } else { Vec::new() },
+            ..Default::default()
         }
-        api
     }
 
     /// The TLS listener in front of a router that reports whether the

@@ -324,9 +324,8 @@ impl Updater {
                 continue;
             }
 
-            if file_name.starts_with(".wh.") {
+            if let Some(original_name) = file_name.strip_prefix(".wh.") {
                 // Regular whiteout — delete the target file/dir
-                let original_name = &file_name[4..];
                 let target_path = target.join(path.parent().unwrap_or(Path::new(""))).join(original_name);
                 if target_path.is_dir() {
                     let _ = std::fs::remove_dir_all(&target_path);

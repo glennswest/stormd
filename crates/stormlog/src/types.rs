@@ -175,7 +175,7 @@ fn default_max_runs() -> usize {
 }
 
 /// Configuration for StormLog.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct StormLogConfig {
     #[serde(default)]
     pub file: FileConfig,
@@ -191,7 +191,7 @@ pub struct StormLogConfig {
 /// receiving, storing, indexing and searching is a collector's job, and doing
 /// it in both places means two stores, two schemas, and a fleet view that sees
 /// half the nodes.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct McastConfig {
     /// `host:port`, or `off`. Defaults to the fleet group, because a node that
     /// must be configured before anyone can see its logs is a node whose first
@@ -208,22 +208,6 @@ pub struct McastConfig {
     /// tag, which is a separate field and already carries it.
     #[serde(default)]
     pub host: Option<String>,
-}
-
-impl Default for McastConfig {
-    fn default() -> Self {
-        Self { group: None, host: None }
-    }
-}
-
-impl Default for StormLogConfig {
-    fn default() -> Self {
-        Self {
-            file: FileConfig::default(),
-            terminal: TerminalConfig::default(),
-            mcast: McastConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
 /// SFTP session handler backed by the real container filesystem.
+#[derive(Default)]
 pub struct SftpSession {
     version: Option<u32>,
     handles: HashMap<String, HandleState>,
@@ -21,16 +22,6 @@ enum HandleState {
         path: PathBuf,
         read_done: bool,
     },
-}
-
-impl Default for SftpSession {
-    fn default() -> Self {
-        Self {
-            version: None,
-            handles: HashMap::new(),
-            next_handle: 0,
-        }
-    }
 }
 
 impl SftpSession {

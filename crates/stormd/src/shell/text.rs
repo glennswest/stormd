@@ -436,7 +436,7 @@ pub fn cmd_xxd(piped: Option<&str>) -> ShellOutput {
         }
         out.push(' ');
         for &b in chunk {
-            if b >= 0x20 && b < 0x7f {
+            if (0x20..0x7f).contains(&b) {
                 out.push(b as char);
             } else {
                 out.push('.');

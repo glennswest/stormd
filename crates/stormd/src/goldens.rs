@@ -401,7 +401,7 @@ impl Goldens {
             }
             old
         };
-        if reserved.iter().any(|r| *r == path) {
+        if reserved.contains(&path) {
             return Err(refused(409, format!("{} is a configured golden's path", path.display())));
         }
         let Some(old) = old else {

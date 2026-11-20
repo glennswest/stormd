@@ -312,7 +312,9 @@ async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .filter_map(|p| Some((p.name.clone(), crate::stats::proc_usage(p.pid?)?)))
         .collect();
     type Usage = crate::stats::ProcUsage;
-    let usage_metrics: [(&str, &str, &str, fn(&Usage) -> String); 4] = [
+    /// name, type, help, value
+    type UsageMetric = (&'static str, &'static str, &'static str, fn(&Usage) -> String);
+    let usage_metrics: [UsageMetric; 4] = [
         ("stormd_process_resident_memory_bytes", "gauge", "Resident memory of the supervised process.",
             |u| u.rss_bytes.to_string()),
         ("stormd_process_virtual_memory_bytes", "gauge", "Virtual memory of the supervised process.",

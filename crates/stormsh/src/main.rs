@@ -139,15 +139,11 @@ async fn run_app(
                             View::Dashboard => app.dash_next(),
                             _ => app.select_next(),
                         },
-                        KeyCode::Left | KeyCode::Char('h') => {
-                            if app.view == View::Dashboard {
-                                app.dash_prev();
-                            }
+                        KeyCode::Left | KeyCode::Char('h') if app.view == View::Dashboard => {
+                            app.dash_prev();
                         }
-                        KeyCode::Right => {
-                            if app.view == View::Dashboard {
-                                app.dash_next();
-                            }
+                        KeyCode::Right if app.view == View::Dashboard => {
+                            app.dash_next();
                         }
                         KeyCode::Enter => {
                             // Open the selected process's terminal — from the
@@ -232,10 +228,8 @@ async fn run_app(
                                 }
                             }
                         },
-                        KeyCode::Char('u') => {
-                            if app.view == View::Dashboard {
-                                app.dash_action("trigger").await;
-                            }
+                        KeyCode::Char('u') if app.view == View::Dashboard => {
+                            app.dash_action("trigger").await;
                         }
                         KeyCode::Char('l') => {
                             app.view = View::Logs;

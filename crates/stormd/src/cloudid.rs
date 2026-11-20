@@ -26,6 +26,10 @@ impl SshKeyStore {
     pub fn len(&self) -> usize {
         self.keys.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
 }
 
 /// How long a metadata token is asked for — IMDSv2's usual six hours, and

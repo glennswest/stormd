@@ -28,7 +28,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_tabs(f: &mut Frame, area: Rect, app: &App) {
-    let tabs = vec![
+    let tabs = [
         ("Dashboard", View::Dashboard),
         ("Processes", View::Processes),
         ("Terminal", View::Terminal),

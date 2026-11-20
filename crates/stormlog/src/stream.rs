@@ -10,6 +10,12 @@ pub struct StreamManager {
     process_channels: Mutex<HashMap<String, broadcast::Sender<LogEntry>>>,
 }
 
+impl Default for StreamManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StreamManager {
     pub fn new() -> Self {
         let (global_tx, _) = broadcast::channel(CHANNEL_CAPACITY);

@@ -11,6 +11,12 @@ resolver = "2"
 edition = "2021"
 license = "MIT"
 
+# Zero build warnings (stormcentral#193): a warning fails the build, and
+# deploy/build.sh runs clippy with -D warnings (stormd#77). Every member
+# opts in with `[lints] workspace = true`; vendor/ is not ours and is not.
+[workspace.lints.rust]
+warnings = "deny"
+
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws"] }

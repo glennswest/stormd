@@ -178,7 +178,7 @@ pub async fn cmd_liveness(state: &Arc<AppState>, args: &[&str]) -> ShellOutput {
     // stormd#56: the Kubernetes-style probes (#48), not the retired
     // `[process.liveness]`.
     let has_any = |s: &ProcessStatus| s.startup_probe.is_some() || s.liveness_config.is_some() || s.readiness_probe.is_some();
-    if !filtered.iter().any(|s| has_any(s)) {
+    if !filtered.iter().any(&has_any) {
         return ShellOutput::text("No startup, liveness or readiness probes configured\r\n");
     }
 

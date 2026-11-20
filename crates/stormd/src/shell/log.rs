@@ -11,7 +11,7 @@ pub async fn cmd_logs(state: &Arc<AppState>, args: &[&str]) -> ShellOutput {
         match *arg {
             "-f" => follow = true,
             "-n" => {} // next arg is the count, handled below
-            _ if arg.parse::<usize>().is_ok() && args.iter().any(|a| *a == "-n") => {
+            _ if arg.parse::<usize>().is_ok() && args.contains(&"-n") => {
                 tail = arg.parse().ok();
             }
             _ if !arg.starts_with('-') => process = Some(arg.to_string()),
