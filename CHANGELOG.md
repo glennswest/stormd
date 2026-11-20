@@ -5,6 +5,13 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **fix:** a webhook can no longer stall supervision (#83, review finding
+  3b808d13a1d6). `EventBus::emit` awaited the webhook POST inline with no
+  timeout, from inside container start, process start, restarts and stops.
+  Events now go to a bounded queue (256; newer ones dropped and counted when
+  full, one WARN per outage) drained in order by one task, each POST bounded
+  by a 5 s connect and 10 s total timeout. Tests: a hung webhook leaves emit
+  instant, a timed-out POST does not stop the next, delivery keeps order.
 - **fix:** image updater (#82, review findings 10e643f2175d, 5bae04c3272c,
   2d0e63dca0f9, 8125bda07bb1, ee990eabd358, 98cbfc29e7fd, a9f12a9b4236,
   e686d162bda7). Whiteouts are confined to the rootfs (absolute or `..`

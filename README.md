@@ -493,7 +493,7 @@ fire time, with a WARN, rather than piling up runs.
 |---|---|---|
 | `enabled` | `false` | |
 | `transport` | `"none"` | `none` \| `webhook` |
-| `webhook_url` | — | each event is POSTed as JSON |
+| `webhook_url` | — | each event is POSTed as JSON, from a bounded queue (5 s connect, 10 s per POST, 256 queued; below) |
 | `webhook_headers` | `{}` | |
 
 Events are written to the log (process `event`) whether or not this is
@@ -772,6 +772,15 @@ critical for `container_failing`; error for crashes and failed
 cron/backup/update; warning for restarts, liveness failures, stops. With the
 webhook on, the event is also POSTed as JSON:
 `{id, timestamp, kind, process, container, detail}`.
+
+The webhook never holds anything up (#83). An event is queued, and one task
+POSTs the queue in order, each POST bounded by a 5 s connect and a 10 s
+total timeout. Past 256 waiting events, new ones are dropped and counted,
+with one WARN per outage. A failed, refused or timed-out POST is logged and
+the next event goes on. Before this, the POST was awaited inline with no
+timeout, so a webhook that accepted connections and never answered held
+container start, process starts, restarts and stops. The log line above is
+written either way.
 
 ## REST API
 

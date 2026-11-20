@@ -186,7 +186,9 @@ timeout_secs = 60              # default 300; killed and recorded as failed afte
 capture_output = true          # output logged as process "cron.cleanup" when the job ends
 
 # --- Events ---
-# Every event is written to the log regardless; this adds a webhook.
+# Every event is written to the log regardless; this adds a webhook, POSTed
+# from a queue (5 s connect, 10 s per POST, 256 waiting; extras dropped) so a
+# slow or hung webhook never holds up supervision.
 
 [events]
 enabled = false
