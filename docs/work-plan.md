@@ -51,9 +51,13 @@ the plugin summary merge).
 `"helper"` in `GET /api/v1/processes`.** Bool, default false; validation
 refuses it on a one-shot (`restart_policy` OnFailure/Never, or no
 `restart_policy` and `on_exit = "stop"`). Nothing else changes.
-- [ ] config field + validation + unit tests; `ProcessStatus.helper`
-- [ ] example.toml, README, CHANGELOG; stormd-test case
-- [ ] sc-build deploy/build.sh; image; shipped with proof
+- [x] config field + validation + unit tests; `ProcessStatus.helper` — 5bc5380
+- [x] example.toml, README, CHANGELOG; stormd-test medium `helper-reported`,
+      `helper-on-one-shot-refused`
+- [x] sc-build 5bc5380: deploy/build.sh (133 stormd tests, clippy clean) +
+      the whole medium suite, all pass; image requested; shipped with proof.
+      Next (not ours): stormcos marks its helpers (`stormcert-renew` in
+      rustkube-apiserver), filed there by rustkube-node's side as #80 said
 
 **#77 (P1, build-failure): clear the clippy backlog and gate the build on it.**
 `cargo clippy --all-targets --workspace -- -D warnings` fails: vendored
