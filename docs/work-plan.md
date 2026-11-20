@@ -47,6 +47,15 @@ the plugin summary merge).
 
 ### In Progress
 
+**#95 (P1, review b1dfa55675ce): cron output held whole in stormd.**
+execute_job piped both streams and `wait_with_output` kept everything until
+exit, `capture_output = false` included — a noisy job could exhaust PID 1.
+- [ ] capture off → Stdio::null; on → both pipes streamed into the log as
+      the job runs (stormlog's line-buffered capture, 64 KiB max line, as #85)
+- [ ] child awaited under the timeout separately; on timeout killed + reaped,
+      readers drained 5 s then aborted
+- [ ] tests; docs, CHANGELOG; sc-build; image; close #95
+
 **#93 (P1, review dbd850683639): SFTP SETSTAT/FSETSTAT ignored size.**
 apply_attrs set only permissions and answered OK, so a truncate-then-rewrite
 left stale trailing bytes.
