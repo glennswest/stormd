@@ -51,12 +51,15 @@ the plugin summary merge).
 past its drain deadline was detached, not aborted, and kept writing into the
 next run (a descendant holding the pipe). 7b4d771dbcf5: each 4 KiB read was
 split into lines on its own — lines and UTF-8 chars broken across reads.
-- [ ] one capture loop for both streams: per-stream byte buffer, emit only
+- [x] one capture loop for both streams: per-stream byte buffer, emit only
       complete `\n` records (decoded whole), cap a record at 64 KiB (on a
-      char boundary), flush the partial one at EOF
-- [ ] drain: wait on `&mut handle`, abort + await on timeout; a new capture
-      first drains (1 s) and aborts what is left of the previous run's
-- [ ] tests; docs, CHANGELOG; sc-build; image; close #85
+      char boundary), flush the partial one at EOF — 18aab1f
+- [x] drain: wait on `&mut handle`, abort + await on timeout; a new capture
+      first drains (1 s) and aborts what is left of the previous run's, before
+      the new run starts — 5c8fa49
+- [x] 4 `record_tests` + 2 `capture_tests` (real pipes); README Logging,
+      CHANGELOG; sc-build 5c8fa49: build.sh (stormlog 19, stormd 146, clippy
+      clean) + medium 23 pass / 1 skip; image; shipped
 
 **#84 (P1, review 3e7358b0a350): API health state-file publication not
 serialized — already fixed on main.** Reviewed at fc17f5a (2026-10-13), before
