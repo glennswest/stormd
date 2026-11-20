@@ -47,6 +47,14 @@ the plugin summary merge).
 
 ### In Progress
 
+**#84 (P1, review 3e7358b0a350): API health state-file publication not
+serialized — already fixed on main.** Reviewed at fc17f5a (2026-10-13), before
+5f12c31 (#69): `publish` now holds `publish_lock` across snapshot, write of
+`<file>.tmp` and rename, so the last file written holds the newest state.
+Test `apihealth::state_file_tests::concurrent_records_never_fail_a_write`
+(8 threads × 50 records: no failed write, valid JSON, every API's final
+count, no `.tmp` left) passed in sc-build 0cb30d5. No code change; closed.
+
 **#83 (P1, review 3b808d13a1d6): webhook delivery blocks supervision.**
 `EventBus::emit` awaited the webhook POST inline, no timeout; a webhook that
 accepts and never answers held ContainerStarting, ProcessStarted, restarts.

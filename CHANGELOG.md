@@ -5,6 +5,10 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **docs:** review finding 3e7358b0a350 (#84, API health state file written
+  by concurrent probes) was already fixed by 5f12c31 (#69) — one writer at a
+  time, snapshot taken under the lock — and is covered by
+  `concurrent_records_never_fail_a_write`; recorded, no code change.
 - **fix:** a webhook can no longer stall supervision (#83, review finding
   3b808d13a1d6). `EventBus::emit` awaited the webhook POST inline with no
   timeout, from inside container start, process start, restarts and stops.
