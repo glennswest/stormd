@@ -53,11 +53,15 @@ CrashLoopBackOff spawns a second run; a pending backoff restart spawns over a
 manual one; old monitor/exit handler mutate the new run. 149cf8585ad3: a
 spawn error leaves the process Starting and stops start_all. 24879c9bdbad:
 configured golden swap not under the golden ops lock.
-- [ ] per-process lifecycle serialisation + run generation on exit/monitor
+- [x] per-process lifecycle serialisation + run generation on exit/monitor
       updates + pending restarts invalidated by manual start/restart/stop
-- [ ] spawn failure: out of Starting, on_failure/retry, start_all goes on
-- [ ] swap_golden under the golden operation lock
-- [ ] regression tests per finding; sc-build build.sh + medium; close #81
+      (`Admit::{Boot,Manual,Restart(run)}`, lifecycle lock) — 8e9be78
+- [x] spawn failure: out of Starting, on_failure/retry, start_all goes on
+- [x] swap_golden under the golden operation lock (`Goldens::lock_ops`)
+- [x] regression tests per finding (3 `lifecycle_tests`, goldens
+      `concurrent_swaps_of_one_golden_take_turns`); first build failed on an
+      `.await` inside `info!` (non-Send, #89) — 0a8228f; sc-build 0a8228f:
+      build.sh (137 tests, clippy clean) + medium 23 pass / 1 skip
 
 **#80 (P1, for rustkube-node#378): `[[process]] helper = true`, reported as
 `"helper"` in `GET /api/v1/processes`.** Bool, default false; validation
