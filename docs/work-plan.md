@@ -47,6 +47,17 @@ the plugin summary merge).
 
 ### In Progress
 
+**#77 (P1, build-failure): clear the clippy backlog and gate the build on it.**
+`cargo clippy --all-targets --workspace -- -D warnings` fails: vendored
+russh-sftp (`io::Error::other` ×8, explicit `.into_iter()`), stormlog
+(`sort_by_key`, `Default` for `StreamManager`, derivable impls), stormd
+(~23: api, auth, cloudid, goldens, sftp, shell/*, ssh, tls, updater).
+- [ ] full list from one sc-build clippy run (warnings, not denied)
+- [ ] fix every finding (vendor: minimal, mechanical)
+- [ ] `[workspace.lints.rust] warnings = "deny"`; `deploy/build.sh` runs
+      build + test + `clippy --all-targets -- -D warnings` (zero-warnings rule)
+- [ ] sc-build `deploy/build.sh` passes; close #77
+
 **#75 (traceability: service volumes with owner, on the mirror pod) — owner
 answered B (2026-11-20).** Owner at creation is stormblock#670 (release
 staging is the only creator); mirror-pod volumes from the engine listing are
