@@ -47,6 +47,18 @@ the plugin summary merge).
 
 ### In Progress
 
+**#81 (P1, review): 5 supervisor.rs concurrency/error findings.**
+01255713e1b7 / 97603be5edd9 / 40b194b05b52: start/restart during Stopping or
+CrashLoopBackOff spawns a second run; a pending backoff restart spawns over a
+manual one; old monitor/exit handler mutate the new run. 149cf8585ad3: a
+spawn error leaves the process Starting and stops start_all. 24879c9bdbad:
+configured golden swap not under the golden ops lock.
+- [ ] per-process lifecycle serialisation + run generation on exit/monitor
+      updates + pending restarts invalidated by manual start/restart/stop
+- [ ] spawn failure: out of Starting, on_failure/retry, start_all goes on
+- [ ] swap_golden under the golden operation lock
+- [ ] regression tests per finding; sc-build build.sh + medium; close #81
+
 **#80 (P1, for rustkube-node#378): `[[process]] helper = true`, reported as
 `"helper"` in `GET /api/v1/processes`.** Bool, default false; validation
 refuses it on a one-shot (`restart_policy` OnFailure/Never, or no
