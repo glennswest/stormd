@@ -441,22 +441,25 @@ pub async fn cmd_touch(args: &[&str]) -> ShellOutput {
         if path.starts_with('-') {
             continue;
         }
-        if Path::new(path).exists() {
-            // Update mtime by opening and closing
-            if let Err(e) = tokio::fs::OpenOptions::new()
-                .write(true)
-                .open(path)
-                .await
-            {
-                failed = true;
-                out.push_str(&format!("touch: {}: {}\r\n", path, e));
-            }
-        } else if let Err(e) = tokio::fs::write(path, b"").await {
+        if let Err(e) = touch(Path::new(path)) {
             failed = true;
             out.push_str(&format!("touch: {}: {}\r\n", path, e));
         }
     }
     ShellOutput::text(out).failed_if(failed)
+}
+
+/// Create an empty file when absent (never truncating one that appears
+/// meanwhile), then set its access and modification times to now — files and
+/// directories alike, contents untouched (stormd#98, a9b5f556c8ad).
+fn touch(path: &Path) -> std::io::Result<()> {
+    use nix::sys::stat::{utimensat, UtimensatFlags};
+    use nix::sys::time::TimeSpec;
+    if !path.exists() {
+        std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    }
+    utimensat(None, path, &TimeSpec::UTIME_NOW, &TimeSpec::UTIME_NOW, UtimensatFlags::FollowSymlink)?;
+    Ok(())
 }
 
 pub async fn cmd_chmod(args: &[&str]) -> ShellOutput {
@@ -1029,15 +1032,22 @@ fn detect_file_type(data: &[u8]) -> &'static str {
 
 pub async fn cmd_sha256sum(args: &[&str], piped: Option<&str>) -> ShellOutput {
     use sha2::{Digest, Sha256};
+    cmd_digest("sha256sum", args, piped, |d| hex::encode(Sha256::digest(d))).await
+}
 
+/// MD5, not SHA-256 under its name (stormd#98, f2eef25acd52).
+pub async fn cmd_md5sum(args: &[&str], piped: Option<&str>) -> ShellOutput {
+    cmd_digest("md5sum", args, piped, |d| format!("{:x}", md5::compute(d))).await
+}
+
+async fn cmd_digest(name: &str, args: &[&str], piped: Option<&str>, hash: fn(&[u8]) -> String) -> ShellOutput {
     if args.is_empty() && piped.is_none() {
-        return ShellOutput::usage("usage: sha256sum <file> [...]\r\n");
+        return ShellOutput::usage(format!("usage: {name} <file> [...]\r\n"));
     }
 
     if args.is_empty() {
         if let Some(input) = piped {
-            let hash = Sha256::digest(input.as_bytes());
-            return ShellOutput::text(format!("{}  -\r\n", hex::encode(hash)));
+            return ShellOutput::text(format!("{}  -\r\n", hash(input.as_bytes())));
         }
     }
 
@@ -1048,11 +1058,11 @@ pub async fn cmd_sha256sum(args: &[&str], piped: Option<&str>) -> ShellOutput {
             continue;
         }
         match tokio::fs::read(path).await {
-            Ok(data) => {
-                let hash = Sha256::digest(&data);
-                out.push_str(&format!("{}  {}\r\n", hex::encode(hash), path));
+            Ok(data) => out.push_str(&format!("{}  {}\r\n", hash(&data), path)),
+            Err(e) => {
+                failed = true;
+                out.push_str(&format!("{name}: {path}: {e}\r\n"));
             }
-            Err(e) => { failed = true; out.push_str(&format!("sha256sum: {}: {}\r\n", path, e)); }
         }
     }
     ShellOutput::text(out).failed_if(failed)
@@ -1179,6 +1189,59 @@ mod status_tests {
         assert_eq!(cmd_mkdir(&[&format!("{missing}/a/b")]).await.status, 1);
         assert_eq!(cmd_rm(&[&missing]).await.status, 1);
         assert_eq!(cmd_rm(&["-f", &missing]).await.status, 0, "rm -f of nothing succeeds");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// stormd#98 (a9b5f556c8ad): touch moves the times of a file that
+    /// exists, contents kept, and of a directory; creates an absent one.
+    #[tokio::test]
+    async fn touch_updates_times_and_keeps_contents() {
+        use std::time::{Duration, SystemTime};
+        let dir = std::env::temp_dir().join(format!("stormd-touch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("marker");
+        std::fs::write(&f, b"keep me\n").unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        let times = std::fs::FileTimes::new().set_accessed(old).set_modified(old);
+        std::fs::File::options().write(true).open(&f).unwrap().set_times(times).unwrap();
+        std::fs::File::open(&dir).unwrap().set_times(times).unwrap();
+        let recent = |p: &Path| SystemTime::now().duration_since(std::fs::metadata(p).unwrap().modified().unwrap()).unwrap() < Duration::from_secs(60);
+        assert!(!recent(&f) && !recent(&dir));
+
+        let (fs, ds) = (f.to_str().unwrap().to_string(), dir.to_str().unwrap().to_string());
+        let o = cmd_touch(&[&fs, &ds]).await;
+        assert_eq!(o.status, 0, "{}", o.text);
+        assert!(recent(&f), "an existing file's mtime was not updated");
+        assert!(recent(&dir), "a directory's mtime was not updated");
+        let at = std::fs::metadata(&f).unwrap().accessed().unwrap();
+        assert!(SystemTime::now().duration_since(at).unwrap() < Duration::from_secs(60), "atime not updated");
+        assert_eq!(std::fs::read(&f).unwrap(), b"keep me\n");
+
+        let new = dir.join("new");
+        assert_eq!(cmd_touch(&[new.to_str().unwrap()]).await.status, 0);
+        assert_eq!(std::fs::read(&new).unwrap(), b"");
+        let o = cmd_touch(&[dir.join("no/such/dir").to_str().unwrap()]).await;
+        assert_eq!(o.status, 1, "{}", o.text);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// stormd#98 (f2eef25acd52): md5sum is MD5, sha256sum SHA-256.
+    #[tokio::test]
+    async fn md5sum_is_md5_and_sha256sum_is_sha256() {
+        let dir = std::env::temp_dir().join(format!("stormd-sum-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("abc");
+        std::fs::write(&f, b"abc").unwrap();
+        let fs = f.to_str().unwrap();
+        let md5 = cmd_md5sum(&[fs], None).await;
+        assert_eq!((md5.status, md5.text.clone()), (0, format!("900150983cd24fb0d6963f7d28e17f72  {fs}\r\n")));
+        let piped = cmd_md5sum(&[], Some("abc")).await;
+        assert_eq!(piped.text, "900150983cd24fb0d6963f7d28e17f72  -\r\n");
+        let sha = cmd_sha256sum(&[fs], None).await;
+        assert_eq!(sha.text, format!("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  {fs}\r\n"));
+        let missing = cmd_md5sum(&[dir.join("nope").to_str().unwrap()], None).await;
+        assert!(missing.status == 1 && missing.text.starts_with("md5sum: "), "{}", missing.text);
+        assert_eq!(cmd_md5sum(&[], None).await.status, 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

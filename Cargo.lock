@@ -3484,6 +3484,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "md5",
  "mime_guess",
  "nix",
  "oci-spec",

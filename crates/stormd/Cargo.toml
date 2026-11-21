@@ -36,6 +36,7 @@ stormpull.workspace = true
 oci-spec.workspace = true
 sha2.workspace = true
 hex.workspace = true
+md5.workspace = true
 rust-embed.workspace = true
 mime_guess.workspace = true
 stormview.workspace = true

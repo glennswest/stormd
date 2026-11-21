@@ -289,7 +289,7 @@ pub(crate) async fn execute_single(
         "base64" => text::cmd_base64(args, piped_input),
         "xxd" => text::cmd_xxd(piped_input),
         "xargs" => text::cmd_xargs(args, piped_input, state, container_name, started_at).await,
-        "md5sum" => file::cmd_sha256sum(args, piped_input).await, // alias to sha256sum
+        "md5sum" => file::cmd_md5sum(args, piped_input).await,
 
         // Shell builtins
         "help" | "?" => cmd_help(),
@@ -344,7 +344,7 @@ fn cmd_help() -> ShellOutput {
          \x20 stat/file/readlink    File info\r\n\
          \x20 wc [-lwc] <file>      Word/line/char count\r\n\
          \x20 du [-sh] [path]       Disk usage\r\n\
-         \x20 sha256sum <file>      Hash file\r\n\
+         \x20 sha256sum/md5sum <f>  Hash file\r\n\
          \r\n\
          \x1b[1mNetwork:\x1b[0m\r\n\
          \x20 ifconfig / ip addr    Network interfaces\r\n\
@@ -478,7 +478,8 @@ pub async fn execute_standalone(cmd: &str, args: &[String]) -> i32 {
         "du" => file::cmd_du(&args_str).await,
         "readlink" => file::cmd_readlink(&args_str).await,
         "file" => file::cmd_file_type(&args_str).await,
-        "sha256sum" | "md5sum" => file::cmd_sha256sum(&args_str, piped_input.as_deref()).await,
+        "sha256sum" => file::cmd_sha256sum(&args_str, piped_input.as_deref()).await,
+        "md5sum" => file::cmd_md5sum(&args_str, piped_input.as_deref()).await,
         "tee" => file::cmd_tee(&args_str, piped_input.as_deref()).await,
 
         // Network

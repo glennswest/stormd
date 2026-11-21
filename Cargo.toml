@@ -50,6 +50,7 @@ stormview = { git = "https://github.com/glennswest/stormview", rev = "e7a285b6f0
 oci-spec = "0.7"
 sha2 = "0.10"
 hex = "0.4"
+md5 = "0.7"
 rust-embed = "8"
 mime_guess = "2"
 
