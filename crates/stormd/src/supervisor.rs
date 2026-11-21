@@ -2646,15 +2646,19 @@ mod exit_handler_tests {
         }
 
         let runs = log.list_runs("svc").await.unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-        for (r, pid) in runs.iter().rev().zip(&pids) {
-            assert_eq!(r.outcome, "exited");
+        let mut held = Vec::new();
+        for r in runs.iter().rev() {
             let q = stormlog::types::LogQuery {
                 process: Some("svc".into()),
                 run_id: Some(r.run_id.clone()),
                 ..Default::default()
             };
             let lines: Vec<String> = log.query_logs(&q).await.unwrap().into_iter().map(|e| e.line).collect();
+            held.push(lines);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        for ((r, pid), lines) in runs.iter().rev().zip(&pids).zip(&held) {
+            assert_eq!(r.outcome, "exited");
             let runs_seen: Vec<&String> = lines.iter().filter(|l| l.starts_with("run-")).collect();
             assert_eq!(runs_seen, vec![&format!("run-{pid}")], "run {} holds: {lines:?}", r.run_id);
         }
