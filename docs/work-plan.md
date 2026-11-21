@@ -47,6 +47,17 @@ the plugin summary merge).
 
 ### In Progress
 
+**#97 (P1, review 06dcbcfe846e + 316ca39f077c): goldens shutdown race, lost
+golden on a failed detach.**
+- [ ] 06dcbcfe846e: `release_all` sets a `closing` flag and takes the ops
+      lock before draining; add/swap (`lock_ops`) refused 503 once closing;
+      `present_as` refuses an insert once closing (undoes place + detach)
+- [ ] 316ca39f077c: `release` keeps the entry until the detach succeeds
+      (`detach_error` set, listed); a repeat release / remove / replace /
+      `present_all` retries the detach first
+- [ ] tests (detach fails then retried; add in flight across release_all),
+      README Goldens, CHANGELOG; sc-build; image; close
+
 **#95 (P1, review b1dfa55675ce): cron output held whole in stormd.**
 execute_job piped both streams and `wait_with_output` kept everything until
 exit, `capture_output = false` included — a noisy job could exhaust PID 1.
