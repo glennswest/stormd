@@ -5,6 +5,23 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **fix:** six review findings (#98). `md5sum` printed a SHA-256 digest; it
+  is MD5 now (f2eef25acd52). `touch` only opened an existing file, which
+  changes no timestamp, and failed on directories; it sets atime/mtime to
+  now (`utimensat`), contents kept, and creates only what is absent
+  (a9b5f556c8ad). Updater cards built their id and Update action from the
+  image reference, but `/api/v1/updates/{name}/trigger` takes the process
+  name: `/api/v1/updates` items carry `process`, and cards use it,
+  percent-encoded, keeping the image as the label (e094081d0a6e). Stored-log
+  discovery cut names at the first dot, so every `cron.<job>` read as
+  `cron`; only the writer's suffixes (`.N`, `.<run>.<exited|failed>`) come
+  off now (8f0d46ad2a68). A `run_id` query added the live file whatever run
+  was asked for, and entries had no run id; the live file answers only for
+  the live run (`current` or its id) and entries carry their run
+  (89e93e23e511). A requested stop never archived its run, so the next
+  natural exit archived several runs as one; the stop now drains and
+  archives the run before the process reads Stopped, and the stop waits
+  allow for that drain (a1f6d4efb9fd).
 - **fix:** goldens (#97, review findings 06dcbcfe846e, 316ca39f077c).
   Shutdown's `release_all` neither took the golden operation lock nor stopped
   later adds, so a runtime PUT waiting on the engine's attach could present

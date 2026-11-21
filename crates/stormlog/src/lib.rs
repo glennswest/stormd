@@ -463,7 +463,8 @@ impl StormLog {
 /// records of at most this (stormd#85).
 pub const MAX_LINE: usize = 64 * 1024;
 /// How long `archive_run` lets a run's readers drain before ending them.
-const ARCHIVE_DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
+/// Public so a caller waiting for an archive knows its longest wait.
+pub const ARCHIVE_DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
 /// How long a new run lets readers of the previous one, still running, drain.
 const NEW_RUN_DRAIN: std::time::Duration = std::time::Duration::from_secs(1);
 

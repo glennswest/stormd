@@ -702,7 +702,8 @@ untouched, even when stormd inherited that name.
 Every line of every process, and every event, goes three places:
 
 1. **A file** — `{log_dir}/{process}.log`, rotated at `max_size_bytes` to
-   `{process}.1.log` … `{process}.{max_files}.log`. When a run ends the file is
+   `{process}.1.log` … `{process}.{max_files}.log`. When a run ends — it
+   exits, or a stop was asked for (#98) — the file is
    renamed `{process}.{run_id}.{failed|exited}.log` and the next run starts a
    fresh one; the oldest runs past `max_runs` are deleted. Before the rename
    stormd waits (up to 5 s) for the output pipes to drain, so the line that
@@ -831,7 +832,7 @@ client certificate, a session cookie, or `Authorization: Bearer <token>`
 | GET | `/api/v1/logs/{process}/runs` | finished runs |
 | GET | `/api/v1/logs/files` | files in `log_dir` with sizes |
 | GET | `/api/v1/logs/files/{filename}` | one file |
-| GET | `/api/v1/logs/stored` | structured query (`?process=&stream=&search=&tail=&run_id=`) |
+| GET | `/api/v1/logs/stored` | structured query (`?process=&stream=&search=&tail=&run_id=`); `run_id` is one archived run, or the live file only for the live run (`current` or its id); each entry carries its `run_id` (none from a rotation generation). A dotted name (`cron.<job>`) is a process of its own |
 | POST | `/api/v1/logs/ingest` | add a line |
 | GET | `/api/v1/terminal/{process}` | VT100 screen snapshot |
 | GET | `/api/v1/cron` | jobs with last/next run, counts |

@@ -1186,6 +1186,7 @@ impl Supervisor {
         let name_owned = config.name.clone();
         let stop_timeout = Duration::from_secs(config.stop_timeout_secs);
         let proc_arc_clone = proc_arc.clone();
+        let sup = Arc::clone(self);
         tokio::spawn(async move {
             // However the run ends, its liveness and API tasks end with it.
             let _run_tasks = AbortOnDrop(run_tasks);
@@ -1201,10 +1202,21 @@ impl Supervisor {
                 }
                 _ = &mut kill_rx => {
                     let exit_code = stop_child(&mut child, pid, stop_timeout, &name_owned).await;
-                    let mut proc = proc_arc_clone.lock().await;
                     // Only this run's state is this monitor's to write.
+                    let current = proc_arc_clone.lock().await.run;
+                    if current != run {
+                        info!(process = %name_owned, run, current, "an earlier run stopped — state left to the current one");
+                        return;
+                    }
+                    // A requested stop closes its run as an exit does: the
+                    // readers drained and the file archived, before Stopped
+                    // lets the next run start (stormd#98, a1f6d4efb9fd).
+                    // Before, the run stayed open, the next start took its
+                    // place, and the next natural exit archived several runs
+                    // as one. No restart policy: it was asked to stop.
+                    sup.stormlog.archive_run(&name_owned, false).await;
+                    let mut proc = proc_arc_clone.lock().await;
                     if proc.run != run {
-                        info!(process = %name_owned, run, current = proc.run, "an earlier run stopped — state left to the current one");
                         return;
                     }
                     proc.state = ProcessState::Stopped;
@@ -1213,7 +1225,9 @@ impl Supervisor {
                     proc.exit_code = exit_code;
                     proc.ready = false;
                     proc.ready_at = None;
+                    drop(proc);
                     info!(process = %name_owned, exit_code = ?exit_code, "process stopped by request");
+                    sup.state_changed.notify_waiters();
                 }
             }
         });
@@ -2022,8 +2036,10 @@ fn ms<S: serde::Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_u64(d.as_millis() as u64)
 }
 
-/// Beyond a stop timeout: SIGKILL landing and the monitor recording it.
-const STOP_SLACK_SECS: u64 = 2;
+/// Beyond a stop timeout: SIGKILL landing, the run's log drained and
+/// archived (up to stormlog's `ARCHIVE_DRAIN`, stormd#98), and the monitor
+/// recording it.
+const STOP_SLACK_SECS: u64 = 2 + stormlog::ARCHIVE_DRAIN.as_secs();
 
 /// Stop a child: SIGTERM, up to `timeout` for it to exit, then SIGKILL.
 /// A zero timeout is SIGKILL at once. Returns the exit code, if it exited
@@ -2586,6 +2602,63 @@ mod exit_handler_tests {
     use super::{ProcessState, Supervisor};
     use std::sync::Arc;
     use std::time::Duration;
+
+    /// stormd#98 (a1f6d4efb9fd): a stop asked for closes its run — the
+    /// output drained into an archive of its own before the process reads
+    /// Stopped — so two stopped runs are two archives, not one.
+    #[tokio::test]
+    async fn a_requested_stop_archives_its_run() {
+        let dir = std::env::temp_dir().join(format!("stormd-stop-archive-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cfg: crate::config::Config = toml::from_str(&format!(
+            "[general]\nname = \"t\"\nlog_dir = \"{}\"\n[stormlog.mcast]\ngroup = \"off\"\n",
+            dir.display()
+        ))
+        .unwrap();
+        let mut log_cfg = cfg.stormlog.clone();
+        log_cfg.file.log_dir = dir.clone();
+        let bus = Arc::new(crate::events::EventBus::new(cfg.events.clone(), "t".into()));
+        let log = Arc::new(stormlog::StormLog::new(log_cfg, "t"));
+        let sup = Arc::new(Supervisor::new(log.clone(), bus));
+        let h = sup.clone();
+        tokio::spawn(async move { h.run_exit_handler().await });
+        let proc: crate::config::ProcessConfig = toml::from_str(
+            "name = \"svc\"\ncommand = \"/bin/sh\"\nargs = [\"-c\", \"echo run-$$; exec sleep 30\"]\nstop_timeout_secs = 2\n",
+        )
+        .unwrap();
+        sup.start_all(&[proc]).await.unwrap();
+
+        let mut pids = Vec::new();
+        for i in 0..2 {
+            if i > 0 {
+                // Run ids are to the second.
+                tokio::time::sleep(Duration::from_millis(1100)).await;
+                sup.start_process("svc").await.unwrap();
+            }
+            pids.push(sup.get_status("svc").await.unwrap().pid.unwrap());
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            sup.stop_process("svc").await.unwrap();
+            sup.wait_stopped("svc").await;
+            assert_eq!(sup.get_status("svc").await.unwrap().state, ProcessState::Stopped);
+            let runs = log.list_runs("svc").await.unwrap();
+            assert!(runs.iter().all(|r| r.outcome != "current"), "the stopped run was left live: {runs:?}");
+            assert_eq!(runs.len(), i + 1, "{runs:?}");
+        }
+
+        let runs = log.list_runs("svc").await.unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        for (r, pid) in runs.iter().rev().zip(&pids) {
+            assert_eq!(r.outcome, "exited");
+            let q = stormlog::types::LogQuery {
+                process: Some("svc".into()),
+                run_id: Some(r.run_id.clone()),
+                ..Default::default()
+            };
+            let lines: Vec<String> = log.query_logs(&q).await.unwrap().into_iter().map(|e| e.line).collect();
+            let runs_seen: Vec<&String> = lines.iter().filter(|l| l.starts_with("run-")).collect();
+            assert_eq!(runs_seen, vec![&format!("run-{pid}")], "run {} holds: {lines:?}", r.run_id);
+        }
+    }
 
     /// stormd#22: a process in its restart cooloff must not delay handling
     /// another process's exit.
