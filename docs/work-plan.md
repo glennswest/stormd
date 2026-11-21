@@ -47,6 +47,15 @@ the plugin summary merge).
 
 ### In Progress
 
+**#98 (P3, review: 6 minor findings).**
+- [ ] f2eef25acd52 md5sum applet returned SHA-256 (shell/mod.rs)
+- [ ] a9b5f556c8ad touch didn't update timestamps of existing files/dirs (shell/file.rs)
+- [ ] e094081d0a6e updater cards addressed by image ref, not process name (components.rs)
+- [ ] 8f0d46ad2a68 stored-log discovery cut dotted names (cron.<job>) at the first dot (stormlog store.rs)
+- [ ] 89e93e23e511 run_id query included the live log for any run (stormlog store.rs)
+- [ ] a1f6d4efb9fd requested stop didn't archive the run (supervisor.rs)
+- [ ] tests, README/CHANGELOG, sc-build, image, close
+
 **#97 (P1, review 06dcbcfe846e + 316ca39f077c): goldens shutdown race, lost
 golden on a failed detach.**
 - [x] 06dcbcfe846e: `release_all` sets a `closing` flag and takes the ops
