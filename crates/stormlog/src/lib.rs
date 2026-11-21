@@ -403,8 +403,10 @@ impl StormLog {
     }
 
     /// Read back what is on the log volume.
+    /// A run filter knows which run each live file is (stormd#98).
     pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogEntry>> {
-        Ok(self.store.query(query))
+        let active = self.run_ids.lock().await.clone();
+        Ok(self.store.query_active(query, &|p| active.get(p).cloned()))
     }
 
     /// The runs of a process, newest first, the live one ahead of them.

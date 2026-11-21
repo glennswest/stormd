@@ -142,17 +142,18 @@ impl LogStore {
         &self.dir
     }
 
-    /// Every file belonging to `process`, oldest first.
+    /// Every file belonging to `process`, oldest first: archived runs, then
+    /// rotation generations (oldest first), then the live file.
     ///
     /// Oldest first because a query is answered by reading forward and then
     /// tailing, and because the caller almost always wants time order.
-    fn files_for(&self, process: &str) -> Vec<PathBuf> {
+    fn files_for(&self, process: &str) -> Vec<(PathBuf, Kind)> {
         // A name that is not one file name has no files here (stormd#87).
         if !crate::types::safe_process_name(process) {
             return Vec::new();
         }
         let mut rotated: Vec<(u32, PathBuf)> = Vec::new();
-        let mut archived: Vec<(String, PathBuf)> = Vec::new();
+        let mut archived: Vec<(String, String, PathBuf)> = Vec::new();
         let current = self.dir.join(format!("{process}.log"));
 
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
@@ -161,42 +162,40 @@ impl LogStore {
         for e in entries.flatten() {
             let path = e.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
-            let Some(rest) = name.strip_prefix(&format!("{process}.")) else { continue };
+            // Exactly this process's names: `cron` does not take
+            // `cron.nightly.log`, the file of the process `cron.nightly`.
+            let Some(rest) = name.strip_prefix(process).and_then(|r| r.strip_prefix('.')) else { continue };
             let Some(rest) = rest.strip_suffix(".log") else { continue };
-            if rest.is_empty() {
-                continue;
-            }
-            match rest.parse::<u32>() {
-                // `{process}.3.log` — a rotation generation, 1 being newest.
-                Ok(n) => rotated.push((n, path)),
-                // `{process}.20260825T115009.exited.log` — a finished run.
-                Err(_) => archived.push((rest.to_owned(), path)),
+            if let Some((run_id, outcome)) = archive_suffix(rest) {
+                archived.push((run_id.to_owned(), outcome.to_owned(), path));
+            } else if let Ok(n) = rest.parse::<u32>() {
+                rotated.push((n, path));
             }
         }
 
         archived.sort_by(|a, b| a.0.cmp(&b.0));
         rotated.sort_by_key(|r| std::cmp::Reverse(r.0));
 
-        let mut out: Vec<PathBuf> = archived.into_iter().map(|(_, p)| p).collect();
-        out.extend(rotated.into_iter().map(|(_, p)| p));
+        let mut out: Vec<(PathBuf, Kind)> =
+            archived.into_iter().map(|(run_id, outcome, p)| (p, Kind::Archived { run_id, outcome })).collect();
+        out.extend(rotated.into_iter().map(|(_, p)| (p, Kind::Rotated)));
         if current.exists() {
-            out.push(current);
+            out.push((current, Kind::Current));
         }
         out
     }
 
-    /// Which processes have logs here.
+    /// Which processes have logs here. Only the writer's own suffixes are
+    /// taken off a file name (stormd#98, 8f0d46ad2a68): `cron.nightly.log`
+    /// is the process `cron.nightly`, not `cron`.
     pub fn processes(&self) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
         let Ok(entries) = std::fs::read_dir(&self.dir) else { return names };
         for e in entries.flatten() {
             let path = e.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
-            let Some(stem) = name.strip_suffix(".log") else { continue };
-            // The process name is everything before the first dot, since
-            // rotation and archiving both append dotted suffixes.
-            let base = stem.split('.').next().unwrap_or(stem).to_owned();
-            if !base.is_empty() && !names.contains(&base) {
+            let Some(base) = process_of(name) else { continue };
+            if crate::types::safe_process_name(&base) && !names.contains(&base) {
                 names.push(base);
             }
         }
@@ -204,12 +203,25 @@ impl LogStore {
         names
     }
 
-    /// Answer a query from the files.
+    /// Answer a query from the files, with no run known to be live.
+    pub fn query(&self, q: &LogQuery) -> Vec<LogEntry> {
+        self.query_active(q, &|_| None)
+    }
+
+    /// Answer a query from the files. `active` names the run each process's
+    /// live file belongs to (the capture's run id).
+    ///
+    /// A run filter takes the archive of that run, or the live file when the
+    /// run asked for is the live one (`current`, or its run id), and nothing
+    /// else (stormd#98, 89e93e23e511): an old run's query is not padded with
+    /// what the process is writing now. Each entry carries the run its file
+    /// is: an archive's id, or the live run's; a rotation generation may
+    /// hold several runs and carries none.
     ///
     /// `tail` is applied last and defaults to something finite: a console that
     /// asks for "the logs" and is handed a hundred megabytes has hung, from the
     /// point of view of whoever is looking at it.
-    pub fn query(&self, q: &LogQuery) -> Vec<LogEntry> {
+    pub fn query_active(&self, q: &LogQuery, active: &dyn Fn(&str) -> Option<String>) -> Vec<LogEntry> {
         const DEFAULT_TAIL: usize = 1_000;
 
         let processes = match &q.process {
@@ -219,14 +231,22 @@ impl LogStore {
 
         let mut out: Vec<LogEntry> = Vec::new();
         for process in processes {
-            for path in self.files_for(&process) {
+            let live = active(&process);
+            for (path, kind) in self.files_for(&process) {
+                let run_id = match &kind {
+                    Kind::Archived { run_id, .. } => Some(run_id.clone()),
+                    Kind::Current => live.clone(),
+                    Kind::Rotated => None,
+                };
                 // A run filter is answerable from the file name alone, so a
                 // query for one run does not read the others at all.
                 if let Some(want) = &q.run_id {
-                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    let is_run = name.contains(&format!(".{want}."));
-                    let is_current = name == format!("{process}.log");
-                    if !is_run && !is_current {
+                    let wanted = match &kind {
+                        Kind::Archived { run_id, .. } => run_id == want,
+                        Kind::Current => want == "current" || live.as_deref() == Some(want.as_str()),
+                        Kind::Rotated => false,
+                    };
+                    if !wanted {
                         continue;
                     }
                 }
@@ -235,10 +255,11 @@ impl LogStore {
                     if raw.is_empty() {
                         continue;
                     }
-                    let entry = parse_line(&process, raw);
+                    let mut entry = parse_line(&process, raw);
                     if !matches(&entry, q) {
                         continue;
                     }
+                    entry.run_id = run_id.clone();
                     out.push(entry);
                 }
             }
@@ -254,45 +275,36 @@ impl LogStore {
 
     /// The runs of a process, newest first.
     pub fn runs(&self, process: &str) -> Vec<RunInfo> {
-        if !crate::types::safe_process_name(process) {
-            return Vec::new();
-        }
         let mut runs: Vec<RunInfo> = Vec::new();
-        let Ok(entries) = std::fs::read_dir(&self.dir) else { return runs };
-        for e in entries.flatten() {
-            let path = e.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
-            let Some(rest) = name.strip_prefix(&format!("{process}.")) else { continue };
-            let Some(rest) = rest.strip_suffix(".log") else { continue };
-            // `{run_id}.{outcome}` — anything else is a rotation generation.
-            let Some((run_id, outcome)) = rest.rsplit_once('.') else { continue };
-            if run_id.parse::<u32>().is_ok() {
-                continue;
+        let mut current = None;
+        for (path, kind) in self.files_for(process) {
+            let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            match kind {
+                Kind::Archived { run_id, outcome } => runs.push(RunInfo {
+                    date: pretty_run_id(&run_id),
+                    run_id,
+                    process: process.to_owned(),
+                    size_bytes,
+                    outcome,
+                }),
+                // The live file first, when there is one: the run someone is
+                // most likely asking about is the one happening now.
+                Kind::Current => {
+                    current = Some(RunInfo {
+                        run_id: "current".into(),
+                        process: process.to_owned(),
+                        date: "running".into(),
+                        size_bytes,
+                        outcome: "current".into(),
+                    })
+                }
+                // A rotation generation is not a run.
+                Kind::Rotated => {}
             }
-            runs.push(RunInfo {
-                run_id: run_id.to_owned(),
-                process: process.to_owned(),
-                date: pretty_run_id(run_id),
-                size_bytes: e.metadata().map(|m| m.len()).unwrap_or(0),
-                outcome: outcome.to_owned(),
-            });
         }
         runs.sort_by(|a, b| b.run_id.cmp(&a.run_id));
-
-        // The live file first, when there is one: the run someone is most
-        // likely asking about is the one happening now.
-        let current = self.dir.join(format!("{process}.log"));
-        if let Ok(m) = std::fs::metadata(&current) {
-            runs.insert(
-                0,
-                RunInfo {
-                    run_id: "current".into(),
-                    process: process.to_owned(),
-                    date: "running".into(),
-                    size_bytes: m.len(),
-                    outcome: "current".into(),
-                },
-            );
+        if let Some(c) = current {
+            runs.insert(0, c);
         }
         runs
     }
@@ -316,6 +328,49 @@ impl LogStore {
         }
         removed
     }
+}
+
+/// What a log file is, by its name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Kind {
+    /// `{process}.log`, the live run's.
+    Current,
+    /// `{process}.{n}.log`, a rotation generation (1 newest).
+    Rotated,
+    /// `{process}.{run_id}.{outcome}.log`, a finished run.
+    Archived { run_id: String, outcome: String },
+}
+
+/// How [`crate::file::FileLogger::take_file`] ends a run's file name.
+const OUTCOMES: &[&str] = &["exited", "failed"];
+
+/// `{run_id}.{outcome}` (the part between `{process}.` and `.log`) when it
+/// is an archive's: a known outcome and a run id with no dot that is not a
+/// rotation number.
+fn archive_suffix(rest: &str) -> Option<(&str, &str)> {
+    let (run_id, outcome) = rest.rsplit_once('.')?;
+    let ok = OUTCOMES.contains(&outcome)
+        && !run_id.is_empty()
+        && !run_id.contains('.')
+        && run_id.parse::<u32>().is_err();
+    ok.then_some((run_id, outcome))
+}
+
+/// The process a log file is of, taking off only the writer's suffixes:
+/// `.log`, then an archive's `.{run_id}.{outcome}` or a rotation's `.{n}`.
+/// A name whose last dotted part is a number reads as a rotation — the
+/// writer cannot tell `app.3.log` of `app.3` from rotation 3 of `app`.
+fn process_of(file: &str) -> Option<String> {
+    let stem = file.strip_suffix(".log")?;
+    let base = match stem.rsplit_once('.') {
+        Some((head, outcome)) if OUTCOMES.contains(&outcome) => match head.rsplit_once('.') {
+            Some((p, run_id)) if archive_suffix(&format!("{run_id}.{outcome}")).is_some() => p,
+            _ => stem,
+        },
+        Some((p, n)) if n.parse::<u32>().is_ok() => p,
+        _ => stem,
+    };
+    (!base.is_empty()).then(|| base.to_owned())
 }
 
 /// `20260825T115009` as something a person reads.
@@ -482,5 +537,88 @@ mod tests {
         assert_eq!(store.prune("api", 1), 2);
         assert!(dir.join("api.log").exists());
         assert_eq!(store.runs("api").iter().filter(|r| r.outcome == "exited").count(), 1);
+    }
+
+    /// stormd#98 (8f0d46ad2a68): only the writer's suffixes come off a file
+    /// name, so cron jobs (`cron.<job>.log`) and dotted names are processes
+    /// of their own, each with its archives and rotations.
+    #[test]
+    fn dotted_names_are_whole_processes() {
+        let dir = temp_dir("dotted");
+        for (f, line) in [
+            ("cron.nightly.log", "2026-08-25T10:00:00.000Z stdout info nightly live"),
+            ("cron.nightly.20260825T090000.exited.log", "2026-08-25T09:00:00.000Z stdout info nightly before"),
+            ("cron.hourly.log", "2026-08-25T10:30:00.000Z stdout info hourly live"),
+            ("cron.hourly.1.log", "2026-08-25T08:00:00.000Z stdout info hourly rotated"),
+            ("api.v2.log", "2026-08-25T11:00:00.000Z stdout info api v2"),
+            ("api.log", "2026-08-25T11:30:00.000Z stdout info api"),
+        ] {
+            std::fs::write(dir.join(f), format!("{line}\n")).unwrap();
+        }
+        let store = LogStore::new(&dir);
+        assert_eq!(store.processes(), vec!["api", "api.v2", "cron.hourly", "cron.nightly"]);
+
+        let all = store.query(&LogQuery::default());
+        let by: Vec<(String, String)> = all.iter().map(|e| (e.process.clone(), e.line.clone())).collect();
+        assert_eq!(
+            by,
+            vec![
+                ("cron.hourly".to_string(), "hourly rotated".to_string()),
+                ("cron.nightly".into(), "nightly before".into()),
+                ("cron.nightly".into(), "nightly live".into()),
+                ("cron.hourly".into(), "hourly live".into()),
+                ("api.v2".into(), "api v2".into()),
+                ("api".into(), "api".into()),
+            ]
+        );
+        // Asked by name, each has only its own files.
+        let api = store.query(&LogQuery { process: Some("api".into()), ..Default::default() });
+        assert_eq!(api.iter().map(|e| e.line.as_str()).collect::<Vec<_>>(), vec!["api"]);
+        let runs = store.runs("cron.nightly");
+        assert_eq!((runs.len(), runs[1].run_id.as_str()), (2, "20260825T090000"));
+        assert!(store.runs("cron").is_empty(), "the jobs' files were read as runs of `cron`");
+
+        assert_eq!(process_of("app.20260825T090000.failed.log").as_deref(), Some("app"));
+        assert_eq!(process_of("app.3.log").as_deref(), Some("app"));
+        assert_eq!(process_of("a.b.c.log").as_deref(), Some("a.b.c"));
+        assert_eq!(process_of("a.failed.log").as_deref(), Some("a.failed"));
+        assert_eq!(process_of("notes.txt"), None);
+    }
+
+    /// stormd#98 (89e93e23e511): a query for an archived run is that run
+    /// alone — not padded with, or tailed away by, the live file — and the
+    /// live file answers only for the live run. Entries carry their run.
+    #[test]
+    fn a_run_query_is_that_run_only() {
+        let dir = temp_dir("run-filter");
+        std::fs::write(
+            dir.join("api.20260825T100000.failed.log"),
+            "2026-08-25T10:00:00.000Z stderr error the failure\n",
+        )
+        .unwrap();
+        let live: String = (0..5).map(|i| format!("2026-08-25T12:00:0{i}.000Z stdout info live {i}\n")).collect();
+        std::fs::write(dir.join("api.log"), live).unwrap();
+        std::fs::write(dir.join("api.1.log"), "2026-08-25T11:00:00.000Z stdout info rotated\n").unwrap();
+        let store = LogStore::new(&dir);
+        let active = |p: &str| (p == "api").then(|| "20260825T120000".to_string());
+        let q = |run: &str| LogQuery { process: Some("api".into()), run_id: Some(run.into()), tail: Some(2), ..Default::default() };
+
+        let old = store.query_active(&q("20260825T100000"), &active);
+        assert_eq!(old.iter().map(|e| e.line.as_str()).collect::<Vec<_>>(), vec!["the failure"]);
+        assert_eq!(old[0].run_id.as_deref(), Some("20260825T100000"));
+
+        for run in ["20260825T120000", "current"] {
+            let now = store.query_active(&q(run), &active);
+            assert_eq!(now.iter().map(|e| e.line.as_str()).collect::<Vec<_>>(), vec!["live 3", "live 4"], "{run}");
+            assert!(now.iter().all(|e| e.run_id.as_deref() == Some("20260825T120000")), "{now:?}");
+        }
+        assert!(store.query_active(&q("20260101T000000"), &active).is_empty(), "an unknown run got the live file");
+        // With nothing live, a run id is not the live file's.
+        assert!(store.query(&q("20260825T120000")).is_empty());
+
+        let all = store.query_active(&LogQuery { process: Some("api".into()), ..Default::default() }, &active);
+        let runs: Vec<Option<&str>> = all.iter().map(|e| e.run_id.as_deref()).collect();
+        assert_eq!(runs[..2], [Some("20260825T100000"), None], "{runs:?}");
+        assert_eq!(runs[2], Some("20260825T120000"));
     }
 }
