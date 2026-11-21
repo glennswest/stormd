@@ -201,7 +201,8 @@ pub fn report(
     // An image golden is a device node, not a mount: it is used all the same.
     for p in presented {
         let e = devices.entry(p.device.clone()).or_insert((None, Vec::new()));
-        if p.content == GoldenContent::Filesystem && !e.1.contains(&p.path) {
+        // One waiting on its detach (stormd#97) is attached but unmounted.
+        if p.content == GoldenContent::Filesystem && p.detach_error.is_none() && !e.1.contains(&p.path) {
             e.1.push(p.path.clone());
         }
     }
@@ -354,6 +355,7 @@ bad line
             path: "/goldens/drivers".into(),
             size_bytes: None,
             added: false,
+            detach_error: None,
             spec: golden("drivers", "golden-drivers-1"),
         }]
     }

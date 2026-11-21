@@ -16,6 +16,7 @@ use crate::config::{GoldenContent, GoldenMount, GoldensConfig};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -134,6 +135,11 @@ pub struct Presented {
     pub size_bytes: Option<u64>,
     /// Added at runtime through the API (stormd#73), not from the config.
     pub added: bool,
+    /// Set when the golden was taken away from the service (unmounted or its
+    /// node removed) but the engine's detach failed (stormd#97): the attach
+    /// is still held, so it stays listed, and a repeat of the release
+    /// (`DELETE`, a replace, a restart, shutdown) retries the detach.
+    pub detach_error: Option<String>,
     /// The golden as asked for, to tell a re-add of the same from a change.
     #[serde(skip)]
     pub spec: GoldenMount,
@@ -179,6 +185,13 @@ pub struct Goldens {
     /// Runtime adds and removes, and the supervisor's swaps of a
     /// configured golden, one at a time (stormd#73, #81).
     ops: Mutex<()>,
+    /// Set by `release_all` (shutdown): nothing more is presented
+    /// (stormd#97), so nothing is attached after the last release.
+    closing: AtomicBool,
+}
+
+fn shutting_down() -> anyhow::Error {
+    refused(503, "stormd is shutting down: no golden is presented any more")
 }
 
 impl Goldens {
@@ -187,7 +200,7 @@ impl Goldens {
             .timeout(Duration::from_secs(15))
             .build()
             .unwrap_or_default();
-        Self { cfg, container, host, client, presented: Mutex::new(HashMap::new()), ops: Mutex::new(()) }
+        Self { cfg, container, host, client, presented: Mutex::new(HashMap::new()), ops: Mutex::new(()), closing: AtomicBool::new(false) }
     }
 
     fn engine(&self) -> String {
@@ -285,6 +298,9 @@ impl Goldens {
     }
 
     async fn present_as(&self, process: &str, g: &GoldenMount, added: bool) -> anyhow::Result<Presented> {
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(shutting_down());
+        }
         let volume_id = self.resolve(g).await?;
         let holder = self.holder(process, &g.name);
         let device = self.attach(&volume_id, &holder).await?;
@@ -303,11 +319,34 @@ impl Goldens {
             path: path.display().to_string(),
             size_bytes: g.size_bytes,
             added,
+            detach_error: None,
             spec: g.clone(),
         };
-        info!(process, added, golden = %g.name, volume = %p.volume_id, device = %p.device, path = %p.path, "golden presented read-only");
-        self.presented.lock().await.insert((process.to_string(), g.name.clone()), p.clone());
-        Ok(p)
+        {
+            // Checked under the map's lock: `release_all` sets `closing`
+            // before it reads the map, so an entry is either seen and
+            // released there or never inserted (stormd#97).
+            let mut presented = self.presented.lock().await;
+            if !self.closing.load(Ordering::SeqCst) {
+                info!(process, added, golden = %g.name, volume = %p.volume_id, device = %p.device, path = %p.path, "golden presented read-only");
+                presented.insert((process.to_string(), g.name.clone()), p.clone());
+                return Ok(p);
+            }
+        }
+        if let Err(e) = self.unplace(g.content, &path) {
+            warn!(process, golden = %g.name, error = %e, "golden presented during shutdown not taken away");
+        }
+        if let Err(e) = self.detach(&p.volume_id, &holder).await {
+            warn!(process, golden = %g.name, error = %e, "golden presented during shutdown not detached");
+        }
+        Err(shutting_down())
+    }
+
+    fn unplace(&self, content: GoldenContent, path: &Path) -> std::io::Result<()> {
+        match content {
+            GoldenContent::Filesystem => self.host.unmount(path),
+            GoldenContent::Image => self.host.remove(path),
+        }
     }
 
     fn place(&self, g: &GoldenMount, device: &Path, path: &Path) -> anyhow::Result<()> {
@@ -328,22 +367,57 @@ impl Goldens {
 
     /// Undo `present`: unmount (filesystem) or remove the node (image), then
     /// release the attach. Nothing presented under that name is not an error.
+    /// The golden stays tracked until the engine's detach succeeds
+    /// (stormd#97): a failed detach leaves it listed with `detach_error`, and
+    /// calling this again retries the detach (the path is already undone).
     pub async fn release(&self, process: &str, name: &str) -> anyhow::Result<()> {
-        let Some(p) = self.presented.lock().await.remove(&(process.to_string(), name.to_string())) else {
+        let key = (process.to_string(), name.to_string());
+        let Some(p) = self.presented.lock().await.get(&key).cloned() else {
             return Ok(());
         };
         let path = PathBuf::from(&p.path);
-        let undone = match p.content {
-            GoldenContent::Filesystem => self.host.unmount(&path),
-            GoldenContent::Image => self.host.remove(&path),
-        };
-        if let Err(e) = undone {
-            // Still mounted: the engine would refuse the detach (409) anyway.
-            self.presented.lock().await.insert((process.to_string(), name.to_string()), p);
-            anyhow::bail!("{}: {e}", path.display());
+        if p.detach_error.is_none() {
+            // Still mounted on a failure: the engine would refuse the detach
+            // (409) anyway, and the golden is still the service's.
+            self.unplace(p.content, &path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
         }
-        self.detach(&p.volume_id, &self.holder(process, name)).await?;
+        if let Err(e) = self.detach(&p.volume_id, &self.holder(process, name)).await {
+            let e = e.to_string();
+            warn!(process, golden = %name, volume = %p.volume_id, error = %e, "golden taken away but not detached — still tracked, a repeat release retries");
+            if let Some(t) = self.presented.lock().await.get_mut(&key) {
+                t.detach_error = Some(e.clone());
+            }
+            anyhow::bail!(
+                "golden '{name}' of '{process}' is no longer at {}, but the engine did not release volume {} ({e}); \
+                 it stays listed with detach_error, and releasing it again retries the detach",
+                path.display(),
+                p.volume_id
+            );
+        }
+        self.presented.lock().await.remove(&key);
         info!(process, golden = %name, volume = %p.volume_id, "golden released");
+        Ok(())
+    }
+
+    /// Whether a golden is presented to its service now (tracked and not
+    /// waiting on a detach).
+    async fn is_presented(&self, process: &str, name: &str) -> bool {
+        matches!(
+            self.presented.lock().await.get(&(process.to_string(), name.to_string())),
+            Some(p) if p.detach_error.is_none()
+        )
+    }
+
+    /// Finish a release whose detach failed, if there is one; nothing to do
+    /// otherwise.
+    async fn release_pending(&self, process: &str, name: &str) -> anyhow::Result<()> {
+        let pending = matches!(
+            self.presented.lock().await.get(&(process.to_string(), name.to_string())),
+            Some(p) if p.detach_error.is_some()
+        );
+        if pending {
+            self.release(process, name).await?;
+        }
         Ok(())
     }
 
@@ -352,16 +426,22 @@ impl Goldens {
     /// distinct error, not one per try.
     pub async fn present_all(&self, process: &str, goldens: &[GoldenMount], stop: impl Fn() -> bool) -> bool {
         for g in goldens {
-            if self.presented.lock().await.contains_key(&(process.to_string(), g.name.clone())) {
+            if self.is_presented(process, &g.name).await {
                 continue;
             }
             let mut last = String::new();
             loop {
-                if stop() {
+                if stop() || self.closing.load(Ordering::SeqCst) {
                     return false;
                 }
-                match self.present(process, g).await {
-                    Ok(_) => break,
+                // A release whose detach failed (stormd#97) is finished
+                // first: the same holder attaches again.
+                let step = match self.release_pending(process, &g.name).await {
+                    Ok(()) => self.present(process, g).await.map(|_| ()),
+                    Err(e) => Err(e),
+                };
+                match step {
+                    Ok(()) => break,
                     Err(e) => {
                         let e = e.to_string();
                         if e != last {
@@ -376,21 +456,29 @@ impl Goldens {
         true
     }
 
+    /// Hold the golden operation lock — the supervisor's swap of a
+    /// configured golden holds it across its stop, release, present and
+    /// start (stormd#81). `add` and `remove` take it themselves. Refused
+    /// (503) once shutdown has begun (stormd#97): `release_all` waits for the
+    /// holder, and nothing presents after it.
+    pub async fn lock_ops(&self) -> anyhow::Result<tokio::sync::MutexGuard<'_, ()>> {
+        let guard = self.ops.lock().await;
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(shutting_down());
+        }
+        Ok(guard)
+    }
+
     /// Add a golden to a running process without stopping it (stormd#73).
     /// `reserved` are the paths the config's goldens use, presented or not.
     /// The same spec again does nothing; another spec under the same name
     /// replaces it, and the old one is put back if the new one fails. A
     /// failed add leaves nothing attached (`present` detaches on failure).
-    /// Hold the golden operation lock — the supervisor's swap of a
-    /// configured golden holds it across its stop, release, present and
-    /// start (stormd#81). `add` and `remove` take it themselves.
-    pub async fn lock_ops(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.ops.lock().await
-    }
-
+    /// An old one whose detach failed (stormd#97) is detached first, and
+    /// not put back.
     pub async fn add(&self, process: &str, g: GoldenMount, reserved: &[PathBuf]) -> anyhow::Result<(Added, Presented)> {
         g.validate().map_err(|e| refused(400, e))?;
-        let _op = self.ops.lock().await;
+        let _op = self.lock_ops().await?;
         let key = (process.to_string(), g.name.clone());
         let path = self.path_of(&g);
         let old = {
@@ -400,11 +488,15 @@ impl Goldens {
                 if !old.added {
                     return Err(refused(409, format!("golden '{}' of '{process}' is from the config", g.name)));
                 }
-                if old.spec == g {
+                if old.spec == g && old.detach_error.is_none() {
                     return Ok((Added::Unchanged, old.clone()));
                 }
             }
-            if let Some(other) = presented.values().find(|p| Path::new(&p.path) == path && (p.process != process || p.name != g.name)) {
+            // A golden waiting on its detach is no longer at its path.
+            if let Some(other) = presented
+                .values()
+                .find(|p| p.detach_error.is_none() && Path::new(&p.path) == path && (p.process != process || p.name != g.name))
+            {
                 return Err(refused(409, format!("{} is already golden '{}' of '{}'", path.display(), other.name, other.process)));
             }
             old
@@ -415,13 +507,17 @@ impl Goldens {
         let Some(old) = old else {
             return Ok((Added::Created, self.present_as(process, &g, true).await?));
         };
+        // On a failed detach the old one stays tracked, with the error, and
+        // the replace answers that error: nothing new is attached.
         self.release(process, &g.name).await?;
         match self.present_as(process, &g, true).await {
             Ok(p) => Ok((Added::Replaced, p)),
+            Err(e) if old.detach_error.is_some() => Err(e),
             Err(e) => {
                 warn!(process, golden = %g.name, error = %e, "new golden not presented — putting the old one back");
                 if let Err(e2) = self.present_as(process, &old.spec, true).await {
                     warn!(process, golden = %g.name, error = %e2, "old golden not presented either");
+                    return Err(anyhow::anyhow!("{e}; the old golden was not presented again either: {e2}"));
                 }
                 Err(e)
             }
@@ -430,8 +526,9 @@ impl Goldens {
 
     /// Remove a golden added at runtime, without stopping the process
     /// (stormd#73). A configured one is refused (409), an unknown one 404.
+    /// One whose detach failed is detached again (stormd#97).
     pub async fn remove(&self, process: &str, name: &str) -> anyhow::Result<()> {
-        let _op = self.ops.lock().await;
+        let _op = self.lock_ops().await?;
         match self.presented.lock().await.get(&(process.to_string(), name.to_string())) {
             None => return Err(refused(404, format!("process '{process}' has no golden '{name}'"))),
             Some(p) if !p.added => {
@@ -442,8 +539,13 @@ impl Goldens {
         self.release(process, name).await
     }
 
-    /// Release everything, at shutdown.
+    /// Release everything, at shutdown. From here nothing more is presented
+    /// (stormd#97): an add or swap in flight holds the operation lock and is
+    /// waited for, and one after is refused; a `present` that did not take
+    /// the lock is refused at its insert.
     pub async fn release_all(&self) {
+        self.closing.store(true, Ordering::SeqCst);
+        let _op = self.ops.lock().await;
         let keys: Vec<(String, String)> = self.presented.lock().await.keys().cloned().collect();
         for (process, name) in keys {
             if let Err(e) = self.release(&process, &name).await {
@@ -478,6 +580,10 @@ mod tests {
         log: Mutex<Vec<String>>,
         /// Refuse this many attaches with a 409 first.
         refuse: AtomicU32,
+        /// Fail this many detaches with a 500 first.
+        fail_detach: AtomicU32,
+        /// Answer an attach after this many ms.
+        attach_delay_ms: AtomicU32,
     }
 
     async fn serve(engine: Arc<Engine>) -> String {
@@ -494,6 +600,10 @@ mod tests {
             Json(body): Json<serde_json::Value>,
         ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
             e.log.lock().unwrap().push(format!("POST {id} {body}"));
+            let delay = e.attach_delay_ms.load(Ordering::SeqCst);
+            if delay > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(delay.into())).await;
+            }
             if e.refuse.load(Ordering::SeqCst) > 0 {
                 e.refuse.fetch_sub(1, Ordering::SeqCst);
                 return Err((StatusCode::CONFLICT, "busy".into()));
@@ -503,6 +613,10 @@ mod tests {
         }
         async fn detach(State(e): State<Arc<Engine>>, AxPath(id): AxPath<String>, q: RawQuery) -> StatusCode {
             e.log.lock().unwrap().push(format!("DELETE {id}?{}", q.0.unwrap_or_default()));
+            if e.fail_detach.load(Ordering::SeqCst) > 0 {
+                e.fail_detach.fetch_sub(1, Ordering::SeqCst);
+                return StatusCode::INTERNAL_SERVER_ERROR;
+            }
             StatusCode::OK
         }
         let app = Router::new()
@@ -884,6 +998,117 @@ mod tests {
         let listed = g.list().await;
         assert_eq!((listed.len(), listed[0].volume_id.as_str(), listed[0].added), (1, "v-a", true));
         assert_eq!(ops(&host).last().unwrap(), "mount ro /dev/ublkb1 /goldens/d ext4");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn deletes(e: &Engine) -> usize {
+        log(e).iter().filter(|x| x.starts_with("DELETE")).count()
+    }
+
+    /// stormd#97 (316ca39f077c): a golden whose detach fails stays tracked,
+    /// with the error, and is not taken away twice; a repeat of the
+    /// release — a DELETE, a replace, a restart's `present_all`, shutdown —
+    /// retries the detach until the engine lets go.
+    #[tokio::test]
+    async fn a_failed_detach_keeps_the_golden_tracked_and_a_repeat_retries_it() {
+        let (engine, host, g, dir) = setup(None).await;
+        let img = golden("name = \"ipxe\"\ngolden = \"golden-b\"\ncontent = \"image\"\n");
+        g.add("p", img.clone(), &[]).await.unwrap();
+
+        // DELETE: the node goes, the detach fails — still listed, with why.
+        engine.fail_detach.store(1, Ordering::SeqCst);
+        let e = g.remove("p", "ipxe").await.unwrap_err().to_string();
+        assert!(e.contains("did not release volume v-b") && e.contains("500"), "{e}");
+        let listed = g.list().await;
+        assert_eq!(listed.len(), 1, "a failed detach dropped the golden");
+        assert!(listed[0].detach_error.as_deref().unwrap_or_default().contains("500"), "{listed:?}");
+        assert_eq!(serde_json::to_value(&listed[0]).unwrap()["detach_error"], serde_json::json!(listed[0].detach_error));
+        let rms = |h: &FakeHost| ops(h).iter().filter(|o| *o == "rm /goldens/ipxe").count();
+        assert_eq!(rms(&host), 1);
+        // A retry is not a 404: it detaches, without removing the node again.
+        g.remove("p", "ipxe").await.unwrap();
+        assert_eq!(deletes(&engine), 2);
+        assert_eq!(rms(&host), 1, "the path was taken away twice");
+        assert!(g.list().await.is_empty());
+
+        // A replace whose release fails at the detach answers that, keeps
+        // the old one tracked and attaches nothing new; the next replace
+        // detaches it and presents the new one.
+        g.add("p", img.clone(), &[]).await.unwrap();
+        engine.fail_detach.store(1, Ordering::SeqCst);
+        let newer = GoldenMount { golden: Some("golden-a".into()), ..img.clone() };
+        let posts = |e: &Engine| log(e).iter().filter(|x| x.starts_with("POST v-a")).count();
+        let e = g.add("p", newer.clone(), &[]).await.unwrap_err().to_string();
+        assert!(e.contains("did not release volume v-b"), "{e}");
+        assert_eq!(posts(&engine), 0, "attached the new one with the old still held");
+        let listed = g.list().await;
+        assert_eq!((listed.len(), listed[0].volume_id.as_str(), listed[0].detach_error.is_some()), (1, "v-b", true));
+        // The same spec as the old one is not "unchanged" while it awaits its detach.
+        let (again, _) = g.add("p", newer, &[]).await.unwrap();
+        assert_eq!(again, super::Added::Replaced);
+        let listed = g.list().await;
+        assert_eq!((listed.len(), listed[0].volume_id.as_str(), listed[0].detach_error.is_none()), (1, "v-a", true));
+
+        // A configured golden: a restart's present_all detaches it first,
+        // then presents it again.
+        let fs = golden("name = \"base\"\ngolden = \"golden-a\"\ncontent = \"filesystem\"\n");
+        assert!(g.present_all("q", std::slice::from_ref(&fs), || false).await);
+        engine.fail_detach.store(1, Ordering::SeqCst);
+        assert!(g.release("q", "base").await.is_err());
+        let n = deletes(&engine);
+        assert!(g.present_all("q", std::slice::from_ref(&fs), || false).await);
+        let l = log(&engine);
+        assert_eq!(deletes(&engine), n + 1, "{l:?}");
+        assert!(l.last().unwrap().starts_with("POST v-a"), "{l:?}");
+        assert!(g.list().await.iter().all(|p| p.detach_error.is_none()));
+
+        // Shutdown retries one still waiting.
+        engine.fail_detach.store(1, Ordering::SeqCst);
+        assert!(g.remove("p", "ipxe").await.is_err());
+        g.release_all().await;
+        assert!(g.list().await.is_empty(), "{:?}", g.list().await);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// stormd#97 (06dcbcfe846e): an add in flight when shutdown begins is
+    /// waited for and released with the rest, and one after is refused (503)
+    /// without reaching the engine.
+    #[tokio::test]
+    async fn an_add_in_flight_at_shutdown_is_released_and_a_later_one_refused() {
+        let (engine, host, g, dir) = setup(None).await;
+        let g = Arc::new(g);
+        engine.attach_delay_ms.store(500, Ordering::SeqCst);
+        let img = golden("name = \"ipxe\"\ngolden = \"golden-b\"\ncontent = \"image\"\n");
+        let adding = {
+            let (g, img) = (g.clone(), img.clone());
+            tokio::spawn(async move { g.add("p", img, &[]).await })
+        };
+        // Shutdown starts while the engine is still answering the attach.
+        while !log(&engine).iter().any(|x| x.starts_with("POST v-b")) {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        g.release_all().await;
+        let added = adding.await.unwrap();
+        let l = log(&engine);
+        assert!(g.list().await.is_empty(), "left presented after shutdown: {:?}", g.list().await);
+        let post = l.iter().position(|x| x.starts_with("POST v-b")).unwrap();
+        let del = l.iter().rposition(|x| x.starts_with("DELETE v-b")).unwrap_or_else(|| panic!("never detached: {l:?}"));
+        assert!(post < del, "{l:?}");
+        // Its insert came after shutdown began: refused, the node it placed
+        // taken away again and the attach released.
+        assert_eq!(added.as_ref().map_err(status_of).err(), Some(503), "{added:?}");
+        assert_eq!(ops(&host).last().unwrap(), "rm /goldens/ipxe");
+
+        let n = log(&engine).len();
+        let other = golden("name = \"other\"\ngolden = \"golden-a\"\ncontent = \"image\"\n");
+        let e = g.add("p", other.clone(), &[]).await.unwrap_err();
+        assert_eq!(status_of(&e), 503, "{e}");
+        let e = g.present("p", &other).await.unwrap_err();
+        assert_eq!(status_of(&e), 503, "{e}");
+        assert!(g.lock_ops().await.is_err());
+        assert!(!g.present_all("p", std::slice::from_ref(&other), || false).await);
+        assert_eq!(log(&engine).len(), n, "reached the engine after shutdown");
+        assert!(g.list().await.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

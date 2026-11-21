@@ -1265,7 +1265,16 @@ makes the device node from `/sys/block/<dev>/dev` (a container's `/dev` is a
 tmpfs without it), and mounts or places it. A failure is retried every 2 s,
 one warning per distinct error; the process does not start until all its
 goldens are presented, and shutdown ends the wait. At shutdown, after the
-processes stop, each is unmounted (or its node removed) and detached.
+processes stop, each is unmounted (or its node removed) and detached. From
+the moment shutdown begins nothing more is presented: an add or swap still
+running is waited for and released with the rest, and one after it is 503.
+
+**A failed detach**: a release (DELETE, replace, swap, shutdown) first takes
+the golden away from the service, then asks the engine to detach. If the
+detach fails, the golden stays listed in `GET /api/v1/goldens` with
+`detach_error` (otherwise `null`) and the request answers the error; it is
+not forgotten. Releasing it again (the same DELETE, a PUT, the process's
+next start, shutdown) retries the detach without touching the path again.
 
 **Swap** (a new release): `PUT /api/v1/processes/{p}/goldens/{name}` with the
 new `golden` or `volume_id` stops the process, releases the old golden,
@@ -1290,6 +1299,7 @@ the service finds the new file or mount at its path. Answers:
 | a bad body (no `content`, both or neither of `golden`/`volume_id`, a relative path) | 400 |
 | a path another golden (or a configured one) already has | 409 |
 | no such process | 404 |
+| stormd is shutting down | 503 |
 
 `DELETE /api/v1/processes/{p}/goldens/{name}` releases an added golden
 (unmounted or its node removed, then detached) with the process left running:

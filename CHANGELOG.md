@@ -5,6 +5,18 @@
 <!-- New unreleased changes go here -->
 
 ### 2026-11-20
+- **fix:** goldens (#97, review findings 06dcbcfe846e, 316ca39f077c).
+  Shutdown's `release_all` neither took the golden operation lock nor stopped
+  later adds, so a runtime PUT waiting on the engine's attach could present
+  its golden after the release and leave it attached and mounted; it now
+  marks shutdown, waits for the operation in flight, and every later add,
+  swap or present is refused (503) — one already attached when shutdown
+  began is taken away and detached again. And a release dropped the golden
+  from its map before the engine's detach, so a failed detach lost it: a
+  retry was a 404 and shutdown could not release the attach. The golden now
+  stays tracked, listed with `detach_error`, until the detach succeeds; a
+  repeat DELETE, a replace, the process's next start or shutdown retries the
+  detach. A replace whose old golden could not be presented again says so.
 - **fix:** cron output (#95, review finding b1dfa55675ce). A job's stdout and
   stderr were always piped and held whole by `wait_with_output` until it
   exited — `capture_output = false` included — so a noisy job could exhaust

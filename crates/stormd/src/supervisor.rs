@@ -552,7 +552,7 @@ impl Supervisor {
         // the config, start — is one golden operation and one lifecycle
         // operation (stormd#81): two swaps of one golden at once read the
         // same old spec, and one released or restarted under the other.
-        let _golden_op = goldens.lock_ops().await;
+        let _golden_op = goldens.lock_ops().await?;
         let (proc_arc, lifecycle) = self.lifecycle_of(process).await?;
         let _op = lifecycle.lock().await;
         let old = {
