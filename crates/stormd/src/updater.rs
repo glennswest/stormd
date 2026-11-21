@@ -16,6 +16,8 @@ use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ImageState {
+    /// The process this image is for: what `/api/v1/updates/{name}` names.
+    pub process: String,
     pub image: String,
     pub current_digest: Option<String>,
     pub rootfs_path: Option<PathBuf>,
@@ -558,6 +560,7 @@ impl Updater {
                 state.insert(
                     name.clone(),
                     ImageState {
+                        process: name.clone(),
                         image: image.clone(),
                         current_digest: None,
                         rootfs_path: None,
@@ -1099,6 +1102,7 @@ mod update_tests {
         u.state.write().await.insert(
             "app".into(),
             super::ImageState {
+                process: "app".into(),
                 image: "127.0.0.1:1/app:latest".into(),
                 current_digest: None,
                 rootfs_path: None,

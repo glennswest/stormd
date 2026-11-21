@@ -835,8 +835,8 @@ client certificate, a session cookie, or `Authorization: Bearer <token>`
 | POST | `/api/v1/logs/ingest` | add a line |
 | GET | `/api/v1/terminal/{process}` | VT100 screen snapshot |
 | GET | `/api/v1/cron` | jobs with last/next run, counts |
-| GET | `/api/v1/updates` | updater state per image |
-| GET | `/api/v1/updates/{name}` | one |
+| GET | `/api/v1/updates` | updater state per image (`process`, `image`, `current_digest`, `status`, …) |
+| GET | `/api/v1/updates/{name}` | one, by process name |
 | POST | `/api/v1/updates/{name}/trigger` | check, pull and pivot now; 409 while an update of it runs |
 | POST | `/api/v1/backup` | run the backup now |
 | GET | `/api/v1/mounts` | mount usage |

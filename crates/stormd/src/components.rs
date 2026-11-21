@@ -19,9 +19,62 @@ fn process_action(id: &str, label: &str, process: &str, enabled: bool, danger: b
         id: id.to_string(),
         label: label.to_string(),
         method: "POST".to_string(),
-        path: format!("/api/v1/processes/{}/{}", process, id),
+        path: format!("/api/v1/processes/{}/{}", path_segment(process), id),
         enabled,
         danger,
+    }
+}
+
+/// A name as one URL path segment: everything but the unreserved
+/// characters percent-encoded (a process name may hold a space, `?`, `#`…).
+pub fn path_segment(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for b in name.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// The card of one image the updater tracks. Its id and its Update action
+/// name the process (`/api/v1/updates/{process}/trigger` looks processes
+/// up); the image reference is only what it shows (stormd#98, e094081d0a6e).
+pub fn updater_card(img: &crate::updater::ImageState) -> ComponentSummary {
+    use crate::updater::UpdateStatus;
+    let health = match img.status {
+        UpdateStatus::Failed => Health::Error,
+        UpdateStatus::Idle => Health::Ok,
+        _ => Health::Warn,
+    };
+    let detail = match &img.last_update {
+        Some(t) => format!("{:?} · updated {}", img.status, t.format("%Y-%m-%d %H:%M")).to_lowercase(),
+        None => format!("{:?} · never updated", img.status).to_lowercase(),
+    };
+    let digest = img
+        .current_digest
+        .as_deref()
+        .map(|d| d.trim_start_matches("sha256:")[..12.min(d.len())].to_string())
+        .unwrap_or_else(|| "-".to_string());
+    ComponentSummary {
+        id: format!("update:{}", img.process),
+        kind: "updater".to_string(),
+        label: img.image.clone(),
+        health,
+        detail,
+        metrics: vec![Metric::new("digest", digest).tone("muted")],
+        actions: vec![Action {
+            id: "trigger".to_string(),
+            label: "Update".to_string(),
+            method: "POST".to_string(),
+            path: format!("/api/v1/updates/{}/trigger", path_segment(&img.process)),
+            enabled: img.status == UpdateStatus::Idle || img.status == UpdateStatus::Failed,
+            danger: false,
+        }],
+        relations: Vec::new(),
+        link: None,
     }
 }
 
@@ -227,49 +280,64 @@ pub async fn collect(state: &AppState) -> Vec<ComponentSummary> {
 
     // --- Updater ---
     if let Some(updater) = &state.updater {
-        for img in updater.get_all_states().await {
-            use crate::updater::UpdateStatus;
-            let health = match img.status {
-                UpdateStatus::Failed => Health::Error,
-                UpdateStatus::Idle => Health::Ok,
-                _ => Health::Warn,
-            };
-            let detail = match &img.last_update {
-                Some(t) => format!(
-                    "{:?} · updated {}",
-                    img.status,
-                    t.format("%Y-%m-%d %H:%M")
-                )
-                .to_lowercase(),
-                None => format!("{:?} · never updated", img.status).to_lowercase(),
-            };
-            let digest = img
-                .current_digest
-                .as_deref()
-                .map(|d| d.trim_start_matches("sha256:")[..12.min(d.len())].to_string())
-                .unwrap_or_else(|| "-".to_string());
-            out.push(ComponentSummary {
-                id: format!("update:{}", img.image),
-                kind: "updater".to_string(),
-                label: img.image.clone(),
-                health,
-                detail,
-                metrics: vec![Metric::new("digest", digest).tone("muted")],
-                actions: vec![Action {
-                    id: "trigger".to_string(),
-                    label: "Update".to_string(),
-                    method: "POST".to_string(),
-                    path: format!("/api/v1/updates/{}/trigger", img.image),
-                    enabled: img.status == UpdateStatus::Idle
-                        || img.status == UpdateStatus::Failed,
-                    danger: false,
-                }],
-                relations: Vec::new(),
-                link: None,
+        let mut states = updater.get_all_states().await;
+        states.sort_by(|a, b| a.process.cmp(&b.process));
+        out.extend(states.iter().map(updater_card));
+    }
+
+    relate(&mut out);
+
+    // --- Plugin self-reported summaries ---
+    // A plugin that publishes its own summary gets it merged into its card:
+    // health and detail replace stormd's process-level view (the plugin knows
+    // itself better), its metrics append after the supervisor's. Best-effort
+    // with a short timeout, fetched concurrently — an absent endpoint costs
+    // the card nothing but the extra detail.
+    let with_summaries: Vec<_> = state
+        .ui_plugins
+        .iter()
+        .filter_map(|p| p.summary_url.clone().map(|url| (p.name.clone(), url)))
+        .collect();
+    if !with_summaries.is_empty() {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(400))
+            .build();
+        if let Ok(client) = client {
+            let fetches = with_summaries.into_iter().map(|(name, url)| {
+                let client = client.clone();
+                async move {
+                    let remote = client
+                        .get(&url)
+                        .send()
+                        .await
+                        .ok()?
+                        .json::<RemoteSummary>()
+                        .await
+                        .ok()?;
+                    Some((name, remote))
+                }
             });
+            for fetched in futures_util::future::join_all(fetches).await.into_iter().flatten() {
+                let (name, remote) = fetched;
+                if let Some(card) = out.iter_mut().find(|c| c.id == format!("process:{}", name)) {
+                    if let Some(health) = remote.health {
+                        card.health = health;
+                    }
+                    if let Some(detail) = remote.detail {
+                        card.detail = detail;
+                    }
+                    card.metrics.extend(remote.metrics);
+                }
+            }
         }
     }
 
+    out
+}
+
+/// Wire the relations as a pass over the finished list, so every edge points
+/// at an id that exists in this snapshot.
+fn relate(out: &mut [ComponentSummary]) {
     // --- Relations ---
     // Wired as a pass over the finished list so every edge points at an id
     // that actually exists in this snapshot. The graph today: the system
@@ -336,53 +404,6 @@ pub async fn collect(state: &AppState) -> Vec<ComponentSummary> {
             _ => {}
         }
     }
-
-    // --- Plugin self-reported summaries ---
-    // A plugin that publishes its own summary gets it merged into its card:
-    // health and detail replace stormd's process-level view (the plugin knows
-    // itself better), its metrics append after the supervisor's. Best-effort
-    // with a short timeout, fetched concurrently — an absent endpoint costs
-    // the card nothing but the extra detail.
-    let with_summaries: Vec<_> = state
-        .ui_plugins
-        .iter()
-        .filter_map(|p| p.summary_url.clone().map(|url| (p.name.clone(), url)))
-        .collect();
-    if !with_summaries.is_empty() {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_millis(400))
-            .build();
-        if let Ok(client) = client {
-            let fetches = with_summaries.into_iter().map(|(name, url)| {
-                let client = client.clone();
-                async move {
-                    let remote = client
-                        .get(&url)
-                        .send()
-                        .await
-                        .ok()?
-                        .json::<RemoteSummary>()
-                        .await
-                        .ok()?;
-                    Some((name, remote))
-                }
-            });
-            for fetched in futures_util::future::join_all(fetches).await.into_iter().flatten() {
-                let (name, remote) = fetched;
-                if let Some(card) = out.iter_mut().find(|c| c.id == format!("process:{}", name)) {
-                    if let Some(health) = remote.health {
-                        card.health = health;
-                    }
-                    if let Some(detail) = remote.detail {
-                        card.detail = detail;
-                    }
-                    card.metrics.extend(remote.metrics);
-                }
-            }
-        }
-    }
-
-    out
 }
 
 /// What a plugin's `summary` endpoint may return — every field optional.
@@ -410,4 +431,62 @@ async fn log_dir_totals(dir: &std::path::Path) -> (usize, u64) {
         }
     }
     (files, bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::updater::{ImageState, UpdateStatus};
+
+    fn image(process: &str, image: &str) -> ImageState {
+        ImageState {
+            process: process.into(),
+            image: image.into(),
+            current_digest: Some("sha256:0123456789abcdef".into()),
+            rootfs_path: None,
+            last_check: None,
+            last_update: None,
+            status: UpdateStatus::Idle,
+        }
+    }
+
+    /// stormd#98 (e094081d0a6e): an updater card is addressed by its
+    /// process — the id, the Update action's path and the relations — and
+    /// shows the image reference.
+    #[test]
+    fn an_updater_card_names_its_process_not_its_image() {
+        let c = updater_card(&image("app", "registry/team/app:latest"));
+        assert_eq!(c.id, "update:app");
+        assert_eq!(c.label, "registry/team/app:latest");
+        assert_eq!(c.actions[0].path, "/api/v1/updates/app/trigger");
+        assert!(c.actions[0].enabled);
+
+        let odd = updater_card(&image("my app?#1", "x/y:z"));
+        assert_eq!(odd.actions[0].path, "/api/v1/updates/my%20app%3F%231/trigger");
+        assert_eq!(path_segment("a-b_c.d~e"), "a-b_c.d~e");
+        assert_eq!(path_segment("ü"), "%C3%BC");
+
+        let process = ComponentSummary {
+            id: "process:app".into(),
+            kind: "process".into(),
+            label: "app".into(),
+            health: Health::Ok,
+            detail: String::new(),
+            metrics: Vec::new(),
+            actions: Vec::new(),
+            relations: Vec::new(),
+            link: None,
+        };
+        let mut out = vec![process, c];
+        relate(&mut out);
+        let p = serde_json::to_string(&out[0].relations).unwrap();
+        let u = serde_json::to_string(&out[1].relations).unwrap();
+        assert!(p.contains("\"update:app\""), "the process card does not point at its update: {p}");
+        assert!(u.contains("\"process:app\""), "the update card does not point at its process: {u}");
+    }
+
+    #[test]
+    fn a_process_action_path_is_one_segment() {
+        assert_eq!(process_action("stop", "Stop", "a b", true, true).path, "/api/v1/processes/a%20b/stop");
+    }
 }
