@@ -47,6 +47,15 @@ the plugin summary merge).
 
 ### In Progress
 
+**#99 (P1, secret scan: 5 `private-key` findings in `tls_fixtures.rs`).**
+False positives: throwaway test-only keys, `#[cfg(test)]`, trusted nowhere.
+Runtime generation (43f6336) was reverted by the owner (6e558ad) and the
+file was marked a not-secret fixture path in `.github/secret_scanning.yml`
+(9eb7a16), so: allowlist that one path in a root `.gitleaks.toml`.
+- [ ] `.gitleaks.toml` `[allowlist] paths` = that file only; CHANGELOG, work plan
+- [ ] verify: gitleaks 8.30.1 over the tree → 0 findings, and a key placed
+      elsewhere still found; sc-build; close
+
 **#98 (P3, review: 6 minor findings).**
 - [x] f2eef25acd52 md5sum applet returned SHA-256 (shell/mod.rs)
 - [x] a9b5f556c8ad touch didn't update timestamps of existing files/dirs (shell/file.rs)
