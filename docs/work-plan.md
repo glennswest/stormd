@@ -58,6 +58,8 @@ file was marked a not-secret fixture path in `.github/secret_scanning.yml`
       other committed private key
 - [ ] gitleaks itself not run here (podman blocked on this VM, running it on
       a build VM was refused): the next nightly scan confirms and closes #99
+- [x] 2026-11-24: podman run of gitleaks blocked again; master decided
+      option 1: the nightly scan closes #99. Off this queue.
 
 **#98 (P3, review: 6 minor findings).**
 - [x] f2eef25acd52 md5sum applet returned SHA-256 (shell/mod.rs)
