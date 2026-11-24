@@ -52,9 +52,12 @@ False positives: throwaway test-only keys, `#[cfg(test)]`, trusted nowhere.
 Runtime generation (43f6336) was reverted by the owner (6e558ad) and the
 file was marked a not-secret fixture path in `.github/secret_scanning.yml`
 (9eb7a16), so: allowlist that one path in a root `.gitleaks.toml`.
-- [ ] `.gitleaks.toml` `[allowlist] paths` = that file only; CHANGELOG, work plan
-- [ ] verify: gitleaks 8.30.1 over the tree → 0 findings, and a key placed
-      elsewhere still found; sc-build; close
+- [x] `.gitleaks.toml` `[allowlist] paths` = that file only; CHANGELOG (168d199)
+- [x] sc-build 168d199: stormd 168 pass / 1 ignored, stormlog 23 pass; TOML
+      parses; anchored regex matches only that path; `git grep` finds no
+      other committed private key
+- [ ] gitleaks itself not run here (podman blocked on this VM, running it on
+      a build VM was refused): the next nightly scan confirms and closes #99
 
 **#98 (P3, review: 6 minor findings).**
 - [x] f2eef25acd52 md5sum applet returned SHA-256 (shell/mod.rs)
