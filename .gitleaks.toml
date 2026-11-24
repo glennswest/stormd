@@ -1,0 +1,11 @@
+# Secret-scan allowlist (stormcentral#1679, stormd#99): only false positives,
+# as tight as they can be. A real secret is never listed here: rotate it and
+# report it (cross-project CLAUDE.md, "Test secrets and secret scans").
+[allowlist]
+description = "stormd false positives"
+paths = [
+  # Throwaway TLS test CA, server and client pairs (stormd#32, #59): compiled
+  # only under #[cfg(test)], trusted nowhere. Same file as
+  # .github/secret_scanning.yml paths-ignore.
+  '''^crates/stormd/src/tls_fixtures\.rs$''',
+]

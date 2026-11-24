@@ -4,6 +4,14 @@
 
 <!-- New unreleased changes go here -->
 
+### 2026-11-23
+- **chore(security):** `.gitleaks.toml` at the repo root allowlists the one
+  test-fixture file `crates/stormd/src/tls_fixtures.rs` (#99): stormcentral's
+  nightly gitleaks scan reported its five throwaway TLS test keys as
+  `private-key` findings. They are test-only (`#[cfg(test)]`), trusted
+  nowhere, and already marked not-secret in `.github/secret_scanning.yml`;
+  the path is anchored so a key anywhere else is still found.
+
 ### 2026-11-20
 - **fix:** six review findings (#98). `md5sum` printed a SHA-256 digest; it
   is MD5 now (f2eef25acd52). `touch` only opened an existing file, which
