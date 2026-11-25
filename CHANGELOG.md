@@ -4,6 +4,10 @@
 
 <!-- New unreleased changes go here -->
 
+### 2026-11-25
+- **docs:** research note `docs/research/2026-11-25.md` (stormcentral #628);
+  filed #106, #107, #108.
+
 ### 2026-11-23
 - **chore(security):** `.gitleaks.toml` at the repo root allowlists the one
   test-fixture file `crates/stormd/src/tls_fixtures.rs` (#99): stormcentral's
